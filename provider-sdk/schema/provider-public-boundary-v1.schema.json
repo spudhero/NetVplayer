@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netvplayer.example/schema/provider-public-boundary-v1.schema.json",
+  "title": "NetVplayer public Provider boundary audit v1",
+  "type": "object",
+  "$defs": {
+    "pathGroup": {
+      "type": "object",
+      "required": ["count", "path_sha256", "paths"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "path_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "contentGroup": {
+      "type": "object",
+      "required": ["count", "path_sha256", "content_sha256", "paths"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "path_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "sampleGroup": {
+      "type": "object",
+      "required": ["count", "path_sha256", "sample_paths", "sample_truncated"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "path_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "sample_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "sample_truncated": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["schema_version", "policy", "summary", "history", "groups", "blocking_reasons", "next_actions"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "policy": {
+      "type": "object",
+      "required": ["target", "forbidden_reference_prefixes", "android_binary_suffixes", "private_provider_detection", "public_provider_sources", "history_requirement"],
+      "properties": {
+        "target": { "const": "clean-public-shell-repository" },
+        "forbidden_reference_prefixes": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true },
+        "android_binary_suffixes": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true },
+        "private_provider_detection": { "type": "string", "minLength": 1 },
+        "public_provider_sources": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "history_requirement": { "const": "complete" }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "tracked_fongmi_files", "fongmi_history_commits",
+        "android_binary_files", "private_provider_source_files",
+        "mixed_boundary_source_files", "legacy_executable_loader_files", "release_ready"
+      ],
+      "properties": {
+        "tracked_fongmi_files": { "type": "integer", "minimum": 0 },
+        "fongmi_history_commits": { "type": "integer", "minimum": 0 },
+        "android_binary_files": { "type": "integer", "minimum": 0 },
+        "private_provider_source_files": { "type": "integer", "minimum": 0 },
+        "mixed_boundary_source_files": { "type": "integer", "minimum": 0 },
+        "legacy_executable_loader_files": { "type": "integer", "minimum": 0 },
+        "release_ready": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "history": {
+      "type": "object",
+      "required": ["forbidden_path", "commit_count", "newest_commit", "oldest_commit"],
+      "properties": {
+        "forbidden_path": { "const": "FongMi" },
+        "commit_count": { "type": "integer", "minimum": 0 },
+        "newest_commit": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+        "oldest_commit": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" }
+      },
+      "additionalProperties": false
+    },
+    "groups": {
+      "type": "object",
+      "required": [
+        "tracked_fongmi_reference", "android_binaries", "private_provider_sources",
+        "mixed_boundary_sources", "legacy_executable_loaders"
+      ],
+      "properties": {
+        "tracked_fongmi_reference": { "$ref": "#/$defs/sampleGroup" },
+        "android_binaries": { "$ref": "#/$defs/pathGroup" },
+        "private_provider_sources": { "$ref": "#/$defs/contentGroup" },
+        "mixed_boundary_sources": { "$ref": "#/$defs/contentGroup" },
+        "legacy_executable_loaders": { "$ref": "#/$defs/contentGroup" }
+      },
+      "additionalProperties": false
+    },
+    "blocking_reasons": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "tracked-fongmi-reference", "fongmi-present-in-git-history",
+          "site-specific-swift-providers", "mixed-public-private-source-files",
+          "legacy-in-process-executable-loaders"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "next_actions": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true }
+  },
+  "additionalProperties": false
+}

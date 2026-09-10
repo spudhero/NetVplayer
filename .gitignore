@@ -1,0 +1,37 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Large files
+uz影视1.6.75.dmg
+/docs/evidence/fongmi-device-2026-08-14/fongmi-device-evidence-all-*.tar.gz
+
+# Xcode / Swift Build
+.build/
+Build/
+DerivedData/
+dist/
+node_modules/
+*.moved-aside
+*.xcuserstate
+
+# Local Debug / Scratch
+NetVplayer/scratch/
+/.codex/
+__pycache__/
+
+# Local design tooling / generated review exports
+.od-skills/
+/critique.json
+/image.png
+/netvplayer-*.html
+/netvplayer-*.html.artifact.json
+
+# SwiftPM Xcode integration
+.swiftpm/
+
+# Local worktrees
+.worktrees/

@@ -1,0 +1,87 @@
+{
+  "wallpaper": "https://cdn.example.test/wallpaper.jpg",
+  "logo": "https://cdn.example.test/logo.png",
+  "notice": "Fixture notice",
+  "danmaku": "https://danmaku.example.test/api",
+  "spider": "https://cdn.example.test/spider.js",
+  "flags": ["youku", "qq"],
+  "ads": ["ad.example.test", "m3u8.example.test/ad.ts"],
+  "hosts": ["example.test 127.0.0.1"],
+  "doh": [
+    {
+      "name": "Fixture DoH",
+      "url": "https://dns.example.test/query",
+      "ips": ["1.1.1.1"]
+    }
+  ],
+  "proxy": [
+    {
+      "name": "Fixture Proxy",
+      "hosts": ["*.example.test"],
+      "urls": ["http://127.0.0.1:7890"]
+    }
+  ],
+  "headers": [
+    {
+      "host": "media.example.test",
+      "header": {
+        "User-Agent": "FixtureHeader",
+        "Referer": "https://media.example.test"
+      }
+    }
+  ],
+  "sites": [
+    {
+      "key": "mock_cms",
+      "name": "Mock CMS",
+      "type": 1,
+      "api": "https://cms.example.test/api.php/provide/vod/",
+      "searchable": 1,
+      "quickSearch": 1,
+      "header": {
+        "User-Agent": "NetVplayerTests"
+      }
+    },
+    {
+      "key": "mock_xpath",
+      "name": "Mock XPath",
+      "type": 4,
+      "api": "https://xpath.example.test/api",
+      "ext": "fixture-token",
+      "searchable": 0,
+      "quickSearch": 0
+    },
+    {
+      "key": "mock_android_jar",
+      "name": "Android Jar Source",
+      "type": 3,
+      "api": "csp_Test",
+      "searchable": 1,
+      "quickSearch": 1
+    }
+  ],
+  "parses": [
+    {
+      "name": "json_parse",
+      "type": 1,
+      "url": "https://parse.example.test/?url=",
+      "ext": {
+        "flag": ["youku"],
+        "header": {
+          "User-Agent": "ParseFixture"
+        }
+      },
+      "header": {
+        "Referer": "https://parse.example.test"
+      }
+    }
+  ],
+  "rules": [
+    {
+      "name": "ad_rule",
+      "hosts": ["ad.example.test"],
+      "regex": ["ad\\.ts"],
+      "script": []
+    }
+  ]
+}

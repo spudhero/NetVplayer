@@ -1,0 +1,31 @@
+{
+  "source": {
+    "config_url": "http://fty.xxooo.cf/tv",
+    "site_key": "点我切源",
+    "site_name": "去【太太太硬了】领取嘟嘟盘免费容量",
+    "api": "csp_DouDouGuard",
+    "searchable": false,
+    "quick_search": false
+  },
+  "guard_shell": {
+    "spider_url": "https://zl.wpscdn.cn/2026/07/01/space_img/78ab9a28-61c9-435b-9847-a2e08b42db5b.jpg",
+    "classes_dex_sha256": "fdd0f6115cd9cd1b3fbc424ec2568d97b8410400997ad9bd0794ee23cb71b281",
+    "native_v7_sha256": "6fd7a8fdc01d1fb105d282136fd19653a67f5deeb953cd0eea4c59573059bf34",
+    "native_v8_sha256": "fac9e3937d9928e437ebff79bc5164df418a6adb212494ef21c273579b045dcb",
+    "delegate": "DouDouGuard extends BaseSpiderGuard; BaseSpiderGuard delegates to DexNative.getSpider through Android DexClassLoader and ARM ELF assets."
+  },
+  "verified_frodo_paths": [
+    "/subject_collection/subject_real_time_hotest/items",
+    "/movie/hot_gaia",
+    "/subject_collection/tv_hot/items",
+    "/subject_collection/show_hot/items",
+    "/movie/recommend",
+    "/tv/recommend",
+    "/subject_collection/movie_real_time_hotest/items",
+    "/subject_collection/tv_real_time_hotest/items",
+    "/search",
+    "/movie/{id}",
+    "/tv/{id}"
+  ],
+  "playback_boundary": "Frodo detail exposes vendors and linewatches as external app or mini-program jumps, not direct HLS/MP4 media URLs."
+}

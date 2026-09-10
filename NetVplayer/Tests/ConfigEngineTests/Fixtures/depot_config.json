@@ -1,0 +1,12 @@
+{
+  "urls": [
+    {
+      "name": "Primary",
+      "url": "https://configs.example.test/primary.json"
+    },
+    {
+      "name": "Backup",
+      "url": "https://configs.example.test/backup.json"
+    }
+  ]
+}

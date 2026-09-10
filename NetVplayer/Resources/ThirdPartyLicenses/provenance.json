@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "components": {
+    "glib": {
+      "version": "2.88.3",
+      "source_url": "https://download.gnome.org/sources/glib/2.88/glib-2.88.3.tar.xz",
+      "source_sha256": "ab24d24e698dfa1e408b7bcdb508f4aafc906185a8b8ce72fdf79bbbdc9b383b",
+      "files": {
+        "LGPL-2.1-or-later.txt": "fa6f36630bb1e0c571d34b2bbdf188d08495c9dbf58f28cac112f303fc1f58fb"
+      }
+    },
+    "libunibreak": {
+      "version": "7.0",
+      "source_url": "https://github.com/adah1972/libunibreak/releases/download/libunibreak_7_0/libunibreak-7.0.tar.gz",
+      "source_sha256": "8c9a6e121736cd0d5c890ae3ae96f3f4010a19aa040f1dbded833a62a87717d3",
+      "files": {
+        "LICENCE": "0c57e2ec42ece17791a75d2f9b2f8e0663181be008667a507f765b3ef22522db"
+      }
+    }
+  }
+}

@@ -1,0 +1,100 @@
+[
+  {
+    "id": "catvod-alist-list",
+    "kind": "catVodTVBox",
+    "provider": "AList",
+    "scenario": "directory-list",
+    "requestShape": {
+      "method": "GET",
+      "url": "https://alist.example.test/api/fs/list?path=/movie",
+      "authorization": "Bearer example"
+    },
+    "responseFields": {
+      "data.content[].name": "video.mp4",
+      "data.content[].type": "file",
+      "data.content[].sign": "abc"
+    },
+    "errorCategory": null,
+    "status": "fixture"
+  },
+  {
+    "id": "catvod-webdav-propfind",
+    "kind": "catVodTVBox",
+    "provider": "WebDAV",
+    "scenario": "directory-tree",
+    "requestShape": {
+      "method": "PROPFIND",
+      "url": "https://webdav.example.test/dav/movie/"
+    },
+    "responseFields": {
+      "multistatus.response.href": "/dav/movie/video.mkv",
+      "multistatus.response.getcontenttype": "video/x-matroska"
+    },
+    "errorCategory": null,
+    "status": "fixture"
+  },
+  {
+    "id": "catvod-bili-play",
+    "kind": "catVodTVBox",
+    "provider": "Bili",
+    "scenario": "dash-playback",
+    "requestShape": {
+      "method": "GET",
+      "url": "https://api.bilibili.com/x/player/playurl?cid=100&bvid=BV1"
+    },
+    "responseFields": {
+      "data.dash.video[].baseUrl": "https://video.example.test/path.m4s?token=abc",
+      "data.dash.audio[].baseUrl": "https://audio.example.test/path.m4s?token=abc"
+    },
+    "errorCategory": null,
+    "status": "fixture"
+  },
+  {
+    "id": "catvod-samba-boundary",
+    "kind": "catVodTVBox",
+    "provider": "Samba",
+    "scenario": "unsupported-binary-boundary",
+    "requestShape": {
+      "scheme": "smb",
+      "url": "smb://user:pass@example.test/share/movie.mp4"
+    },
+    "responseFields": {
+      "support": "requires external SMB runtime"
+    },
+    "errorCategory": "Source",
+    "status": "pending-capture"
+  },
+  {
+    "id": "catvod-danmaku",
+    "kind": "catVodTVBox",
+    "provider": "Danmaku",
+    "scenario": "manual-search-cache",
+    "requestShape": {
+      "method": "GET",
+      "url": "https://danmaku.example.test/search?wd=movie&token=abc"
+    },
+    "responseFields": {
+      "items[].time": "1.5",
+      "items[].text": "hello"
+    },
+    "errorCategory": null,
+    "status": "fixture"
+  },
+  {
+    "id": "catvod-live-push-local",
+    "kind": "catVodTVBox",
+    "provider": "LivePushLocal",
+    "scenario": "live-push-local-contracts",
+    "requestShape": {
+      "live": "m3u/txt/json",
+      "push": "video://https://media.example.test/movie.mp4?auth_key=abc",
+      "local": "file:///Users/example/movie.mp4"
+    },
+    "responseFields": {
+      "channel.name": "Example TV",
+      "play.url": "https://media.example.test/live.m3u8?auth_key=abc"
+    },
+    "errorCategory": null,
+    "status": "fixture"
+  }
+]

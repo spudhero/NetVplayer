@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netvplayer.example/schema/provider-source-descriptor-v1.schema.json",
+  "title": "NetVplayer Provider source descriptor v1",
+  "type": "object",
+  "required": ["provider_id", "name", "integration_mode", "capabilities"],
+  "properties": {
+    "provider_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+    "name": { "type": "string", "minLength": 1 },
+    "integration_mode": { "enum": ["config-only", "provider", "user-owned-backend"] },
+    "backend_kind": { "enum": ["webdav", "alist", "openlist", "tvbox-compatible"] },
+    "endpoint_ref": { "type": ["string", "null"], "minLength": 1 },
+    "credential_ref": {
+      "type": ["string", "null"],
+      "minLength": 10,
+      "pattern": "^keychain:.+"
+    },
+    "backend_permissions": {
+      "type": "object",
+      "required": [
+        "allow_insecure_http", "allow_local_network", "allow_credential_forwarding", "redirect_policy"
+      ],
+      "properties": {
+        "allow_insecure_http": { "type": "boolean" },
+        "allow_local_network": { "type": "boolean" },
+        "allow_credential_forwarding": { "type": "boolean" },
+        "redirect_policy": { "const": "same-origin-only" }
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "enum": ["vod", "home", "category", "search", "detail", "player", "live", "epg", "proxy", "action"] },
+      "uniqueItems": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["integration_mode"],
+        "properties": { "integration_mode": { "const": "user-owned-backend" } }
+      },
+      "then": { "required": ["backend_kind", "endpoint_ref"] }
+    },
+    {
+      "if": {
+        "required": ["integration_mode"],
+        "properties": { "integration_mode": { "enum": ["config-only", "provider"] } }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["backend_kind"] },
+            { "required": ["endpoint_ref"] },
+            { "required": ["backend_permissions"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["credential_ref"],
+        "properties": { "credential_ref": { "type": "string" } }
+      },
+      "then": {
+        "required": ["backend_permissions"],
+        "properties": {
+          "backend_permissions": {
+            "properties": { "allow_credential_forwarding": { "const": true } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["backend_permissions"],
+        "properties": {
+          "backend_permissions": {
+            "properties": { "allow_credential_forwarding": { "const": true } }
+          }
+        }
+      },
+      "then": {
+        "required": ["credential_ref"],
+        "properties": { "credential_ref": { "type": "string" } }
+      }
+    }
+  ],
+  "additionalProperties": true
+}

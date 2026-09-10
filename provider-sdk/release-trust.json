@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "release_owner": "spudhero",
+  "manifest_public_key": "ZAd/Xj0xFe7s/5EXw9vCarHS2X30fUvqMH6u3jPfVpk=",
+  "distribution_public_key": "KayuGyP0g3o0Rvavk2fiLJ8CTaEJ+Nld1BnoYKV1kK8=",
+  "index_url": "https://spudhero.github.io/NetVplayer-Provider-Distribution/stable/index.json",
+  "diagnostic_index_url": "https://spudhero.github.io/NetVplayer-Provider-Distribution/diagnostics/index.json"
+}

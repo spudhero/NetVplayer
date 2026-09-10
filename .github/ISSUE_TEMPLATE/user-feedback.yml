@@ -1,0 +1,73 @@
+name: 用户问题反馈
+description: 提交 NetVplayer 的问题现象、复现资料和脱敏日志
+title: "[用户反馈] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请先在 NetVplayer 中生成并检查反馈预览。
+        公开仓库中的 Issue、复现源和附件均可被任何人访问，请勿提交账号、Cookie、Token 或私人地址。
+  - type: dropdown
+    id: category
+    attributes:
+      label: 问题分类
+      options:
+        - 播放
+        - 配置源
+        - 直播
+        - Provider
+        - 界面
+        - 崩溃
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题现象
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+  - type: dropdown
+    id: reproduction
+    attributes:
+      label: 复现等级
+      options:
+        - 通用问题
+        - 仅诊断资料，真实源未验证
+        - 包含可公开复现源
+    validations:
+      required: true
+  - type: input
+    id: public_source
+    attributes:
+      label: 可公开复现源
+      description: 仅填写无需账号、凭据或敏感查询参数即可访问的 HTTPS 地址。
+  - type: textarea
+    id: attachment
+    attributes:
+      label: 脱敏日志附件
+      description: 将 NetVplayer 在 Finder 中选中的 .log 文件拖到这里；也可以不附带。
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 自动诊断上下文
+      description: 由 NetVplayer 预填的版本、短指纹和验证边界，不包含日志或配置正文。
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 公开确认
+      options:
+        - label: 我已检查 Issue 内容、复现源和附件，确认其中不含账号、Cookie、Token 或其他私人信息。
+          required: true

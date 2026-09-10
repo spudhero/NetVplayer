@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netvplayer.example/schema/provider-distribution-index-v2.schema.json",
+  "title": "NetVplayer signed Provider distribution index v2",
+  "type": "object",
+  "required": ["index", "signature"],
+  "properties": {
+    "index": {
+      "type": "object",
+      "required": ["protocol", "generated_at", "releases", "revoked"],
+      "properties": {
+        "protocol": { "const": 2 },
+        "generated_at": { "type": "number" },
+        "releases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["provider_id", "version", "architectures", "archive_url", "archive_sha256"],
+            "properties": {
+              "provider_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+              "version": { "type": "string" },
+              "architectures": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "enum": ["arm64", "x86_64", "universal2"] }
+              },
+              "archive_url": { "type": "string", "pattern": "^https://" },
+              "archive_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "revoked": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["provider_id", "version"],
+            "properties": {
+              "provider_id": { "type": "string" },
+              "version": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "signature": { "type": "string", "contentEncoding": "base64" }
+  },
+  "additionalProperties": false
+}

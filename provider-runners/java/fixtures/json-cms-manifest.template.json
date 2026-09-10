@@ -1,0 +1,31 @@
+{
+  "provider_id": "fixture.java.cms",
+  "version": "1.0.0",
+  "protocol": 1,
+  "shell_min_version": "1.0.0",
+  "shell_max_version": null,
+  "macos_min_version": "14.0",
+  "architectures": ["arm64", "x86_64"],
+  "runtime": "java",
+  "entrypoint": "json-cms-provider.jar",
+  "runner": "java-runner.jar",
+  "runtime_executable": "runtimes/jre/bin/java",
+  "provider_class": "com.netvplayer.fixture.JsonCmsProvider",
+  "capabilities": ["home", "category", "search", "detail", "player", "live", "proxy", "action"],
+  "source_bindings": [
+    {
+      "original_keys": ["fixture-json-cms"],
+      "original_apis": ["https://example.invalid/json-cms"]
+    }
+  ],
+  "assets": [
+    {"path": "java-runner.jar", "sha256": "", "executable": false},
+    {"path": "json-cms-provider.jar", "sha256": "", "executable": false},
+    {"path": "lib/gson.jar", "sha256": "", "executable": false},
+    {"path": "runtimes/jre/bin/java", "sha256": "", "executable": true}
+  ],
+  "source_revision": "fixture-json-cms",
+  "license": "MIT",
+  "status": "compatible",
+  "revoked": false
+}

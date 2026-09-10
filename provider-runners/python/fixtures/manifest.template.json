@@ -1,0 +1,41 @@
+{
+  "provider_id": "fixture.python",
+  "version": "1.0.0",
+  "protocol": 1,
+  "shell_min_version": "1.0.0",
+  "shell_max_version": null,
+  "macos_min_version": "14.0",
+  "architectures": ["arm64", "x86_64"],
+  "runtime": "python",
+  "entrypoint": "fixtures/mock_provider.py",
+  "runner": "provider_runner.py",
+  "runtime_executable": "runtimes/cpython/bin/python3",
+  "provider_class": "Spider",
+  "capabilities": ["home", "category", "search", "detail", "player", "live", "proxy", "action"],
+  "assets": [
+    {
+      "path": "provider_runner.py",
+      "sha256": "",
+      "executable": false
+    },
+    {
+      "path": "fixtures/mock_provider.py",
+      "sha256": "",
+      "executable": false
+    },
+    {
+      "path": "dependencies/fixture_dependency.py",
+      "sha256": "",
+      "executable": false
+    },
+    {
+      "path": "runtimes/cpython/bin/python3",
+      "sha256": "",
+      "executable": true
+    }
+  ],
+  "source_revision": "fixture",
+  "license": "MIT",
+  "status": "compatible",
+  "revoked": false
+}

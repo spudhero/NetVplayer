@@ -1,0 +1,1331 @@
+[
+  {
+    "id": "kkss-guard-native-dual-cms-search",
+    "provider": "KkSs",
+    "sourceKey": "csp_KkSsGuard",
+    "catVodMethod": "searchContent/detailContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "GET",
+      "searchPaths": "http://www.miqk.cc/index.php/vod/search.html and https://mihdr.top/index.php/vod/search.html",
+      "queryKeys": "wd",
+      "detailPath": "/index.php/vod/detail/id/{numeric-id}.html",
+      "pageBoundary": "the two CMS searches return the complete result set on page 1; page 2 produces no business request"
+    },
+    "responseFields": {
+      "searchCard": "module-search-item href/title/data-src/video-serial/tag-link",
+      "vodId": "CMS origin ampersand numeric id",
+      "detail": "video metadata plus download-list module-row-info share links",
+      "capturedSearchCounts": "4 for one redacted keyword and 12 for another",
+      "playbackBoundary": "Quark and UC shares reuse DriveShareExpander; login-required errors remain explicit unavailable episodes"
+    },
+    "httpTraceShape": {
+      "hosts": "www.miqk.cc,mihdr.top",
+      "searchStatus": "200 text/html from both hosts",
+      "detailStatus": "200 text/html from the selected result origin",
+      "shareProviders": "Quark,Baidu,UC",
+      "evidence": "two selected-site searches plus two selected-item details matched the same public MacCMS HTML contract"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "uuss-guard-native-uc-search",
+    "provider": "UuSs",
+    "sourceKey": "csp_UuSsGuard",
+    "catVodMethod": "searchContent/detailContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "GET",
+      "path": "/api/search",
+      "queryKeys": "kw",
+      "pageBoundary": "the endpoint returns the complete UC group on page 1; page 2 produces no business request"
+    },
+    "responseFields": {
+      "root": "code/message/data.total/data.merged_by_type",
+      "ucItem": "url/password/note/datetime/source/images",
+      "capturedUCCount": "6 for the redacted test keyword"
+    },
+    "httpTraceShape": {
+      "host": "107.173.211.148",
+      "status": "200",
+      "contentType": "application/json",
+      "contentEncoding": "gzip",
+      "evidence": "two Android responses plus one macOS direct response matched the same contract",
+      "playbackRoute": "UC shares reuse DriveShareExpander and the existing authorized UC playback path"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "auete-guard-home-20260722",
+    "provider": "AueteGuard",
+    "sourceKey": "csp_AueteGuard",
+    "catVodMethod": "homeContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "GET",
+      "host": "www.aeete.com",
+      "path": "/"
+    },
+    "responseFields": {
+      "class": "Movie, Tv, Zy, Dm, qita",
+      "filters": "captured subtype values per class",
+      "list": "first picture_list_container li.trans_3 cards"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "www.aeete.com",
+      "path": "/",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "auete-guard-category-20260722",
+    "provider": "AueteGuard",
+    "sourceKey": "csp_AueteGuard",
+    "catVodMethod": "categoryContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "GET",
+      "path": "/{type}/index.html or /{type}/{captured-subtype}/index.html",
+      "pageBoundary": "page 1 only; later pages return empty until captured"
+    },
+    "responseFields": {
+      "list": "li.trans_3 href/title/img/hdtag",
+      "filters": "homeContent captured filter contract"
+    },
+    "httpTraceShape": {
+      "host": "www.aeete.com",
+      "routeEvidence": "public category links and captured home filter values"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "auete-guard-detail-20260722",
+    "provider": "AueteGuard",
+    "sourceKey": "csp_AueteGuard",
+    "catVodMethod": "detailContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "GET",
+      "path": "/Tv/wangju/{slug}/"
+    },
+    "responseFields": {
+      "metadata": "message labels plus og metadata",
+      "vod_play_from": "captured O line and dbm3u8",
+      "vod_play_url": "player_list episode hrefs"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "www.aeete.com",
+      "path": "/Tv/wangju/{slug}/",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "auete-guard-search-20260722",
+    "provider": "AueteGuard",
+    "sourceKey": "csp_AueteGuard",
+    "catVodMethod": "searchContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "GET",
+      "path": "/auete4so.php",
+      "query": "searchword",
+      "pageBoundary": "page 1 only; later pages return empty until captured"
+    },
+    "responseFields": {
+      "list": "li.trans_3 cards when verification page is not returned",
+      "verificationBoundary": "security verification HTML produces an honest empty result"
+    },
+    "httpTraceShape": {
+      "host": "www.aeete.com",
+      "routeEvidence": "captured public search form action"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "auete-guard-player-20260722",
+    "provider": "AueteGuard",
+    "sourceKey": "csp_AueteGuard",
+    "catVodMethod": "playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "GET",
+      "path": "/{detail-path}/play-{line}-{episode}.html",
+      "samples": "three player pages across two lines and two episodes"
+    },
+    "responseFields": {
+      "url": "base64decode(var now) remote HLS only",
+      "parse": "0",
+      "jx": "0",
+      "nextBoundary": "var next is never selected",
+      "androidPlaybackState": "state 3 with position advancing after proxy removal"
+    },
+    "httpTraceShape": {
+      "method": "GET then HLS",
+      "host": "www.aeete.com then remote media host",
+      "mediaPath": "<redacted>",
+      "status": "player HTML 200; proxy-off Android playback advanced"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "ypanso-guard-search-20260722",
+    "provider": "YpanSo",
+    "sourceKey": "csp_YpanSoGuard",
+    "catVodMethod": "searchContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "POST JSON",
+      "host": "www.melost.cn",
+      "path": "/v1/search/disk",
+      "keyword": "仙逆",
+      "page": "1",
+      "size": "15",
+      "diskType": "QUARK"
+    },
+    "responseFields": {
+      "data": "total/per_size/list",
+      "list": "disk_name/disk_pass/disk_type/files/shared_time/link",
+      "vodId": "Quark share URL",
+      "resultCount": "15"
+    },
+    "httpTraceShape": {
+      "method": "POST",
+      "host": "www.melost.cn",
+      "path": "/v1/search/disk",
+      "status": "200",
+      "responseCode": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "bpanso-guard-search-20260722",
+    "provider": "BpanSo",
+    "sourceKey": "csp_BpanSoGuard",
+    "catVodMethod": "searchContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "POST JSON",
+      "host": "www.melost.cn",
+      "path": "/v1/search/disk",
+      "keyword": "仙逆",
+      "pages": "1 and 2",
+      "size": "15",
+      "diskType": "BDY"
+    },
+    "responseFields": {
+      "data": "total/per_size/list",
+      "list": "disk_name/disk_pass/disk_type/files/shared_time/link",
+      "vodId": "Baidu share URL with pwd",
+      "page2ResultCount": "15"
+    },
+    "httpTraceShape": {
+      "method": "POST",
+      "host": "www.melost.cn",
+      "path": "/v1/search/disk",
+      "status": "200",
+      "page2RequestObserved": "true"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "captured-guard-home-shape",
+    "provider": "CapturedGuardSample",
+    "sourceKey": "csp_CapturedSampleGuard",
+    "catVodMethod": "homeContent",
+    "status": "captured",
+    "requestShape": {
+      "method": "homeContent",
+      "filter": "true",
+      "url": "https://api.example.test/home?token=abc"
+    },
+    "responseFields": {
+      "class": "array",
+      "list": "vod_id/vod_name/vod_pic/vod_remarks"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "api.example.test",
+      "headers": "User-Agent only"
+    },
+    "jsHostGaps": [
+      "req/http header passthrough"
+    ],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "ygp-guard-native-trailer-chain-20260728",
+    "provider": "YGPGuard",
+    "sourceKey": "csp_YGPGuard",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "catalog": "GET / and GET /movlist/{area}_{type}_{year}_{sort}_{page}",
+      "detail": "GET /movie/{id}",
+      "search": "GET /?keyword={encoded}&view=search",
+      "player": "GET /?view=api&mode=download-data&rand={cache-buster}&ttid={download-id}",
+      "headers": "desktop Chrome User-Agent plus Accept and Accept-Language recovered from Guard"
+    },
+    "responseFields": {
+      "catalog": "div.movlist cards with /movie/{id}, title, poster and release remark",
+      "detail": "movie-title metadata plus #tabwrapper-all download rows",
+      "player": "JSON array first item movurl is a direct MP4",
+      "guardDefect": "two fresh Android processes failed because Java hard-coded 30 cards while current DOM returned 28",
+      "nativeBoundary": "Swift iterates the actual DOM count and keeps no-trailer entries explicitly unavailable",
+      "macOSPlaybackState": "current public trailer API returned MP4 and a 4096-byte Range probe returned 206"
+    },
+    "httpTraceShape": {
+      "method": "GET catalog/detail/search/player/media",
+      "host": "www.6huo.com then vod.pipi.cn",
+      "path": "public HTML paths, download-data JSON API, then direct MP4",
+      "status": "HTML and JSON 200; MP4 byte probe 206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "firstaid-guard-home-20260720",
+    "provider": "FirstAidGuard",
+    "sourceKey": "Aid",
+    "catVodMethod": "homeContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "m.youlai.cn",
+      "path": "/jijiu",
+      "filter": "true"
+    },
+    "responseFields": {
+      "class": "five visual sections",
+      "list": "article URL/title/category image"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "m.youlai.cn",
+      "path": "/jijiu",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "firstaid-guard-category-20260720",
+    "provider": "FirstAidGuard",
+    "sourceKey": "Aid",
+    "catVodMethod": "categoryContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "m.youlai.cn",
+      "path": "/jijiu",
+      "tid": "captured section id",
+      "page": "1"
+    },
+    "responseFields": {
+      "list": "home articles filtered by section",
+      "page": "1",
+      "pagecount": "1"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "m.youlai.cn",
+      "path": "/jijiu",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "firstaid-guard-detail-20260720",
+    "provider": "FirstAidGuard",
+    "sourceKey": "Aid",
+    "catVodMethod": "detailContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "m.youlai.cn",
+      "path": "/jijiu/article/{opaque-id}.html",
+      "id": "absolute article URL"
+    },
+    "responseFields": {
+      "list": "single vod",
+      "vod_play_from": "Qile",
+      "vod_play_url": "title plus remote mp4"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "m.youlai.cn",
+      "path": "/jijiu/article/{opaque-id}.html",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "firstaid-guard-search-20260720",
+    "provider": "FirstAidGuard",
+    "sourceKey": "Aid",
+    "catVodMethod": "searchContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "m.youlai.cn",
+      "path": "/jijiu",
+      "keyword": "local catalog filter",
+      "page": "1"
+    },
+    "responseFields": {
+      "list": "title-matched home articles",
+      "pagecount": "1"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "m.youlai.cn",
+      "path": "/jijiu",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "firstaid-guard-player-20260720",
+    "provider": "FirstAidGuard",
+    "sourceKey": "Aid",
+    "catVodMethod": "playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "vod.youlai.cn",
+      "path": "/{opaque-media-path}.mp4",
+      "flag": "Qile",
+      "id": "remote mp4 URL"
+    },
+    "responseFields": {
+      "url": "unchanged remote mp4",
+      "parse": "0",
+      "jx": "0",
+      "header": "User-Agent and Referer"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "vod.youlai.cn",
+      "path": "/{opaque-media-path}.mp4",
+      "status": "206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "anime1-guard-home-20260720",
+    "provider": "Anime1Guard",
+    "sourceKey": "Anime1",
+    "catVodMethod": "homeContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "cloudfront catalog host",
+      "path": "/",
+      "method": "GET"
+    },
+    "responseFields": {
+      "catalog": "category id/name/status/year/season/subtitle group",
+      "count": "large array"
+    },
+    "httpTraceShape": {
+      "host": "cloudfront catalog host",
+      "path": "/",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "anime1-guard-category-20260720",
+    "provider": "Anime1Guard",
+    "sourceKey": "Anime1",
+    "catVodMethod": "categoryContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "cloudfront catalog host",
+      "path": "/",
+      "tid": "year-season",
+      "page": "1"
+    },
+    "responseFields": {
+      "list": "catalog rows filtered by year-season",
+      "pagecount": "1"
+    },
+    "httpTraceShape": {
+      "host": "cloudfront catalog host",
+      "path": "/",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "anime1-guard-detail-20260720",
+    "provider": "Anime1Guard",
+    "sourceKey": "Anime1",
+    "catVodMethod": "detailContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "anime1.me",
+      "path": "/?cat={category-id}",
+      "id": "category id"
+    },
+    "responseFields": {
+      "vod_play_from": "Anime1",
+      "vod_play_url": "ordered episode labels plus encoded signed payload"
+    },
+    "httpTraceShape": {
+      "host": "anime1.me",
+      "path": "/category/{season}/{title}",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "anime1-guard-search-20260720",
+    "provider": "Anime1Guard",
+    "sourceKey": "Anime1",
+    "catVodMethod": "searchContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "cloudfront catalog host",
+      "path": "/",
+      "keyword": "local title or subtitle-group filter"
+    },
+    "responseFields": {
+      "list": "matching catalog rows",
+      "pagecount": "1"
+    },
+    "httpTraceShape": {
+      "host": "cloudfront catalog host",
+      "path": "/",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "anime1-guard-player-20260720",
+    "provider": "Anime1Guard",
+    "sourceKey": "Anime1",
+    "catVodMethod": "playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "v.anime1.me",
+      "path": "/api",
+      "method": "POST form",
+      "id": "encoded signed payload"
+    },
+    "responseFields": {
+      "url": "remote mp4",
+      "parse": "0",
+      "header": "short-lived e/p/h Cookie and media request headers",
+      "realRangeProbe": "200 or 206 with advancing media bytes"
+    },
+    "httpTraceShape": {
+      "host": "v.anime1.me",
+      "path": "/api then /{category}/{episode}.mp4",
+      "status": "200 then 206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "dm84-guard-home-20260720",
+    "provider": "Dm84Guard",
+    "sourceKey": "Dm84",
+    "catVodMethod": "homeContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "dmbus.cc",
+      "path": "/list-{1...4}.html",
+      "method": "GET"
+    },
+    "responseFields": {
+      "class": "four anime classes",
+      "list": "detail id/title/cover/remark"
+    },
+    "httpTraceShape": {
+      "host": "dmbus.cc",
+      "path": "/ and /list-{1...4}.html",
+      "status": "redirect then 200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "dm84-guard-category-20260720",
+    "provider": "Dm84Guard",
+    "sourceKey": "Dm84",
+    "catVodMethod": "categoryContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "dmbus.cc",
+      "path": "/list-{type}-{page}.html",
+      "tid": "1 through 4"
+    },
+    "responseFields": {
+      "list": "detail id/title/cover/remark",
+      "page": "requested page"
+    },
+    "httpTraceShape": {
+      "host": "dmbus.cc",
+      "path": "/list-{type}-{page}.html",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "dm84-guard-detail-20260720",
+    "provider": "Dm84Guard",
+    "sourceKey": "Dm84",
+    "catVodMethod": "detailContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "dmbus.cc",
+      "path": "/v/{id}.html",
+      "id": "opaque html id"
+    },
+    "responseFields": {
+      "vod_play_from": "ordered lines",
+      "vod_play_url": "episode label plus /p/ path",
+      "metadata": "title/cover/content"
+    },
+    "httpTraceShape": {
+      "host": "dmbus.cc",
+      "path": "/v/{id}.html",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "dm84-guard-search-20260720",
+    "provider": "Dm84Guard",
+    "sourceKey": "Dm84",
+    "catVodMethod": "searchContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "dmbus.cc",
+      "path": "/s----------.html",
+      "keyword": "wd query redacted"
+    },
+    "responseFields": {
+      "list": "matching anime cards",
+      "pagecount": "1"
+    },
+    "httpTraceShape": {
+      "host": "dmbus.cc",
+      "path": "/s----------.html",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "dm84-guard-player-20260720",
+    "provider": "Dm84Guard",
+    "sourceKey": "Dm84",
+    "catVodMethod": "playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "dmbus.cc then parser host",
+      "path": "/p/{id}.html then /index.php and /api.php",
+      "method": "GET then POST form"
+    },
+    "responseFields": {
+      "url": "remote HLS",
+      "parse": "0",
+      "header": "User-Agent and Origin",
+      "realRangeProbe": "playlist and media segment bytes"
+    },
+    "httpTraceShape": {
+      "host": "dynamic parser host then HLS host",
+      "path": "/api.php then redacted media path",
+      "status": "200 and media 200 or 206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "tingshu275-guard-home-20260721",
+    "provider": "Tingshu275Guard",
+    "sourceKey": "有声小说",
+    "catVodMethod": "homeContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "app.365ting.com",
+      "path": "/listen/Apitzg2025/categoryList",
+      "query": "size, page, categoryId"
+    },
+    "responseFields": {
+      "class": "four captured categories",
+      "list": "book id, title, image, anchor, episode count",
+      "pagecount": "derived from count and size"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "app.365ting.com",
+      "path": "/listen/Apitzg2025/categoryList",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "tingshu275-guard-category-20260721",
+    "provider": "Tingshu275Guard",
+    "sourceKey": "有声小说",
+    "catVodMethod": "categoryContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "app.365ting.com",
+      "path": "/listen/Apitzg2025/categoryList",
+      "tid": "captured category id 6 through 9",
+      "page": "positive integer"
+    },
+    "responseFields": {
+      "data": "count, page, size, list",
+      "list": "book metadata"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "app.365ting.com",
+      "path": "/listen/Apitzg2025/categoryList",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "tingshu275-guard-detail-20260721",
+    "provider": "Tingshu275Guard",
+    "sourceKey": "有声小说",
+    "catVodMethod": "detailContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "app.365ting.com",
+      "path": "/listen/Apitzg2025/book and /chapter",
+      "id": "numeric book id"
+    },
+    "responseFields": {
+      "bookData": "title, image, author, anchor, category, count",
+      "chapterList": "chapterId, position, title",
+      "vod_play_url": "chapter label plus book and chapter ids"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "app.365ting.com",
+      "path": "/listen/Apitzg2025/book and /chapter",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "tingshu275-guard-search-20260721",
+    "provider": "Tingshu275Guard",
+    "sourceKey": "有声小说",
+    "catVodMethod": "searchContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "app.365ting.com",
+      "path": "/listen/Apitzg2025/search",
+      "query": "size, page, search"
+    },
+    "responseFields": {
+      "data": "array of matching book metadata",
+      "list": "native Vod results"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "app.365ting.com",
+      "path": "/listen/Apitzg2025/search",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "tingshu275-guard-player-20260721",
+    "provider": "Tingshu275Guard",
+    "sourceKey": "有声小说",
+    "catVodMethod": "playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "app.365ting.com",
+      "path": "/listen/Apitzg2025/AppGetChapterUrl2023",
+      "query": "runtime timestamp, book id, chapter id, native signature",
+      "nativeInputShape": "decimal Unix timestamp in milliseconds"
+    },
+    "responseFields": {
+      "url": "remote audio URL",
+      "parse": "0",
+      "jx": "0",
+      "androidLocalhost": "false",
+      "realPlayerTrace": "two chapters requested signed remote audio with Range bytes=0-",
+      "androidPlaybackSamples": "2",
+      "androidPlaybackState": "state 3 with advancing positions in both samples",
+      "nativeOutputBoundary": "portable signature output is reproduced in Swift and verified by captured vectors; remote audio passed the current playback gate"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "app.365ting.com then remote audio host",
+      "path": "/listen/Apitzg2025/AppGetChapterUrl2023 then redacted media path",
+      "status": "player JSON 200; media Range observed; proxy-off Android playback advanced"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "ycyz-guard-home-20260721",
+    "provider": "YCyzGuard",
+    "sourceKey": "原创",
+    "catVodMethod": "homeContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "v.xl01.eu.cc",
+      "path": "/s/all/1",
+      "query": "type=0 and order=0"
+    },
+    "responseFields": {
+      "class": "movie, series, original, short-series, animation",
+      "list": "movie-card href, title, image, card-meta"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "v.xl01.eu.cc",
+      "path": "/s/all/1",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "ycyz-guard-category-20260721",
+    "provider": "YCyzGuard",
+    "sourceKey": "原创",
+    "catVodMethod": "categoryContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "v.xl01.eu.cc",
+      "path": "/s/{category}/{page}",
+      "query": "type and order"
+    },
+    "responseFields": {
+      "list": "movie-card catalog",
+      "pagecount": "largest pagination page"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "v.xl01.eu.cc",
+      "path": "/s/all/1",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "ycyz-guard-detail-20260721",
+    "provider": "YCyzGuard",
+    "sourceKey": "原创",
+    "catVodMethod": "detailContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "v.xl01.eu.cc",
+      "path": "/{genre}/{numeric-id}.htm",
+      "id": "absolute or site-relative detail URL"
+    },
+    "responseFields": {
+      "metadata": "movie-title, poster, info-item and desc",
+      "vod_play_from": "雪落直连",
+      "vod_play_url": "play-item label plus play page URL"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "v.xl01.eu.cc",
+      "path": "/jingsong/{numeric-id}.htm",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "ycyz-guard-search-20260721",
+    "provider": "YCyzGuard",
+    "sourceKey": "原创",
+    "catVodMethod": "searchContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "v.xl01.eu.cc",
+      "path": "/search/{url-encoded-keyword}",
+      "page": "captured page 1 only; later pages return empty until evidenced"
+    },
+    "responseFields": {
+      "list": "movie-card search results",
+      "pagecount": "largest pagination page"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "v.xl01.eu.cc",
+      "path": "/search/{keyword}",
+      "status": "200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "ycyz-guard-player-20260721",
+    "provider": "YCyzGuard",
+    "sourceKey": "原创",
+    "catVodMethod": "playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "v.xl01.eu.cc",
+      "path": "/play/{numeric-id}-{line}.htm then /lines",
+      "query": "runtime timestamp, AES signature and pid",
+      "signatureInput": "pid-timestamp",
+      "playerCryptoAlgorithm": "MD5 prefix key plus AES-128-ECB-PKCS7 uppercase hex"
+    },
+    "responseFields": {
+      "url": "url3 direct remote media only",
+      "parse": "0",
+      "jx": "0",
+      "capturedSignatureVector": "203628 at 1784624523790 produces BF14069E...7B8A2F",
+      "encryptedM3u8Boundary": "m3u8 and m3u8_2 require site-side transformation and are not promoted",
+      "androidPlaybackState": "state 3 with advancing position after proxy removal"
+    },
+    "httpTraceShape": {
+      "method": "GET then GET",
+      "host": "v.xl01.eu.cc then remote media host",
+      "path": "/lines then redacted media path",
+      "status": "lines JSON 200; proxy-off Android playback advanced"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "music-guard-player-lrc-20260722",
+    "provider": "MusicGuard",
+    "sourceKey": "csp_MusicGuard",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "www.4c44.com",
+      "path": "/js/play.php",
+      "form": "id, type, key",
+      "keyShape": "YYYYMMDDHHMM plus fixed 4c44 suffix",
+      "catalog": "GET HTML with csrf_token/human_check verification Cookie, then SwiftSoup navigation and card parsing",
+      "search": "/so/{percent-encoded-keyword}.html aggregate detail route"
+    },
+    "responseFields": {
+      "fields": "url, pic, lrc, title, wyid, msg",
+      "subtitle": "LRC converted by CatVod to an SSA subtitle",
+      "androidPlaybackState": "captured m801.music.126.net request returned 206 with 2256597 audio bytes",
+      "macOSPlaybackState": "same captured media response was audio/mpeg with a successful 206 partial response",
+      "nativeBoundary": "Swift reproduces captcha Cookie flow, HTML catalog/detail, minute key, direct audio, and in-memory LRC-to-ASS subtitles"
+    },
+    "httpTraceShape": {
+      "method": "POST then GET",
+      "host": "www.4c44.com then remote audio host",
+      "path": "/js/play.php then <redacted-media-path>",
+      "status": "catalog/detail/player JSON 200; remote audio returned 206 with 2256597 bytes"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "appgz-guard-player-chain-20260722",
+    "provider": "AppgzGuard",
+    "sourceKey": "csp_AppgzGuard",
+    "catVodMethod": "playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "api.gjjwgp3n.com",
+      "path": "/App/Authentication/Device/signIn, /App/IndexList/index, /App/IndexPlay/playInfo, /App/Resource/Vurl/show, /App/Resource/VurlDetail/showOne",
+      "formFields": "phone_type,token_id,signature,keys,time,app_id,request_key,token,phone_model,ad_version",
+      "authorization": "portable device authentication; uppercase MD5 signature, RSA PKCS1 metadata envelope, AES-CBC request_key and ephemeral login token"
+    },
+    "responseFields": {
+      "body": "JSON code/msg/data where data contains per-response 172-character Base64 keys and variable Base64 response_key",
+      "catVodPlayer": "remote HLS is wrapped by FongMi localhost m3u8 proxy with User-Agent Lavf/57.83.100",
+      "androidPlaybackState": "proxy-off state 3; position advanced from 141793 to 147809 milliseconds",
+      "macOSPlaybackState": "remote HLS Range returned 206 with 4096 bytes and #EXTM3U prefix",
+      "nativeBoundary": "Swift reproduces device sign-in/up, request signing, RSA/AES envelopes, all five CatVod methods and direct remote HLS playback"
+    },
+    "httpTraceShape": {
+      "method": "POST",
+      "host": "api.gjjwgp3n.com",
+      "path": "/App/* endpoint chain",
+      "status": "all five business endpoints returned 200; remote HLS byte probe returned 206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "kanqiu-guard-native-chain-20260728",
+    "provider": "KanqiuGuard",
+    "sourceKey": "csp_KanqiuGuard",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "www.88kanqiu.us",
+      "catalogPaths": "GET / and GET /match/{1|8|21}/live",
+      "currentDOM": "outer a[href=/live/{id}/play] contains inner span.btn; legacy a.btn[href] remains supported",
+      "detailPath": "GET /live/{numeric-id}/source",
+      "responseWrapper": "strip fixed 6-character prefix and 2-character suffix, then Base64-decode JSON",
+      "playerShapes": "?url={whole percent-decoded tail}; ?id={page with Base64 XXTEA payload}",
+      "xxteaKeyShape": "24-byte static key padded/truncated to four little-endian UInt32 words"
+    },
+    "responseFields": {
+      "decoded": "JSON data.links[] contains name and third-party player URL",
+      "currentHome": "2026-07-28 response exposed active cards only through the new outer-link DOM; old Guard dropped them by reading href from an inner span",
+      "finalPage": "play.88player.top/m3u8.html reads the complete url query tail and HLS.js loads the nested signed m3u8",
+      "macOSPlaybackState": "CDN reached but returned 403 because every current source response carried txTime earlier than capture time",
+      "nativeBoundary": "Swift implements all five CatVod methods, dual DOM parsing, wrapped Base64 detail decoding, whole-tail direct URL extraction, XXTEA ?id= decoding and parser fallback"
+    },
+    "httpTraceShape": {
+      "method": "GET then GET then GET",
+      "host": "www.88kanqiu.us then play.88player.top then video10.letaocm.top",
+      "path": "/live/{id}/source then /m3u8.html?url=<redacted> then signed /live/*.m3u8",
+      "status": "catalog/detail/player page 200; final CDN 403 with source-supplied expired txTime"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "doubao-guard-player-nuxt-20260722",
+    "provider": "DoubaoGuard",
+    "sourceKey": "csp_DoubaoGuard",
+    "catVodMethod": "homeContent/categoryContent/detailContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "www.doubaozhibo.com",
+      "schedulePath": "/api/v1/schedules/public/local",
+      "replayListPath": "/api/v1/playbacks?page={page}&pageSize=20&dataType={all|football|basketball}",
+      "replayDetailPath": "/api/v1/playbacks/{routeId}",
+      "livePlayerPath": "/play/{playId}",
+      "pageShape": "script#__NUXT_DATA__ JSON containing a remote HLS URL"
+    },
+    "responseFields": {
+      "schedule": "data.days[].live[] with id, league, teams and signals[].playId/name",
+      "replay": "data.list[].schedule plus playback.lines[].routeId/proxyUrl/title",
+      "player": "direct HLS with User-Agent and https://www.doubaozhibo.com/ Referer",
+      "androidPlaybackState": "proxy-off replay state 3; position advanced from 61403 to 67413 milliseconds",
+      "macOSPlaybackState": "main and variant HLS returned 200; MPEG-TS Range returned 206 with 4096 bytes"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "www.doubaozhibo.com then redacted VOD CDN host",
+      "path": "/api/v1/playbacks/{routeId} then /vodplay/{routeId}.m3u8 then <redacted-media-path>",
+      "status": "API and HLS 200; MPEG-TS byte probe 206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "sixv-guard-native-online-chain-20260728",
+    "provider": "SixVGuard",
+    "sourceKey": "csp_SixVGuard",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "catalog": "GET /{category}/ and /{category}/index_{page}.html",
+      "detail": "GET public article path from a.zoom",
+      "search": "POST /e/search/11index.php with EmpireCMS title form fields",
+      "player": "GET /e/DownSys/play query then GET iframe share page",
+      "configExt": "https://www.xb6v.com/"
+    },
+    "responseFields": {
+      "catalog": "#post_container .post_hover with a.zoom title, image and category remark",
+      "detail": "article metadata plus grouped a.lBtn episode links; legacy magnet table remains a fallback",
+      "currentPlayback": "play page iframe leads to vip.dytt-tvs.com share page whose script declares a signed HLS URL",
+      "macOSPlaybackState": "signed master HLS returned 200 and exposed a 1920x800 variant",
+      "nativeBoundary": "all five CatVod methods use public HTML; magnet-only legacy entries remain explicitly unavailable without a BitTorrent engine"
+    },
+    "httpTraceShape": {
+      "method": "GET catalog/detail/play/share then GET media; POST search",
+      "host": "www.xb6v.com then vip.dytt-tvs.com then redirected media CDN",
+      "path": "GET public article and play paths, GET /share/{opaque}, GET signed /index.m3u8",
+      "status": "HTML and share pages 200; master HLS 302 then 200"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "livegz-guard-native-chain-20260728",
+    "provider": "LiveGzGuard",
+    "sourceKey": "csp_LiveGzGuard",
+    "catVodMethod": "homeContent/categoryContent/detailContent/playerContent/searchContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "method": "POST application/x-www-form-urlencoded",
+      "host": "api.moe3dze.com",
+      "paths": "POST /gz/live/sports?parameter=key and POST /gz/live/detail?parameter=key",
+      "body": "parameter=<Base64 AES ciphertext>",
+      "crypto": "AES-128-CBC with PKCS7; fixed 16-byte protocol key and IV recovered from Guard",
+      "headers": "User-Agent okhttp/3.12.0 and client-version 3.0.4.0"
+    },
+    "responseFields": {
+      "catalog": "decrypted array with mid,match_id,ball_type,m_status,home,visiting,stage,event_name,match_time",
+      "detail": "decrypted object with live_line name and m3u8 pairs",
+      "captureMedia": "signed remote HLS returned 200 and a segment returned 206",
+      "androidDirect": "proxy-off home returned 2 active matches; a subsequent request observed upstream empty-state fluctuation",
+      "nativeBoundary": "portable AES-CBC request/response envelopes, composite IDs, line expansion and direct HLS are implemented",
+      "offlineVector": "independent request ciphertext and encrypted response replay both pass"
+    },
+    "httpTraceShape": {
+      "method": "POST then GET",
+      "host": "api.moe3dze.com then remote HLS host",
+      "path": "POST /gz/live/* then GET <redacted-media-path>",
+      "status": "business JSON captured; HLS 200 and segment 206; Android proxy-off catalog also succeeded"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "alllive-guard-multisite-player-20260727",
+    "provider": "AllliveGuard",
+    "sourceKey": "csp_AllliveGuard",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "live.muxia.site",
+      "path": "/api/{huya|douyu|bilibili}/getCategories, getCategoryRooms and getRoomDetail",
+      "query": "site-specific category, room, search and detail identifiers",
+      "huyaSigning": "anonymous uid plus fm template, stream name, seqid and wsTime reconstruct wsSecret"
+    },
+    "responseFields": {
+      "body": "LZ-String Base64 payload decoded into category, room, quality and CDN line fields",
+      "detail": "Huya samples returned 4x12 and 3x9 quality-line entries; Douyu returned 4x2; Bilibili returned either zero lines or 3x2 AVC-HEVC lines",
+      "player": "quality groups map to direct remote CDN lines; Huya lines receive a fresh portable signature",
+      "androidPlaybackState": "fresh Huya stream returned 302 then 200 video/x-flv before the client intentionally stopped the infinite response",
+      "macOSPlaybackState": "real Swift chain selected 120 current rooms and 6 qualities; signed Huya FLV returned 200 and 4096 media bytes",
+      "nativeBoundary": "LZ-String parsing and Huya ephemeral signing are portable; no captured URL or uid is persisted"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "live.muxia.site",
+      "path": "/api/{site}/getCategories, getCategoryRooms and getRoomDetail then <redacted-media-path>",
+      "status": "business payloads 200; current signed Huya media 200 with verified FLV bytes"
+    },
+    "jsHostGaps": [
+      "legacy Guard parser exception is bypassed by the native typed JSON implementation"
+    ],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "libvio-guard-current-html-native-20260727",
+    "provider": "LibvioGuard",
+    "sourceKey": "csp_LibvioGuard",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "www.libvio.pw",
+      "catalogPaths": "/ and /show/{type}--------{page}---.html",
+      "searchPaths": "/search/-------------.html?wd={keyword} and /search/{keyword}----------{page}---.html",
+      "detailPath": "/detail/{numeric-id}.html",
+      "playerPath": "/w/{numeric-id}-{line}-{episode}.html"
+    },
+    "responseFields": {
+      "catalog": "stui-vodlist thumb href/title/data-original/pic-text",
+      "detail": "vod-info metadata plus non-netdisk playlist-panel rows",
+      "player": "player_aaaa.url remote HTTP media",
+      "androidPlaybackState": "proxy-off state 3 with position advancing from 8991 to 15037 milliseconds",
+      "macOSPlaybackState": "remote MP4 Range returned 206 and 4096 ISO Media bytes"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "www.libvio.pw then remote MP4 host",
+      "path": "/, /show, /search, /detail, /w then <redacted-media-path>",
+      "status": "catalog/detail/player HTML 200; media Range 206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "nmyswv-guard-public-mac-url-native-20260727",
+    "provider": "NmyswvGuard",
+    "sourceKey": "csp_NmyswvGuard",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "host": "vip.wwgz.cn:5200",
+      "catalogPaths": "/ public home sections; current type templates are unavailable",
+      "searchPaths": "upstream UI reports search upgrading; native fallback filters the public home catalog",
+      "detailPath": "/vod-detail-id-{numeric-id}.html",
+      "playerPath": "/vod-play-id-{numeric-id}-src-{line}-num-{episode}.html or direct mac_url media"
+    },
+    "responseFields": {
+      "catalog": "resize_list href/title/data-src/src/sTit/sBottom",
+      "detail": "page-bd metadata, detail-con, mac_from and mac_url",
+      "player": "mac_url contains two remote HLS groups; Android playerContent wraps 123Pan HLS in localhost proxy do=m3u8 and supplies only the captured WebView User-Agent",
+      "androidPlaybackState": "prior external-proxy-off capture state 3 advanced from 114213 to 120222 milliseconds; the Spider playback contract still uses its internal localhost HLS proxy",
+      "macOSPlaybackState": "123Pan HLS uses NetVplayer local playlist relay; the real-source test resolves the playlist and reads the first media segment with status 200/206"
+    },
+    "httpTraceShape": {
+      "method": "GET",
+      "host": "vip.wwgz.cn:5200 then redacted 123 cloud or lzcdn media host",
+      "path": "/, /vod-detail, /vod-play then <redacted-media-path>",
+      "status": "home/detail/player HTML 200; both media playlist probes 206"
+    },
+    "jsHostGaps": [
+      "current upstream category templates are missing and site search is explicitly disabled, so native category/search are limited to public home sections"
+    ],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "app99-shijie-native-chain-20260728",
+    "provider": "App99Guard",
+    "sourceKey": "视界",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "runtimeDelegate": "com.github.catvod.spider.App99",
+      "host": "124.221.3.182:19987",
+      "paths": "/app/bn/vod/search and /app/bn/vod/detail",
+      "requestCrypto": "random 16-byte IV plus AES-256-CBC-PKCS7 using the persisted UUID without hyphens, then Base64",
+      "signature": "lowercase SHA-256 of body:timestamp:nonce:token:appkey",
+      "registrationBoundary": "exact source key 视界 plus csp_App99Guard; AppSxGuard siblings use their separately verified delegate and protocol"
+    },
+    "responseFields": {
+      "envelope": "Base64 of random 16-byte IV plus AES-256-CBC-PKCS7 JSON, with optional zlib payload support",
+      "catalog": "data list with id, name, pic, remarks and page_count/total_count",
+      "detail": "play_from and play_url $$$ groups; only direct HTTP(S) episodes are admitted",
+      "androidPlaybackState": "state 3 with position advancing from 11757 to 34896 milliseconds",
+      "macOSPlaybackState": "first direct HLS URL returned an EXT-X-STREAM-INF master playlist",
+      "nativeBoundary": "BBA and qsvip opaque parser tokens are intentionally omitted; verified ffm3u8 direct HLS remains available"
+    },
+    "httpTraceShape": {
+      "method": "POST for catalog/detail; GET Range for media proof",
+      "host": "124.221.3.182:19987 then redacted media host",
+      "path": "/app/bn/vod/search, /app/bn/vod/detail, then <redacted-media-path>",
+      "status": "encrypted business responses 200; direct HLS master playlist 200/206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "appsx-boke-native-chain-20260728",
+    "provider": "AppSxGuard",
+    "sourceKey": "播客",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "runtimeDelegate": "com.github.catvod.spider.AppSx",
+      "host": "154.219.117.157:6688",
+      "paths": "/api.php/qijiappapi.index/initV120, typeFilterVodList, vodDetail2",
+      "formKeys": "category uses area,year,type_id,page,sort,lang,class; detail uses vod_id",
+      "responseCrypto": "JSON data field is Base64 AES-128-CBC-PKCS7 with the same captured 16-byte key and IV",
+      "registrationBoundary": "exact source key 播客 plus csp_AppSxGuard"
+    },
+    "responseFields": {
+      "catalog": "type_list entries with recommend_list and filter_type_list",
+      "detail": "vod plus vod_play_list/player_info/urls; direct HTTP(S) episodes are retained",
+      "search": "current searchList route returns 404, so native page-one search filters the already decrypted home catalog",
+      "player": "verified direct ffm3u8 media is returned with parse=0; opaque Ace and NSYS parser tokens are not exposed"
+    },
+    "httpTraceShape": {
+      "method": "GET init; POST category/detail; GET media",
+      "host": "154.219.117.157:6688 then redacted media host",
+      "status": "encrypted business responses 200; direct media probe 200/206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "appsx-juquan-native-chain-20260728",
+    "provider": "AppSxGuard",
+    "sourceKey": "剧圈",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "runtimeDelegate": "com.github.catvod.spider.AppSx",
+      "host": "app.95112475.xyz",
+      "paths": "/api.php/getappapi.index/initV119, typeFilterVodList, vodDetail, searchList",
+      "formKeys": "category uses area,year,type_id,page,sort,lang,class; detail uses vod_id; search uses keywords,type_id,page",
+      "responseCrypto": "JSON data field is Base64 AES-128-CBC-PKCS7 with the same captured 16-byte key and IV",
+      "signatureBoundary": "direct requests without the Android app-api-verify headers returned the same decryptable 200 contract"
+    },
+    "responseFields": {
+      "catalog": "type_list entries with recommend_list and filter_type_list",
+      "search": "search_list",
+      "detail": "vod plus vod_play_list/player_info/urls",
+      "player": "all observed detail lines carried direct HTTP(S) URLs and are returned with parse=0"
+    },
+    "httpTraceShape": {
+      "method": "POST business requests then GET media",
+      "host": "app.95112475.xyz then redacted media host",
+      "status": "encrypted business responses 200; direct media probe 200/206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "appsx-gugu-native-chain-20260728",
+    "provider": "AppSxGuard",
+    "sourceKey": "咕咕",
+    "catVodMethod": "homeContent/categoryContent/detailContent/searchContent/playerContent",
+    "status": "native-rewrite-ready",
+    "requestShape": {
+      "runtimeDelegate": "com.github.catvod.spider.AppSx",
+      "host": "www.gugu3.com",
+      "paths": "POST /api.php/getappapi.index/initV119, typeFilterVodList, vodDetail, searchList, vodParse",
+      "formKeys": "vodParse uses parse_api,url,player_parse_type,token",
+      "requestCrypto": "vodParse url is Base64 AES-128-CBC-PKCS7 using the channel key as IV, including the captured trailing newline before form encoding",
+      "responseCrypto": "all business responses use the shared JSON data/Base64 AES-128-CBC envelope"
+    },
+    "responseFields": {
+      "catalog": "type_list entries with recommend_list and filter_type_list",
+      "search": "search_list",
+      "detail": "vod plus a server-parser play line",
+      "player": "vodParse decrypts to a nested json string whose url is a direct signed MP4"
+    },
+    "httpTraceShape": {
+      "method": "POST business and parser requests; GET Range media",
+      "host": "www.gugu3.com then redacted signed media host",
+      "status": "encrypted business and vodParse responses 200; Android media Range returned 206"
+    },
+    "jsHostGaps": [],
+    "errorCategory": "Spider"
+  },
+  {
+    "id": "xpath-guard-invalid-configuration-20260728",
+    "provider": "XPathGuard",
+    "sourceKey": "csp_XPathGuard",
+    "catVodMethod": "homeContent",
+    "status": "captured",
+    "requestShape": {
+      "config": "site declares only key/name/type/api/search flags",
+      "requiredRuleInput": "missing ext and XPath selectors/endpoints",
+      "freshProcessRuns": "old and current top-level JAR"
+    },
+    "responseFields": {
+      "oldJar": "ClassNotFoundException for com.github.catvod.spider.XPathGuard",
+      "currentJar": "same ClassNotFoundException after remote JAR MD5 changed on 2026-07-28",
+      "home": "0 classes and 0 items",
+      "nativeBoundary": "no class, endpoint or XPath rule exists from which a SiteContentProvider could be constructed"
+    },
+    "httpTraceShape": {
+      "method": "no provider business request",
+      "host": "none attributable to csp_XPathGuard",
+      "status": "failure occurs during class resolution before homeContent"
+    },
+    "jsHostGaps": [
+      "remote configuration must supply both an implementation and complete XPath rule input"
+    ],
+    "errorCategory": "Config"
+  }
+]

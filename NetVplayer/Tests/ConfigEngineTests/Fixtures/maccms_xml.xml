@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="5.1">
+  <list page="2" pagecount="8" pagesize="1" recordcount="8">
+    <video>
+      <last>2026-07-21 10:00:00</last>
+      <id>202</id>
+      <tid>2</tid>
+      <name><![CDATA[XML 示例影片]]></name>
+      <type>剧集</type>
+      <pic>https://media.example.test/xml-poster.jpg</pic>
+      <year>2026</year>
+      <area>中国</area>
+      <note><![CDATA[更新至2集]]></note>
+      <actor><![CDATA[演员乙]]></actor>
+      <director><![CDATA[导演乙]]></director>
+      <dl>
+        <dd flag="m3u8"><![CDATA[第1集$https://media.example.test/xml-1.m3u8?token=a&quality=hd#第2集$https://media.example.test/xml-2.m3u8]]></dd>
+        <dd flag="backup"><![CDATA[正片$https://media.example.test/xml-movie.mp4]]></dd>
+      </dl>
+      <des><![CDATA[包含 <标签> 与 CDATA 的 XML 详情]]></des>
+    </video>
+  </list>
+  <class>
+    <ty id="1"><![CDATA[电影]]></ty>
+    <ty id="2"><![CDATA[剧集]]></ty>
+  </class>
+</rss>

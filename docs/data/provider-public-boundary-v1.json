@@ -1,0 +1,81 @@
+{
+  "blocking_reasons": [],
+  "groups": {
+    "android_binaries": {
+      "count": 0,
+      "path_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "paths": []
+    },
+    "legacy_executable_loaders": {
+      "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "count": 0,
+      "path_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "paths": []
+    },
+    "mixed_boundary_sources": {
+      "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "count": 0,
+      "path_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "paths": []
+    },
+    "private_provider_sources": {
+      "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "count": 0,
+      "path_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "paths": []
+    },
+    "private_provider_staging": {
+      "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "count": 0,
+      "path_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "paths": []
+    },
+    "tracked_fongmi_reference": {
+      "count": 0,
+      "path_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sample_paths": [],
+      "sample_truncated": false
+    }
+  },
+  "history": {
+    "commit_count": 0,
+    "forbidden_path": "FongMi",
+    "newest_commit": null,
+    "oldest_commit": null
+  },
+  "next_actions": [
+    "Create the public shell from a clean export rather than the current Git history.",
+    "Move site-specific Swift Providers and their tests/fixtures behind the signed helper protocol.",
+    "Move LegacyNativeProviderRegistration.swift into the private Provider repository after signed packages replace its aliases.",
+    "Move private-providers staging files to the authorized private repository before creating the public export.",
+    "Keep the public shell free of in-process executable loaders; signed helper processes are the only dynamic Provider path."
+  ],
+  "policy": {
+    "android_binary_suffixes": [
+      ".dex",
+      ".jar",
+      ".so"
+    ],
+    "forbidden_reference_prefixes": [
+      "FongMi/"
+    ],
+    "history_requirement": "complete",
+    "private_provider_detection": "SpiderEngine Swift filename containing NativeProvider, except reviewed public adapters",
+    "private_provider_staging_prefix": "private-providers/",
+    "public_provider_sources": [
+      "NetVplayer/Sources/SpiderEngine/NativeProviders.swift"
+    ],
+    "target": "clean-public-shell-repository"
+  },
+  "schema_version": 1,
+  "summary": {
+    "android_binary_files": 0,
+    "fongmi_history_commits": 0,
+    "legacy_executable_loader_files": 0,
+    "mixed_boundary_source_files": 0,
+    "private_provider_source_files": 0,
+    "private_provider_staging_files": 0,
+    "release_ready": true,
+    "tracked_fongmi_files": 0
+  }
+}

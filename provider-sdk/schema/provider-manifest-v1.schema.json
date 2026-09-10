@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netvplayer.example/schema/provider-manifest-v1.schema.json",
+  "title": "NetVplayer signed Provider manifest v1",
+  "type": "object",
+  "required": ["manifest", "signature"],
+  "properties": {
+    "manifest": {
+      "type": "object",
+      "required": [
+        "provider_id", "version", "protocol", "shell_min_version", "macos_min_version",
+        "architectures", "runtime", "entrypoint", "runner", "capabilities", "assets",
+        "license", "status", "revoked"
+      ],
+      "properties": {
+        "provider_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "version": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*(-[A-Za-z0-9.-]+)?$" },
+        "protocol": { "const": 1 },
+        "shell_min_version": { "type": "string" },
+        "shell_max_version": { "type": ["string", "null"] },
+        "macos_min_version": { "type": "string" },
+        "architectures": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["arm64", "x86_64", "universal2"] }
+        },
+        "runtime": { "enum": ["java", "js", "quickjs", "python", "android-dex"] },
+        "entrypoint": { "$ref": "#/$defs/relativePath" },
+        "runner": { "$ref": "#/$defs/relativePath" },
+        "runtime_executable": {
+          "oneOf": [{ "$ref": "#/$defs/relativePath" }, { "type": "null" }]
+        },
+        "sandbox": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["profile_version", "launcher", "bundle_id", "release_profile"],
+              "properties": {
+                "profile_version": { "const": 2 },
+                "launcher": { "$ref": "#/$defs/relativePath" },
+                "bundle_id": {
+                  "type": "string",
+                  "pattern": "^com\\.netvplayer\\.provider\\.[a-z0-9.-]+$"
+                },
+                "release_profile": { "enum": ["community-adhoc", "developer-id"] }
+              },
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        },
+        "provider_class": { "type": ["string", "null"] },
+        "capabilities": {
+          "type": "array",
+          "items": { "enum": ["vod", "home", "category", "search", "detail", "player", "live", "epg", "proxy", "action"] },
+          "uniqueItems": true
+        },
+        "assets": {
+          "type": "array",
+          "minItems": 1,
+          "contains": {
+            "type": "object",
+            "required": ["path"],
+            "properties": { "path": { "const": "LICENSES/PROVIDER.txt" } }
+          },
+          "minContains": 1,
+          "maxContains": 1,
+          "items": {
+            "type": "object",
+            "required": ["path", "sha256", "executable"],
+            "properties": {
+              "path": { "$ref": "#/$defs/relativePath" },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "executable": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "source_bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["original_keys", "original_apis"],
+            "properties": {
+              "original_keys": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "uniqueItems": true
+              },
+              "original_apis": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              { "required": ["original_keys"], "properties": { "original_keys": { "minItems": 1 } } },
+              { "required": ["original_apis"], "properties": { "original_apis": { "minItems": 1 } } }
+            ]
+          }
+        },
+        "source_policy": { "enum": ["user-configured-only", "user-configured-catalog"] },
+        "source_revision": { "type": ["string", "null"] },
+        "license": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["compatible", "partial", "needs-port", "unsupported", "blocked-license"] },
+        "revoked": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "signature": { "type": "string", "contentEncoding": "base64" }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "not": { "pattern": "(^/|^~|(^|/)\\.\\.(/|$))" }
+    }
+  },
+  "additionalProperties": false
+}

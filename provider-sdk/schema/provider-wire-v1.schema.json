@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netvplayer.example/schema/provider-wire-v1.schema.json",
+  "title": "NetVplayer Provider wire protocol v1",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response" }
+  ],
+  "$defs": {
+    "operation": {
+      "enum": [
+        "handshake", "health", "shutdown", "cancel", "init", "home", "home_video",
+        "category", "search", "detail", "player", "live", "epg", "proxy", "action",
+        "manual_video_check", "is_video_format", "destroy"
+      ]
+    },
+    "request": {
+      "type": "object",
+      "required": ["protocol", "request_id", "provider_id", "operation", "arguments"],
+      "properties": {
+        "protocol": { "const": 1 },
+        "request_id": { "type": "string", "minLength": 1 },
+        "provider_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "operation": { "$ref": "#/$defs/operation" },
+        "site": { "type": ["object", "null"] },
+        "arguments": { "type": "object" },
+        "credential_ref": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "diagnostic": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "proxy": {
+      "type": "object",
+      "required": ["status_code", "headers"],
+      "properties": {
+        "status_code": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "content_type": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] },
+        "body": { "type": ["string", "null"] },
+        "body_base64": { "type": ["string", "null"], "contentEncoding": "base64" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "response": {
+      "type": "object",
+      "required": ["request_id", "ok"],
+      "properties": {
+        "request_id": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "result": {},
+        "proxy": { "oneOf": [{ "$ref": "#/$defs/proxy" }, { "type": "null" }] },
+        "error": { "oneOf": [{ "$ref": "#/$defs/error" }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "ok": { "const": false } } },
+          "then": { "required": ["error"] }
+        }
+      ],
+      "additionalProperties": true
+    }
+  }
+}

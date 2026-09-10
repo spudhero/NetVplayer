@@ -1,0 +1,107 @@
+name: Provider public shell
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "provider-runners/**"
+      - "provider-sdk/**"
+      - "docs/data/provider-public-boundary-v1.json"
+      - "docs/data/torrent-bridge-license-audit-2026-08-18.json"
+      - "NetVplayer/Package.swift"
+      - "NetVplayer/Resources/TorrentBridge/**"
+      - "NetVplayer/Sources/**"
+      - "NetVplayer/Tests/**"
+      - "script/build_provider_distribution_index.py"
+      - "script/build_provider_package.py"
+      - "script/build_provider_sandbox_launcher.py"
+      - "script/audit_provider_public_release.py"
+      - "script/audit_source_free_app.py"
+      - "script/test_audit_source_free_app.py"
+      - "NetVplayer/script/build_and_run.sh"
+      - "script/export_provider_public_shell.py"
+      - "script/package_libmpv_runtime_licenses.py"
+      - "script/audit_torrent_bridge_licenses.py"
+      - "script/apply_torrent_bridge_replacements.py"
+      - "script/test_audit_provider_public_release.py"
+      - "script/test_audit_torrent_bridge_licenses.py"
+      - "script/test_apply_torrent_bridge_replacements.py"
+      - "script/test_package_libmpv_runtime_licenses.py"
+      - "script/test_provider_public_shell.py"
+      - "script/test_provider_*.py"
+      - "script/validate_provider_*.py"
+      - "script/validate_*_runtime.py"
+      - ".github/workflows/provider-public-shell.yml"
+      - ".github/ISSUE_TEMPLATE/**"
+
+permissions:
+  contents: read
+
+jobs:
+  public-shell:
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.20.0"
+
+      - name: Set up Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Use OpenSSL 3 for Ed25519 fixtures
+        run: echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+
+      - name: Install libmpv development files
+        run: brew install mpv
+
+      - name: Fetch pinned Java fixture dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          gson="$RUNNER_TEMP/gson-2.11.0.jar"
+          curl --fail --location --silent --show-error \
+            https://repo1.maven.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar \
+            --output "$gson"
+          printf '%s  %s\n' \
+            57928d6e5a6edeb2abd3770a8f95ba44dce45f3b23b7a9dc2b309c581552a78b \
+            "$gson" | shasum -a 256 --check
+          echo "NETVPLAYER_GSON_JAR=$gson" >> "$GITHUB_ENV"
+
+      - name: Install and audit WebTorrent runtime dependencies
+        env:
+          npm_config_cache: ${{ runner.temp }}/netvplayer-npm-cache
+        run: |
+          npm ci \
+            --prefix NetVplayer/Resources/TorrentBridge \
+            --omit=dev \
+            --no-audit \
+            --no-fund
+          python3 script/apply_torrent_bridge_replacements.py \
+            --root NetVplayer/Resources/TorrentBridge
+          python3 script/audit_torrent_bridge_licenses.py \
+            --check docs/data/torrent-bridge-license-audit-2026-08-18.json
+
+      - name: Run public Provider gate
+        run: python3 script/test_provider_public_shell.py --gson-jar "$NETVPLAYER_GSON_JAR"
+
+      - name: Run serial SwiftPM regression
+        run: swift test --package-path NetVplayer --disable-sandbox --no-parallel
+
+      - name: Check patch formatting
+        run: git diff --check

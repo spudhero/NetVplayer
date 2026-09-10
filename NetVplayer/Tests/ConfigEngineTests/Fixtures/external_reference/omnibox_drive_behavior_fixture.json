@@ -1,0 +1,84 @@
+[
+  {
+    "id": "omnibox-quark-share-url",
+    "kind": "omniBoxDrive",
+    "provider": "Quark",
+    "scenario": "share-url",
+    "requestShape": {
+      "url": "https://pan.quark.cn/s/example?pwd=12ab&auth_key=abc"
+    },
+    "responseFields": {
+      "provider": "quark",
+      "shareId": "example",
+      "requiresAuth": "true"
+    },
+    "errorCategory": null,
+    "status": "fixture"
+  },
+  {
+    "id": "omnibox-uc-tree",
+    "kind": "omniBoxDrive",
+    "provider": "UC",
+    "scenario": "directory-tree",
+    "requestShape": {
+      "method": "POST",
+      "url": "https://pc-api.uc.cn/1/clouddrive/share/sharepage/detail?token=abc",
+      "cookie": "uc_token=abc"
+    },
+    "responseFields": {
+      "data.list[].fid": "file-id",
+      "data.list[].file_name": "episode.mp4",
+      "data.list[].obj_category": "video"
+    },
+    "errorCategory": null,
+    "status": "fixture"
+  },
+  {
+    "id": "omnibox-grouped-search",
+    "kind": "omniBoxDrive",
+    "provider": "Mixed",
+    "scenario": "grouped-search",
+    "requestShape": {
+      "keyword": "movie",
+      "providers": "quark,uc,ali,115,pikpak"
+    },
+    "responseFields": {
+      "groups[].provider": "quark",
+      "groups[].items[].sourceName": "example-source",
+      "groups[].items[].validity": "requiresAuth"
+    },
+    "errorCategory": null,
+    "status": "fixture"
+  },
+  {
+    "id": "omnibox-invalid-share",
+    "kind": "omniBoxDrive",
+    "provider": "PikPak",
+    "scenario": "invalid-or-uncaptured-public-share",
+    "requestShape": {
+      "url": "https://mypikpak.com/s/example?token=abc"
+    },
+    "responseFields": {
+      "status": "pending-capture",
+      "reason": "public share consume API not verified"
+    },
+    "errorCategory": "Source",
+    "status": "pending-capture"
+  },
+  {
+    "id": "omnibox-playback-metadata",
+    "kind": "drivePlayback",
+    "provider": "Baidu123Thunder",
+    "scenario": "unsupported-playback-metadata",
+    "requestShape": {
+      "url": "https://example.test/share?signature=abc&token=abc"
+    },
+    "responseFields": {
+      "route": "pending-capture",
+      "quality": "unknown",
+      "requiresAuth": "true"
+    },
+    "errorCategory": "Source",
+    "status": "pending-capture"
+  }
+]
