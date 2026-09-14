@@ -140,6 +140,7 @@ def main() -> int:
             "script/test_package_libmpv_runtime_licenses.py",
             "script/test_audit_torrent_bridge_licenses.py",
             "script/test_apply_torrent_bridge_replacements.py",
+            "script/test_macos_release_workflow.py",
         ],
     )
     sandbox_output = run_step(

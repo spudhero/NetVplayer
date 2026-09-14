@@ -28,12 +28,14 @@ on:
       - "script/test_audit_provider_public_release.py"
       - "script/test_audit_torrent_bridge_licenses.py"
       - "script/test_apply_torrent_bridge_replacements.py"
+      - "script/test_macos_release_workflow.py"
       - "script/test_package_libmpv_runtime_licenses.py"
       - "script/test_provider_public_shell.py"
       - "script/test_provider_*.py"
       - "script/validate_provider_*.py"
       - "script/validate_*_runtime.py"
       - ".github/workflows/provider-public-shell.yml"
+      - ".github/workflows/release-macos.yml"
       - ".github/ISSUE_TEMPLATE/**"
 
 permissions:

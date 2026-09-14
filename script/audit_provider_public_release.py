@@ -21,6 +21,7 @@ REQUIRED_FILES = (
     ".github/ISSUE_TEMPLATE/user-feedback.yml",
     ".github/ISSUE_TEMPLATE/config.yml",
     ".github/workflows/provider-public-shell.yml",
+    ".github/workflows/release-macos.yml",
     "docs/data/provider-public-boundary-v1.json",
     "script/build_provider_sandbox_launcher.py",
     "script/validate_provider_sandbox.py",

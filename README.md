@@ -1,6 +1,6 @@
 # NetVplayer
 
-NetVplayer 1.0.0 is a native macOS SwiftUI media player built around embedded
+NetVplayer 1.0.1 is a native macOS SwiftUI media player built around embedded
 libmpv. The public application is source-free: it ships without video catalogs,
 live channel lists, site-specific Providers, accounts, or default source URLs.
 
@@ -36,7 +36,7 @@ version of each component is shown.
 ## Requirements
 
 - macOS 14 or later
-- Apple Silicon for the current 1.0.0 release
+- Apple Silicon for the current 1.0.1 release
 - Xcode and Homebrew libmpv dependencies when building from source
 
 ## Build And Test
@@ -57,6 +57,14 @@ The release command rejects a dirty public checkout and extra source/resource
 inputs, builds in release mode, verifies bundled runtime licenses and SBOM data,
 signs the bundle with the community ad-hoc profile, and audits the final `.app`
 for source payloads. It does not replace or launch `/Applications/NetVplayer.app`.
+
+## Release Automation
+
+A reviewed `MAJOR.MINOR.PATCH` tag whose value matches the application version
+automatically builds and rechecks the source-free Apple Silicon bundle. The
+workflow publishes the versioned ZIP, SPDX and CycloneDX SBOMs, build inventory,
+and SHA-256 checksums as the latest GitHub Release. An existing published version
+is never overwritten with different assets.
 
 ## Repository Layout
 

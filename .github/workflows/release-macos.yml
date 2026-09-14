@@ -1,0 +1,163 @@
+name: Release macOS app
+
+on:
+  push:
+    tags:
+      - "[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate release tag and public boundary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_version="$GITHUB_REF_NAME"
+          if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: release tag must use MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          app_version="$(plutil -extract CFBundleShortVersionString raw NetVplayer/Sources/NetVplayerApp/Info.plist)"
+          if [[ "$app_version" != "$release_version" ]]; then
+            echo "error: tag $release_version does not match app version $app_version" >&2
+            exit 1
+          fi
+          git fetch origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "error: release tag must point to a commit on main" >&2
+            exit 1
+          fi
+          public_gate_conclusion="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow provider-public-shell.yml \
+            --commit "$GITHUB_SHA" \
+            --limit 1 \
+            --json conclusion \
+            --jq '.[0].conclusion // ""')"
+          if [[ "$public_gate_conclusion" != "success" ]]; then
+            echo "error: Provider public shell must pass for $GITHUB_SHA before release" >&2
+            exit 1
+          fi
+          python3 script/audit_provider_public_release.py --repo .
+          python3 -m unittest -v script/test_macos_release_workflow.py
+
+      - name: Install libmpv development files
+        run: brew install mpv
+
+      - name: Build and verify release assets
+        id: package
+        shell: bash
+        env:
+          NETVPLAYER_NODE_RUNTIME_CACHE: ${{ runner.temp }}/netvplayer-node-runtime-cache
+          NETVPLAYER_NPM_CACHE: ${{ runner.temp }}/netvplayer-npm-cache
+          NETVPLAYER_QUICKJS_RUNTIME_CACHE: ${{ runner.temp }}/netvplayer-quickjs-runtime-cache
+        run: |
+          set -euo pipefail
+          release_root="$RUNNER_TEMP/netvplayer-release"
+          app_output="$release_root/app"
+          asset_output="$release_root/assets"
+          extracted_output="$release_root/extracted"
+          mkdir -p "$app_output" "$asset_output" "$extracted_output"
+
+          bash NetVplayer/script/build_and_run.sh --package-public "$app_output"
+
+          app_bundle="$app_output/NetVplayer.app"
+          archive="$asset_output/NetVplayer-${GITHUB_REF_NAME}-macos-arm64.zip"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$archive"
+          unzip -t "$archive"
+          /usr/bin/ditto -x -k "$archive" "$extracted_output"
+
+          extracted_app="$extracted_output/NetVplayer.app"
+          codesign --verify --deep --strict --verbose=2 "$extracted_app"
+          archive_version="$(plutil -extract CFBundleShortVersionString raw "$extracted_app/Contents/Info.plist")"
+          if [[ "$archive_version" != "$GITHUB_REF_NAME" ]]; then
+            echo "error: archive version $archive_version does not match tag $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          archive_architectures="$(/usr/bin/lipo -archs "$extracted_app/Contents/MacOS/NetVplayerApp")"
+          if [[ "$archive_architectures" != "arm64" ]]; then
+            echo "error: expected arm64 release, found $archive_architectures" >&2
+            exit 1
+          fi
+          python3 script/audit_source_free_app.py --repo . --app-bundle "$extracted_app"
+
+          cp dist/sbom/NetVplayer.build-artifacts.json "$asset_output/"
+          cp dist/sbom/NetVplayer.cdx.json "$asset_output/"
+          cp dist/sbom/NetVplayer.spdx.json "$asset_output/"
+          (
+            cd "$asset_output"
+            shasum -a 256 \
+              "NetVplayer-${GITHUB_REF_NAME}-macos-arm64.zip" \
+              NetVplayer.build-artifacts.json \
+              NetVplayer.cdx.json \
+              NetVplayer.spdx.json > SHA256SUMS.txt
+            shasum -a 256 --check SHA256SUMS.txt
+          )
+          echo "asset-output=$asset_output" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: NetVplayer-${{ github.ref_name }}-release-assets
+          path: ${{ steps.package.outputs.asset-output }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        shell: bash
+        working-directory: ${{ steps.package.outputs.asset-output }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_version="$GITHUB_REF_NAME"
+          release_assets=(
+            "NetVplayer-${release_version}-macos-arm64.zip"
+            NetVplayer.build-artifacts.json
+            NetVplayer.cdx.json
+            NetVplayer.spdx.json
+            SHA256SUMS.txt
+          )
+          if gh release view "$release_version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing_assets="$RUNNER_TEMP/existing-release"
+            mkdir -p "$existing_assets"
+            gh release download "$release_version" --repo "$GITHUB_REPOSITORY" \
+              --dir "$existing_assets"
+            (
+              cd "$existing_assets"
+              shasum -a 256 --check SHA256SUMS.txt
+            )
+            cmp SHA256SUMS.txt "$existing_assets/SHA256SUMS.txt"
+            gh release edit "$release_version" --repo "$GITHUB_REPOSITORY" \
+              --title "NetVplayer $release_version" --latest
+          else
+            gh release create "$release_version" "${release_assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --fail-on-no-commits \
+              --title "NetVplayer $release_version" \
+              --notes "This release contains the verified source-free Apple Silicon macOS app. It requires macOS 14 or later and uses community ad-hoc signing, so first launch may require Finder's Open command or approval in Privacy & Security." \
+              --generate-notes \
+              --latest
+          fi

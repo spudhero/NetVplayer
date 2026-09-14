@@ -25,6 +25,12 @@ Changes to packaging or distribution must also generate a clean public export
 and pass `script/audit_provider_public_release.py`. Test the resulting `.app`,
 not a bundle built from a private development checkout.
 
+Official macOS releases use a `MAJOR.MINOR.PATCH` tag on `main`. The tag must
+match `CFBundleShortVersionString`; the build number must also advance. Pushing
+the tag triggers the release workflow, which publishes only after the packaged
+and re-extracted application passes architecture, version, signature, SBOM,
+checksum, and source-free checks.
+
 ## Reports
 
 Public issues must not include cookies, authorization headers, signed media

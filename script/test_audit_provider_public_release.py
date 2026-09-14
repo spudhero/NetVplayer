@@ -41,6 +41,7 @@ def public_fixture(root: Path) -> Path:
     (repo / "LICENSE").write_text("MIT License\n", encoding="utf-8")
     (repo / "provider-sdk/LICENSE").write_text("MIT License\n", encoding="utf-8")
     (repo / ".github/workflows/provider-public-shell.yml").write_text("name: public\n", encoding="utf-8")
+    (repo / ".github/workflows/release-macos.yml").write_text("name: release\n", encoding="utf-8")
     (repo / ".github/ISSUE_TEMPLATE/user-feedback.yml").write_text(
         "name: user feedback\n", encoding="utf-8"
     )

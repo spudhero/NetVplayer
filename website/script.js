@@ -2,6 +2,38 @@ const navToggle = document.querySelector('.nav-toggle');
 const navMenu = document.querySelector('.nav-menu');
 const navLinks = document.querySelectorAll('.nav-menu a');
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const releaseVersionNodes = document.querySelectorAll('[data-release-version]');
+const releaseDownloadLinks = document.querySelectorAll('[data-release-download]');
+const latestReleaseAPI = 'https://api.github.com/repos/spudhero/NetVplayer/releases/latest';
+
+async function synchronizeLatestRelease() {
+  try {
+    const response = await fetch(latestReleaseAPI, {
+      headers: { Accept: 'application/vnd.github+json' },
+      cache: 'no-store'
+    });
+    if (!response.ok) return;
+
+    const release = await response.json();
+    const version = String(release.tag_name || '').replace(/^v/, '');
+    if (!/^\d+\.\d+\.\d+$/.test(version) || !Array.isArray(release.assets)) return;
+
+    const expectedAssetName = `NetVplayer-${version}-macos-arm64.zip`;
+    const asset = release.assets.find((candidate) => candidate?.name === expectedAssetName);
+    if (!asset?.browser_download_url) return;
+
+    releaseVersionNodes.forEach((node) => {
+      node.textContent = version;
+    });
+    releaseDownloadLinks.forEach((link) => {
+      link.href = asset.browser_download_url;
+    });
+  } catch {
+    // Keep the reviewed static release fallback when GitHub is unavailable.
+  }
+}
+
+synchronizeLatestRelease();
 
 function setNavigation(open) {
   if (!navToggle || !navMenu) return;
