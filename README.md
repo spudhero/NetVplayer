@@ -39,6 +39,15 @@ version of each component is shown.
 - Apple Silicon for the current 1.0.1 release
 - Xcode and Homebrew libmpv dependencies when building from source
 
+## Download
+
+Download the current Apple Silicon build from the
+[project website](https://spudhero.github.io/NetVplayer/) or the
+[latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The website reads the latest published Release and updates its displayed version
+and download target together; its offline fallback points to the verified 1.0.1
+ZIP.
+
 ## Build And Test
 
 ```bash

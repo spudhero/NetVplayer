@@ -52,7 +52,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             "NetVplayer.cdx.json",
             "NetVplayer.spdx.json",
             "SHA256SUMS.txt",
-            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
             "gh release create",
             "gh release download",
             'cmp SHA256SUMS.txt "$existing_assets/SHA256SUMS.txt"',
