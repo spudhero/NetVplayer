@@ -27,6 +27,12 @@ packaged. Provider development source and history remain in the private source
 repository; the distribution repository contains signed build artifacts only.
 A separate diagnostics channel tests the download and sandbox lifecycle.
 
+Users do not choose package versions or installation locations. The **Extension
+Support** settings page reports a plain-language health state and the number of
+ready components. Package identifiers, runtime details, and recovery actions stay
+collapsed under **Advanced Diagnostics**, where only the latest recommended
+version of each component is shown.
+
 ## Requirements
 
 - macOS 14 or later

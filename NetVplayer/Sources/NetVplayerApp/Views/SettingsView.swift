@@ -32,7 +32,7 @@ struct SettingsView: View {
     private enum SettingsSection: String, CaseIterable, Identifiable {
         case appearance = "外观"
         case dataSource = "数据源设置"
-        case providers = "Provider 运行时"
+        case providers = "扩展支持"
         case playback = "播放偏好"
         case network = "网络与代理"
         case system = "缓存与系统"
@@ -44,7 +44,7 @@ struct SettingsView: View {
             switch self {
             case .appearance: return "paintpalette"
             case .dataSource: return "link"
-            case .providers: return "shippingbox"
+            case .providers: return "puzzlepiece.extension"
             case .playback: return "play.circle"
             case .network: return "network"
             case .system: return "wrench"
@@ -56,7 +56,7 @@ struct SettingsView: View {
             switch self {
             case .appearance: return "背景、主题与控件色彩"
             case .dataSource: return "站点、授权与源诊断"
-            case .providers: return "签名包、运行时与版本状态"
+            case .providers: return "自动维护播放兼容能力"
             case .playback: return "画面、字幕与播放行为"
             case .network: return "代理、端口与中继"
             case .system: return "缓存、备份与实验功能"
@@ -110,6 +110,7 @@ struct SettingsView: View {
     @State private var selectedSavedVodConfigURL: String = ""
     @State private var configReportExpanded: Bool = false
     @State private var compatibilityReportExpanded: Bool = false
+    @State private var providerRuntimeDetailsExpanded: Bool = false
     @State private var vodConfigUrl: String = ""
     @State private var liveConfigUrl: String = ""
     @State private var isLoadingVod: Bool = false
@@ -461,34 +462,48 @@ struct SettingsView: View {
     private var providerRuntimeSettings: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
             GroupBox(label: SettingsPanelLabel(
-                title: "Provider 支持包",
-                subtitle: "启动时自动同步固定签名目录中的兼容版本。",
-                systemImage: "shippingbox",
-                statusText: appState.providerRuntimeStatus,
-                statusColor: appState.providerRuntimeStatus == "未配置"
-                    ? palette.muted
-                    : palette.color(for: .success)
+                title: "播放扩展支持",
+                subtitle: "自动准备并更新播放所需组件，无需手动安装。",
+                systemImage: "puzzlepiece.extension",
+                statusText: providerRuntimeSummaryStatus,
+                statusColor: providerRuntimeSummaryColor
             )) {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Text("已安装并激活")
-                            .font(.system(size: 13, weight: .semibold))
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .center, spacing: 14) {
+                        Image(systemName: providerRuntimeSummaryIcon)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(providerRuntimeSummaryColor)
+                            .frame(width: 42, height: 42)
+                            .background {
+                                Circle()
+                                    .fill(providerRuntimeSummaryColor.opacity(0.14))
+                            }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(providerRuntimeSummaryTitle)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(palette.foreground)
+                            Text(providerRuntimeSummaryDescription)
+                                .font(.system(size: 12))
+                                .foregroundStyle(palette.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
                         Spacer(minLength: 12)
+
                         Button {
                             appState.refreshProviderRuntimeCatalog()
                         } label: {
-                            Image(systemName: "arrow.clockwise")
+                            Label("重新检查", systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.bordered)
                         .disabled(appState.providerRuntimeBusy)
-                        .help("立即同步 Provider 支持包")
-                        .accessibilityLabel("立即同步 Provider 支持包")
+                        .help("检查并自动更新播放扩展")
                     }
-                    .padding(.bottom, 10)
 
                     if let progress = appState.providerRuntimeProgress {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("\(progress.providerID) · \(progress.version)")
+                            Text("正在安全准备播放扩展")
                                 .font(.caption)
                                 .foregroundStyle(palette.muted)
                             if let fraction = progress.fractionCompleted {
@@ -498,102 +513,218 @@ struct SettingsView: View {
                                     .controlSize(.small)
                             }
                         }
-                        .padding(.bottom, 10)
-                    }
-
-                    if appState.providerRuntimeInstalled.isEmpty {
-                        Text("暂无已安装支持包")
-                            .font(.caption)
-                            .foregroundStyle(palette.muted)
-                    } else {
-                        ForEach(appState.providerRuntimeInstalled, id: \.manifest.providerID) { document in
-                            SettingsControlRow(
-                                title: document.manifest.providerID,
-                                caption: "\(document.manifest.runtime.rawValue) · \(document.manifest.version)"
-                            ) {
-                                Label("已激活", systemImage: "checkmark.circle.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(palette.color(for: .success))
-                            }
-                        }
                     }
 
                     Divider()
-                        .padding(.vertical, 10)
 
-                    Text("签名目录")
-                        .font(.system(size: 13, weight: .semibold))
-                        .padding(.bottom, 8)
-
-                    if appState.providerRuntimeCatalog.isEmpty {
-                        Text("当前目录没有可用版本")
-                            .font(.caption)
-                            .foregroundStyle(palette.muted)
-                    } else {
-                        ForEach(appState.providerRuntimeCatalog, id: \.self) { release in
-                            let isRetry = appState.providerRuntimeFailedRelease == ProviderVersionReference(
-                                providerID: release.providerID,
-                                version: release.version
-                            )
-                            SettingsControlRow(
-                                title: release.providerID,
-                                caption: "版本 \(release.version)"
-                            ) {
-                                Button {
-                                    appState.installProvider(
-                                        providerID: release.providerID,
-                                        version: release.version
-                                    )
-                                } label: {
-                                    Label(isRetry ? "重试" : "安装", systemImage: "arrow.down.circle")
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(appState.providerRuntimeBusy)
-                            }
+                    DisclosureGroup(isExpanded: $providerRuntimeDetailsExpanded) {
+                        providerRuntimeTechnicalDetails
+                            .padding(.top, 10)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("高级诊断")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(palette.foreground)
+                            Text("仅在扩展无法正常工作或客服要求时查看")
+                                .font(.system(size: 11))
+                                .foregroundStyle(palette.muted)
                         }
                     }
                 }
             }
 
             GroupBox(label: SettingsPanelLabel(
-                title: "用户自有后端权限",
-                subtitle: "WebDAV、AList 与 OpenList 使用独立的网络和凭据授权。",
-                systemImage: "externaldrive.badge.shield.checkmark"
+                title: "隐私与安全",
+                subtitle: "扩展在受限环境中运行，账号权限始终由你控制。",
+                systemImage: "hand.raised.fill"
             )) {
                 VStack(alignment: .leading, spacing: 0) {
-                    SettingsControlRow(title: "端点与局域网", caption: "未配置端点") {
-                        Label("未授权", systemImage: "network.slash")
-                            .font(.caption)
-                            .foregroundStyle(palette.muted)
-                    }
-                    Divider().padding(.vertical, 8)
-                    SettingsControlRow(title: "明文 HTTP", caption: "默认拒绝") {
-                        Label("未授权", systemImage: "lock.fill")
-                            .font(.caption)
-                            .foregroundStyle(palette.muted)
-                    }
-                    Divider().padding(.vertical, 8)
-                    SettingsControlRow(title: "重定向", caption: "跨源响应与凭据转发被拒绝") {
-                        Label("仅同源", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                    SettingsControlRow(title: "安全更新", caption: "只接受固定地址和签名校验通过的扩展") {
+                        Label("已开启", systemImage: "checkmark.shield.fill")
                             .font(.caption)
                             .foregroundStyle(palette.color(for: .success))
                     }
                     Divider().padding(.vertical, 8)
-                    SettingsControlRow(title: "凭据", caption: "仅接受 Keychain 引用授权") {
-                        Label("未授权", systemImage: "key.fill")
+                    SettingsControlRow(title: "凭据保护", caption: "网盘与自有后端凭据仅保存在本机") {
+                        Label("本机保存", systemImage: "lock.fill")
                             .font(.caption)
-                            .foregroundStyle(palette.muted)
+                            .foregroundStyle(palette.color(for: .success))
+                    }
+                    Divider().padding(.vertical, 8)
+                    SettingsControlRow(title: "网络保护", caption: "默认拒绝明文连接和跨站凭据转发") {
+                        Label("受保护", systemImage: "network.badge.shield.half.filled")
+                            .font(.caption)
+                            .foregroundStyle(palette.color(for: .success))
                     }
                 }
+                .padding(.leading, 27)
             }
 
-            Text("运行包依赖随签名 archive 一起交付；壳不会执行配置中的远程脚本，也不会在运行时安装 Python 依赖。")
+            Text("扩展只提供格式兼容能力，不包含视频源，也不会执行配置中的远程脚本。")
                 .font(.caption)
                 .foregroundStyle(palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear {
-            appState.refreshProviderRuntimeCatalog()
+            if appState.providerRuntimeCatalog.isEmpty,
+               appState.providerRuntimeInstalled.isEmpty {
+                appState.refreshProviderRuntimeCatalog()
+            }
+        }
+    }
+
+    private var providerRuntimeSummaryStatus: String {
+        if appState.providerRuntimeBusy { return "正在准备" }
+        if providerRuntimeHasFailure {
+            return appState.providerRuntimeInstalled.isEmpty ? "需要处理" : "可继续使用"
+        }
+        return appState.providerRuntimeInstalled.isEmpty ? "尚未就绪" : "运行正常"
+    }
+
+    private var providerRuntimeSummaryTitle: String {
+        if appState.providerRuntimeBusy { return "正在准备扩展能力" }
+        if providerRuntimeHasFailure {
+            return appState.providerRuntimeInstalled.isEmpty ? "扩展暂时不可用" : "扩展能力仍可使用"
+        }
+        return appState.providerRuntimeInstalled.isEmpty ? "等待自动准备" : "扩展能力已就绪"
+    }
+
+    private var providerRuntimeSummaryDescription: String {
+        if appState.providerRuntimeBusy {
+            return "NetVplayer 正在检查并自动更新所需组件。"
+        }
+        if providerRuntimeHasFailure {
+            return appState.providerRuntimeInstalled.isEmpty
+                ? "暂时无法准备播放扩展，请检查网络后重新检查。"
+                : "部分更新暂未完成，已安装组件仍可正常使用。"
+        }
+        if appState.providerRuntimeInstalled.isEmpty {
+            return "NetVplayer 会在需要时自动准备，无需选择版本或安装位置。"
+        }
+        return "已自动启用 \(appState.providerRuntimeInstalled.count) 项兼容组件，并会保持更新。"
+    }
+
+    private var providerRuntimeSummaryIcon: String {
+        if appState.providerRuntimeBusy { return "arrow.triangle.2.circlepath" }
+        if providerRuntimeHasFailure { return "exclamationmark.triangle.fill" }
+        return appState.providerRuntimeInstalled.isEmpty ? "clock.fill" : "checkmark.circle.fill"
+    }
+
+    private var providerRuntimeSummaryColor: Color {
+        if appState.providerRuntimeBusy { return palette.color(for: .loading) }
+        if providerRuntimeHasFailure { return palette.color(for: .warning) }
+        return appState.providerRuntimeInstalled.isEmpty ? palette.muted : palette.color(for: .success)
+    }
+
+    private var providerRuntimeHasFailure: Bool {
+        appState.providerRuntimeFailedRelease != nil
+            || appState.providerRuntimeStatus.contains("失败")
+            || appState.providerRuntimeStatus.contains("未配置")
+    }
+
+    private var latestProviderRuntimeCatalog: [ProviderRelease] {
+        Dictionary(grouping: appState.providerRuntimeCatalog, by: \.providerID)
+            .values
+            .compactMap { releases in
+                releases.max { lhs, rhs in
+                    lhs.version.compare(rhs.version, options: .numeric) == .orderedAscending
+                }
+            }
+            .sorted { providerRuntimeDisplayName($0.providerID) < providerRuntimeDisplayName($1.providerID) }
+    }
+
+    private var providerRuntimeTechnicalDetails: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("已启用组件")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.foreground)
+
+            if appState.providerRuntimeInstalled.isEmpty {
+                Text("暂无已启用组件")
+                    .font(.caption)
+                    .foregroundStyle(palette.muted)
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(appState.providerRuntimeInstalled, id: \.manifest.providerID) { document in
+                    SettingsControlRow(
+                        title: providerRuntimeDisplayName(document.manifest.providerID),
+                        caption: "\(document.manifest.providerID) · \(providerRuntimeDisplayName(document.manifest.runtime.rawValue)) · v\(document.manifest.version)"
+                    ) {
+                        Label("已启用", systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(palette.color(for: .success))
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 10)
+
+            Text("推荐版本")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.foreground)
+            Text("每类只显示当前推荐版本，历史版本由应用自动管理。")
+                .font(.system(size: 11))
+                .foregroundStyle(palette.muted)
+                .padding(.top, 2)
+
+            if latestProviderRuntimeCatalog.isEmpty {
+                Text("暂时无法获取推荐版本")
+                    .font(.caption)
+                    .foregroundStyle(palette.muted)
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(latestProviderRuntimeCatalog, id: \.providerID) { release in
+                    let installed = appState.providerRuntimeInstalled.first {
+                        $0.manifest.providerID == release.providerID
+                    }
+                    let isCurrent = installed?.manifest.version == release.version
+                    let isRetry = appState.providerRuntimeFailedRelease == ProviderVersionReference(
+                        providerID: release.providerID,
+                        version: release.version
+                    )
+
+                    SettingsControlRow(
+                        title: providerRuntimeDisplayName(release.providerID),
+                        caption: "\(release.providerID) · 推荐 v\(release.version)"
+                    ) {
+                        if isCurrent {
+                            Label("已是最新", systemImage: "checkmark")
+                                .font(.caption)
+                                .foregroundStyle(palette.muted)
+                        } else {
+                            Button {
+                                appState.installProvider(
+                                    providerID: release.providerID,
+                                    version: release.version
+                                )
+                            } label: {
+                                Label(
+                                    isRetry ? "重试" : (installed == nil ? "修复" : "更新"),
+                                    systemImage: isRetry ? "arrow.clockwise" : "arrow.down.circle"
+                                )
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(appState.providerRuntimeBusy)
+                            .help("下载并启用此播放扩展")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func providerRuntimeDisplayName(_ value: String) -> String {
+        switch value {
+        case "netvplayer.configurable.python": return "通用配置兼容"
+        case "netvplayer.catalog.python": return "常用数据源兼容"
+        case "netvplayer.catalog.java": return "Java 数据源兼容"
+        case "netvplayer.catalog.javascript": return "JavaScript 数据源兼容"
+        case "netvplayer.catalog.quickjs": return "轻量脚本兼容"
+        case "python": return "Python"
+        case "java": return "Java"
+        case "js": return "JavaScript"
+        case "quickjs": return "QuickJS"
+        default: return "扩展组件"
         }
     }
 
