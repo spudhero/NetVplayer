@@ -53,3 +53,23 @@ document.querySelectorAll('[data-media-shell] img').forEach((image) => {
   image.addEventListener('error', markMissing, { once: true });
   if (image.complete && image.naturalWidth === 0) markMissing();
 });
+
+const themePreview = document.querySelector('#theme-preview');
+const themeCaption = document.querySelector('#theme-caption');
+const themeOptions = document.querySelectorAll('.theme-option');
+
+themeOptions.forEach((option) => {
+  option.addEventListener('click', () => {
+    if (!themePreview || option.getAttribute('aria-pressed') === 'true') return;
+
+    themeOptions.forEach((item) => {
+      const selected = item === option;
+      item.setAttribute('aria-pressed', String(selected));
+      item.classList.toggle('is-active', selected);
+    });
+
+    themePreview.src = option.dataset.themeSrc;
+    themePreview.alt = option.dataset.themeAlt;
+    if (themeCaption) themeCaption.textContent = option.dataset.themeName;
+  });
+});

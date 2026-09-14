@@ -10,7 +10,7 @@
   <meta property="og:title" content="NetVplayer — 你的内容，你的 Mac，你的播放方式">
   <meta property="og:description" content="为 Apple Silicon 打造的原生 macOS 媒体播放器。连接你自己的内容，保留完整掌控。">
   <meta property="og:url" content="https://spudhero.github.io/NetVplayer/">
-  <meta property="og:image" content="https://spudhero.github.io/NetVplayer/assets/vod-home.webp">
+  <meta property="og:image" content="https://spudhero.github.io/NetVplayer/assets/home-aurora.webp">
   <meta name="twitter:card" content="summary_large_image">
   <title>NetVplayer — 你的内容，你的 Mac，你的播放方式</title>
   <link rel="canonical" href="https://spudhero.github.io/NetVplayer/">
@@ -41,6 +41,7 @@
       <div class="nav-menu" id="nav-menu" data-od-id="nav-menu">
         <div class="nav-links">
           <a href="#features">功能</a>
+          <a href="#themes">主题</a>
           <a href="#security">安全</a>
           <a href="#open-source">开源</a>
         </div>
@@ -70,8 +71,8 @@
       </div>
 
       <figure class="product-stage reveal" data-od-id="hero-product-image">
-        <div class="media-shell screenshot-shell ratio-vod" data-media-shell>
-          <img src="assets/vod-home.webp" alt="NetVplayer 点播主界面，展示用户已添加内容的海报与分类" fetchpriority="high">
+        <div class="media-shell screenshot-shell ratio-app" data-media-shell>
+          <img src="assets/home-aurora.webp" alt="NetVplayer 实际运行的点播主界面，展示用户已添加内容的海报与分类" fetchpriority="high">
         </div>
       </figure>
     </section>
@@ -104,25 +105,49 @@
         <p>公开应用不内置视频目录、直播列表、站点 Provider、账号或默认源地址。添加你自己的兼容配置、WebDAV、AList/OpenList 或受支持云盘，构建属于自己的媒体空间。</p>
       </div>
 
-      <div class="content-gallery">
-        <figure class="gallery-item reveal" data-od-id="content-home-image">
-          <div class="media-shell screenshot-shell ratio-vod" data-media-shell>
-            <img src="assets/vod-home.webp" alt="NetVplayer 主界面，展示由用户配置的媒体内容" loading="lazy" decoding="async">
-          </div>
-          <figcaption><strong>一个入口</strong>聚合你主动添加的兼容配置、文件服务、云盘与直播地址。</figcaption>
-        </figure>
-        <figure class="gallery-item reveal" data-od-id="content-search-image">
-          <div class="media-shell screenshot-shell ratio-search" data-media-shell>
-            <img src="assets/search.webp" alt="NetVplayer 搜索界面，搜索用户已连接来源中的内容" loading="lazy" decoding="async">
-          </div>
-          <figcaption><strong>一次搜索</strong>在你已连接的来源中查找内容，不暗示任何内置媒体目录。</figcaption>
-        </figure>
-      </div>
+      <figure class="content-stage wide-media reveal" data-od-id="content-home-image">
+        <div class="media-shell screenshot-shell ratio-app" data-media-shell>
+          <img src="assets/home-aurora.webp" alt="NetVplayer 实际运行的主界面，展示由用户配置的媒体内容" loading="lazy" decoding="async">
+        </div>
+        <figcaption>点播、直播、历史与收藏汇于一个原生窗口，内容始终来自你主动连接的来源。</figcaption>
+      </figure>
 
       <p class="boundary-note reveal" data-od-id="content-boundary-note">NetVplayer 提供播放与连接能力；内容来源、访问权限和服务账号始终由用户自行管理。</p>
     </section>
 
-    <section class="security-section section-surface" id="security" aria-labelledby="security-title" data-od-id="security-section">
+    <section class="theme-section section-surface" id="themes" aria-labelledby="themes-title">
+      <div class="section-heading reveal">
+        <p class="eyebrow">个性化主题</p>
+        <h2 id="themes-title">多种外观，同一套原生体验。</h2>
+        <p>从明亮通透到沉浸深色，14 种主题统一覆盖背景、侧栏、控件与强调色，选择会自动保存。</p>
+      </div>
+
+      <div class="theme-showcase reveal">
+        <div class="theme-picker" role="group" aria-label="选择主题预览">
+          <button class="theme-option is-active" type="button" aria-pressed="true" data-theme-src="assets/home-aurora.webp" data-theme-name="极光紫蓝" data-theme-alt="NetVplayer 极光紫蓝主题的实际运行界面">
+            <span class="theme-swatch swatch-aurora" aria-hidden="true"></span>
+            极光紫蓝
+          </button>
+          <button class="theme-option" type="button" aria-pressed="false" data-theme-src="assets/theme-sea-salt.webp" data-theme-name="海盐蓝雾" data-theme-alt="NetVplayer 海盐蓝雾主题的实际运行界面">
+            <span class="theme-swatch swatch-sea-salt" aria-hidden="true"></span>
+            海盐蓝雾
+          </button>
+          <button class="theme-option" type="button" aria-pressed="false" data-theme-src="assets/theme-monochrome.webp" data-theme-name="玄白流光" data-theme-alt="NetVplayer 玄白流光主题的实际运行界面">
+            <span class="theme-swatch swatch-monochrome" aria-hidden="true"></span>
+            玄白流光
+          </button>
+        </div>
+
+        <figure class="theme-stage">
+          <div class="media-shell screenshot-shell ratio-app" data-media-shell>
+            <img id="theme-preview" src="assets/home-aurora.webp" alt="NetVplayer 极光紫蓝主题的实际运行界面" loading="lazy" decoding="async">
+          </div>
+          <figcaption id="theme-caption" aria-live="polite">极光紫蓝</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="security-section" id="security" aria-labelledby="security-title" data-od-id="security-section">
       <div class="section-heading reveal">
         <p class="eyebrow">安全扩展</p>
         <h2 id="security-title" data-od-id="security-title">每一次安装，都经过完整验证链。</h2>
