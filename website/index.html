@@ -79,22 +79,31 @@
 
     <section class="feature-section section-surface" id="features" aria-labelledby="player-title" data-od-id="player-feature-section">
       <div class="section-heading reveal">
-        <p class="eyebrow">原生播放体验</p>
-        <h2 id="player-title" data-od-id="player-feature-title">画面归于内容，控制恰到好处。</h2>
-        <p>SwiftUI 构建原生界面，libmpv 负责稳定播放。字幕、音轨、倍速与播放控制保持清晰直接，窗口状态可在下次打开时恢复。</p>
+        <p class="eyebrow">完整观看体验</p>
+        <h2 id="player-title" data-od-id="player-feature-title">从发现，到播放，再到直播。</h2>
+        <p>详情、选集、搜索和直播都使用原生 macOS 交互。libmpv 负责稳定播放，字幕、音轨、倍速与画面比例保持清晰直接。</p>
       </div>
 
-      <figure class="wide-media reveal" data-od-id="player-product-image">
-        <div class="media-shell screenshot-shell screenshot-shell-dark ratio-player" data-media-shell>
-          <img src="assets/player.webp" alt="NetVplayer 播放器界面，包含时间轴、字幕、音轨与播放控制" loading="lazy" decoding="async">
+      <div class="experience-showcase reveal">
+        <div class="experience-picker" role="group" aria-label="选择功能界面预览">
+          <button class="experience-option is-active" type="button" aria-pressed="true" data-screen-src="assets/screen-detail.webp" data-screen-name="影片详情与选集" data-screen-alt="NetVplayer 影片详情与选集的实际运行界面">详情</button>
+          <button class="experience-option" type="button" aria-pressed="false" data-screen-src="assets/screen-player.webp" data-screen-name="点播播放控制" data-screen-alt="NetVplayer 点播播放器的实际运行界面">点播</button>
+          <button class="experience-option" type="button" aria-pressed="false" data-screen-src="assets/screen-live.webp" data-screen-name="直播播放与频道切换" data-screen-alt="NetVplayer 直播播放器的实际运行界面">直播</button>
+          <button class="experience-option" type="button" aria-pressed="false" data-screen-src="assets/screen-search.webp" data-screen-name="跨来源搜索" data-screen-alt="NetVplayer 搜索结果的实际运行界面">搜索</button>
         </div>
-        <figcaption>为键盘、鼠标与 macOS 窗口工作流设计，不把播放变成一套陌生的操作系统。</figcaption>
-      </figure>
+
+        <figure class="experience-stage">
+          <div class="media-shell screenshot-shell ratio-experience" data-media-shell>
+            <img id="experience-preview" src="assets/screen-detail.webp" alt="NetVplayer 影片详情与选集的实际运行界面" loading="lazy" decoding="async">
+          </div>
+          <figcaption id="experience-caption" aria-live="polite">影片详情与选集</figcaption>
+        </figure>
+      </div>
 
       <ul class="feature-notes reveal" aria-label="播放功能亮点">
-        <li><strong>SwiftUI 原生界面</strong><span>系统级排版、焦点与窗口行为。</span></li>
-        <li><strong>内嵌 libmpv</strong><span>成熟播放核心，不依赖外部播放器进程。</span></li>
-        <li><strong>状态自然延续</strong><span>分别恢复点播与直播窗口的位置和尺寸。</span></li>
+        <li><strong>详情与选集</strong><span>多线路、网盘目录与剧集排序集中呈现。</span></li>
+        <li><strong>点播与直播</strong><span>独立窗口、完整控制与频道快速切换。</span></li>
+        <li><strong>跨来源搜索</strong><span>只检索你已经连接并选择的内容来源。</span></li>
       </ul>
     </section>
 
@@ -105,12 +114,11 @@
         <p>公开应用不内置视频目录、直播列表、站点 Provider、账号或默认源地址。添加你自己的兼容配置、WebDAV、AList/OpenList 或受支持云盘，构建属于自己的媒体空间。</p>
       </div>
 
-      <figure class="content-stage wide-media reveal" data-od-id="content-home-image">
-        <div class="media-shell screenshot-shell ratio-app" data-media-shell>
-          <img src="assets/home-aurora.webp" alt="NetVplayer 实际运行的主界面，展示由用户配置的媒体内容" loading="lazy" decoding="async">
-        </div>
-        <figcaption>点播、直播、历史与收藏汇于一个原生窗口，内容始终来自你主动连接的来源。</figcaption>
-      </figure>
+      <ul class="content-capabilities reveal" aria-label="可连接的内容类型">
+        <li><strong>兼容配置</strong><span>加载你自己的配置并恢复上次选择。</span></li>
+        <li><strong>文件与云盘</strong><span>连接 WebDAV、AList/OpenList 与受支持云盘。</span></li>
+        <li><strong>直播与节目单</strong><span>支持常见直播列表、频道分组与节目指南。</span></li>
+      </ul>
 
       <p class="boundary-note reveal" data-od-id="content-boundary-note">NetVplayer 提供播放与连接能力；内容来源、访问权限和服务账号始终由用户自行管理。</p>
     </section>
@@ -128,13 +136,13 @@
             <span class="theme-swatch swatch-aurora" aria-hidden="true"></span>
             极光紫蓝
           </button>
-          <button class="theme-option" type="button" aria-pressed="false" data-theme-src="assets/theme-sea-salt.webp" data-theme-name="海盐蓝雾" data-theme-alt="NetVplayer 海盐蓝雾主题的实际运行界面">
-            <span class="theme-swatch swatch-sea-salt" aria-hidden="true"></span>
-            海盐蓝雾
+          <button class="theme-option" type="button" aria-pressed="false" data-theme-src="assets/theme-green-peach.webp" data-theme-name="青桃初绯" data-theme-alt="NetVplayer 青桃初绯主题的实际运行界面">
+            <span class="theme-swatch swatch-green-peach" aria-hidden="true"></span>
+            青桃初绯
           </button>
-          <button class="theme-option" type="button" aria-pressed="false" data-theme-src="assets/theme-monochrome.webp" data-theme-name="玄白流光" data-theme-alt="NetVplayer 玄白流光主题的实际运行界面">
-            <span class="theme-swatch swatch-monochrome" aria-hidden="true"></span>
-            玄白流光
+          <button class="theme-option" type="button" aria-pressed="false" data-theme-src="assets/theme-clear-sky.webp" data-theme-name="晴空花雾" data-theme-alt="NetVplayer 晴空花雾主题的实际运行界面">
+            <span class="theme-swatch swatch-clear-sky" aria-hidden="true"></span>
+            晴空花雾
           </button>
         </div>
 

@@ -73,3 +73,23 @@ themeOptions.forEach((option) => {
     if (themeCaption) themeCaption.textContent = option.dataset.themeName;
   });
 });
+
+const experiencePreview = document.querySelector('#experience-preview');
+const experienceCaption = document.querySelector('#experience-caption');
+const experienceOptions = document.querySelectorAll('.experience-option');
+
+experienceOptions.forEach((option) => {
+  option.addEventListener('click', () => {
+    if (!experiencePreview || option.getAttribute('aria-pressed') === 'true') return;
+
+    experienceOptions.forEach((item) => {
+      const selected = item === option;
+      item.setAttribute('aria-pressed', String(selected));
+      item.classList.toggle('is-active', selected);
+    });
+
+    experiencePreview.src = option.dataset.screenSrc;
+    experiencePreview.alt = option.dataset.screenAlt;
+    if (experienceCaption) experienceCaption.textContent = option.dataset.screenName;
+  });
+});
