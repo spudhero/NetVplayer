@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="NetVplayer 是基于 SwiftUI 与内嵌 libmpv 的原生 macOS 媒体播放器，连接你自己的兼容配置、WebDAV、AList/OpenList 与受支持云盘。">
+  <meta name="theme-color" content="#ffffff">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:title" content="NetVplayer — 你的内容，你的 Mac，你的播放方式">
+  <meta property="og:description" content="为 Apple Silicon 打造的原生 macOS 媒体播放器。连接你自己的内容，保留完整掌控。">
+  <meta property="og:url" content="https://spudhero.github.io/NetVplayer/">
+  <meta property="og:image" content="https://spudhero.github.io/NetVplayer/assets/vod-home.webp">
+  <meta name="twitter:card" content="summary_large_image">
+  <title>NetVplayer — 你的内容，你的 Mac，你的播放方式</title>
+  <link rel="canonical" href="https://spudhero.github.io/NetVplayer/">
+  <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script>document.documentElement.classList.add('js');</script>
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+  <header class="site-header" data-od-id="site-header">
+    <nav class="nav-shell" aria-label="主导航" data-od-id="primary-navigation">
+      <a class="brand" href="#top" aria-label="返回 NetVplayer 首页" data-od-id="nav-brand">
+        <span class="brand-icon" aria-hidden="true">
+          <img src="assets/app-icon.webp" alt="" width="32" height="32">
+        </span>
+        <span>NetVplayer</span>
+      </a>
+
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" data-od-id="mobile-nav-toggle">
+        <span class="sr-only">打开导航菜单</span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+      </button>
+
+      <div class="nav-menu" id="nav-menu" data-od-id="nav-menu">
+        <div class="nav-links">
+          <a href="#features">功能</a>
+          <a href="#security">安全</a>
+          <a href="#open-source">开源</a>
+        </div>
+        <div class="nav-actions">
+          <a class="icon-link" href="https://github.com/spudhero/NetVplayer" aria-label="在 GitHub 查看 NetVplayer" title="GitHub" data-od-id="nav-github-link">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.11.79-.25.79-.56v-2.24c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.28-1.7-1.28-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.57-.29-5.27-1.28-5.27-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.05 0 0 .97-.31 3.16 1.18A10.96 10.96 0 0 1 12 6.1c.98 0 1.95.13 2.87.39 2.19-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.71 5.39-5.28 5.68.42.36.78 1.07.78 2.16v3.26c0 .31.21.68.8.56A11.5 11.5 0 0 0 12 .7Z"/>
+            </svg>
+          </a>
+          <a class="button button-small" href="https://github.com/spudhero/NetVplayer/releases/download/1.0.0/NetVplayer-1.0.0-macos-arm64.zip" data-od-id="nav-download-button">下载 1.0.0</a>
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main-content">
+    <section class="hero" id="top" aria-labelledby="hero-title" data-od-id="hero-section">
+      <div class="hero-copy reveal">
+        <div class="hero-app-icon media-shell media-shell-icon" data-media-shell>
+          <img src="assets/app-icon.webp" alt="NetVplayer 应用图标" width="160" height="160" fetchpriority="high">
+        </div>
+        <p class="eyebrow">原生 macOS 媒体播放器</p>
+        <h1 id="hero-title" data-od-id="hero-title">NetVplayer</h1>
+        <p class="hero-tagline" data-od-id="hero-tagline">你的内容，你的 Mac，你的播放方式</p>
+        <p class="hero-summary">基于 SwiftUI 与内嵌 libmpv，为 Apple Silicon 打造。只连接你选择并有权访问的内容来源。</p>
+        <p class="compatibility">版本 1.0.0 · macOS 14+ · Apple Silicon</p>
+      </div>
+
+      <figure class="product-stage reveal" data-od-id="hero-product-image">
+        <div class="media-shell screenshot-shell ratio-vod" data-media-shell>
+          <img src="assets/vod-home.webp" alt="NetVplayer 点播主界面，展示用户已添加内容的海报与分类" fetchpriority="high">
+        </div>
+      </figure>
+    </section>
+
+    <section class="feature-section section-surface" id="features" aria-labelledby="player-title" data-od-id="player-feature-section">
+      <div class="section-heading reveal">
+        <p class="eyebrow">原生播放体验</p>
+        <h2 id="player-title" data-od-id="player-feature-title">画面归于内容，控制恰到好处。</h2>
+        <p>SwiftUI 构建原生界面，libmpv 负责稳定播放。字幕、音轨、倍速与播放控制保持清晰直接，窗口状态可在下次打开时恢复。</p>
+      </div>
+
+      <figure class="wide-media reveal" data-od-id="player-product-image">
+        <div class="media-shell screenshot-shell screenshot-shell-dark ratio-player" data-media-shell>
+          <img src="assets/player.webp" alt="NetVplayer 播放器界面，包含时间轴、字幕、音轨与播放控制" loading="lazy" decoding="async">
+        </div>
+        <figcaption>为键盘、鼠标与 macOS 窗口工作流设计，不把播放变成一套陌生的操作系统。</figcaption>
+      </figure>
+
+      <ul class="feature-notes reveal" aria-label="播放功能亮点">
+        <li><strong>SwiftUI 原生界面</strong><span>系统级排版、焦点与窗口行为。</span></li>
+        <li><strong>内嵌 libmpv</strong><span>成熟播放核心，不依赖外部播放器进程。</span></li>
+        <li><strong>状态自然延续</strong><span>分别恢复点播与直播窗口的位置和尺寸。</span></li>
+      </ul>
+    </section>
+
+    <section class="content-section" aria-labelledby="content-title" data-od-id="owned-content-section">
+      <div class="section-heading reveal">
+        <p class="eyebrow">用户自有内容</p>
+        <h2 id="content-title" data-od-id="owned-content-title">你的媒体入口，由你决定。</h2>
+        <p>公开应用不内置视频目录、直播列表、站点 Provider、账号或默认源地址。添加你自己的兼容配置、WebDAV、AList/OpenList 或受支持云盘，构建属于自己的媒体空间。</p>
+      </div>
+
+      <div class="content-gallery">
+        <figure class="gallery-item reveal" data-od-id="content-home-image">
+          <div class="media-shell screenshot-shell ratio-vod" data-media-shell>
+            <img src="assets/vod-home.webp" alt="NetVplayer 主界面，展示由用户配置的媒体内容" loading="lazy" decoding="async">
+          </div>
+          <figcaption><strong>一个入口</strong>聚合你主动添加的兼容配置、文件服务、云盘与直播地址。</figcaption>
+        </figure>
+        <figure class="gallery-item reveal" data-od-id="content-search-image">
+          <div class="media-shell screenshot-shell ratio-search" data-media-shell>
+            <img src="assets/search.webp" alt="NetVplayer 搜索界面，搜索用户已连接来源中的内容" loading="lazy" decoding="async">
+          </div>
+          <figcaption><strong>一次搜索</strong>在你已连接的来源中查找内容，不暗示任何内置媒体目录。</figcaption>
+        </figure>
+      </div>
+
+      <p class="boundary-note reveal" data-od-id="content-boundary-note">NetVplayer 提供播放与连接能力；内容来源、访问权限和服务账号始终由用户自行管理。</p>
+    </section>
+
+    <section class="security-section section-surface" id="security" aria-labelledby="security-title" data-od-id="security-section">
+      <div class="section-heading reveal">
+        <p class="eyebrow">安全扩展</p>
+        <h2 id="security-title" data-od-id="security-title">每一次安装，都经过完整验证链。</h2>
+        <p>扩展包只从固定 HTTPS 索引获取。下载、兼容性判断与启动之间设置多重校验，让未经授权或不符合声明的内容更难进入运行环境。</p>
+      </div>
+
+      <ol class="verification-chain reveal" aria-label="扩展包验证流程" data-od-id="verification-chain">
+        <li><span class="step-number">01</span><strong>固定 HTTPS 索引</strong><small>只读取预设安全入口</small></li>
+        <li><span class="step-number">02</span><strong>索引签名</strong><small>确认发布清单未被替换</small></li>
+        <li><span class="step-number">03</span><strong>归档哈希</strong><small>核对下载内容完整性</small></li>
+        <li><span class="step-number">04</span><strong>Manifest 签名</strong><small>验证扩展声明来源</small></li>
+        <li><span class="step-number">05</span><strong>兼容性检查</strong><small>协议、App、macOS 与架构</small></li>
+        <li><span class="step-number">06</span><strong>资源与沙盒</strong><small>核对声明资源并隔离启动</small></li>
+        <li><span class="step-number">07</span><strong>吊销状态</strong><small>阻止已撤销版本继续运行</small></li>
+      </ol>
+
+      <div class="privacy-statement reveal" data-od-id="privacy-statement">
+        <p class="statement-label">隐私边界</p>
+        <p>NetVplayer 不提供公共账号体系，也不要求使用预置媒体服务。你选择连接什么、使用什么凭据、访问哪些内容，由你自行决定并承担相应权限责任。</p>
+      </div>
+    </section>
+
+    <section class="open-source-section" id="open-source" aria-labelledby="open-source-title" data-od-id="open-source-section">
+      <div class="open-source-inner reveal">
+        <div class="license-mark" aria-hidden="true">MIT</div>
+        <div class="open-source-copy">
+          <p class="eyebrow">开放构建</p>
+          <h2 id="open-source-title" data-od-id="open-source-title">看得见的代码，参与得了的未来。</h2>
+          <p>NetVplayer 以 MIT License 开源，使用 SwiftUI 构建 macOS 原生体验，并将 libmpv 集成到应用内部。你可以阅读实现、提交问题、讨论改进或贡献代码。</p>
+          <dl class="project-facts" data-od-id="project-facts">
+            <div><dt>界面</dt><dd>SwiftUI</dd></div>
+            <div><dt>播放核心</dt><dd>libmpv</dd></div>
+            <div><dt>系统要求</dt><dd>macOS 14+ · Apple Silicon</dd></div>
+            <div><dt>许可证</dt><dd>MIT License</dd></div>
+          </dl>
+          <div class="cta-row" data-od-id="open-source-actions">
+            <a class="button" href="https://github.com/spudhero/NetVplayer/releases/download/1.0.0/NetVplayer-1.0.0-macos-arm64.zip" data-od-id="footer-download-button">下载 NetVplayer 1.0.0</a>
+            <a class="text-link" href="https://github.com/spudhero/NetVplayer" data-od-id="repository-link">查看 GitHub 仓库 <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer" data-od-id="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <img src="assets/app-icon.webp" alt="" width="28" height="28">
+        <span>NetVplayer</span>
+      </div>
+      <p>NetVplayer 不提供或托管媒体内容。用户应仅连接自己有权访问的内容，并遵守所在地法律与相关服务条款。</p>
+      <div class="footer-meta">
+        <span>MIT License</span>
+        <a href="https://github.com/spudhero/NetVplayer">GitHub</a>
+        <a href="#top">返回顶部</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
