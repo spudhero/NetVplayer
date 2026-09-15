@@ -1,64 +1,115 @@
-# NetVplayer Provider runners
+# NetVplayer Provider Runners
 
-These helpers implement protocol v1 over newline-delimited JSON on stdin/stdout. Provider logs are redirected to stderr so they cannot corrupt the wire stream.
+The Provider Runners connect package-local Java, Node.js, QuickJS, and Python code to NetVplayer Provider protocol v1. Start with the bilingual [Provider SDK guide](../provider-sdk/README.md) for the complete development and packaging workflow.
 
-- `python/provider_runner.py` supports the complete CatVod lifecycle and package-local dependencies.
-- `js/provider_runner.mjs` supports ES modules and the same lifecycle. It requires Node.js with `module.registerHooks`; the public POC pins Node 22.20.0 because earlier Node 22 builds can pass a major-version check while lacking that API. Production manifests should declare a signed package-local `runtime_executable` instead of relying on the user's PATH.
-- `quickjs/provider_runner.mjs` uses the locked QuickJS 2026-06-04 runtime and capability-gated Swift hosts. It keeps JSONL stdout protocol-only, applies a bounded single-in-flight host queue, validates package-local modules, and rejects dynamic network imports, CommonJS, and package escapes.
-- `java/` contains the Java 21 interface, reflection adapter, runner, build definition, and two fixtures: a no-network mock plus a standard-Java JSON CMS provider that is exercised against a local redacted HTTP service.
+## Runtime I/O contract
 
-Production packages must declare every runner, runtime, provider, and dependency asset in the signed manifest. The helpers reject entrypoints outside `NETVPLAYER_PROVIDER_ROOT`; they do not download code or install dependencies at runtime.
+Each Runner reads one UTF-8 JSON request per line from stdin and writes one JSON response per line to stdout. Provider logs are redirected to stderr so they cannot corrupt the wire stream.
 
-Manifest templates for the three POC packages live beside their fixtures:
+The shell supplies these environment values:
+
+| Variable | Purpose |
+| --- | --- |
+| `NETVPLAYER_PROVIDER_ROOT` | Canonical root of the verified Provider package |
+| `NETVPLAYER_PROVIDER_ID` | Provider ID that every request and handshake must match |
+| `NETVPLAYER_MAX_PROXY_BYTES` | Maximum buffered proxy payload; the default is 32 MiB |
+| `NETVPLAYER_PROVIDER_HOST_CAPABILITIES` | Comma-separated QuickJS host capabilities granted by the signed manifest |
+
+Entrypoints, imports, dependencies, and runtime executables must resolve inside `NETVPLAYER_PROVIDER_ROOT`. Runners reject package escapes and do not download code or install dependencies at runtime.
+
+## Runtime contracts
+
+### Python
+
+`python/provider_runner.py` loads a package-local `.py` entrypoint and supports the CatVod lifecycle, proxy responses, package-local `dependencies/`, cancellation tracking, and an optional `site` argument for `init`.
+
+Development can use Python 3. A distributable package must declare a signed, relocatable, package-local CPython executable and must run in isolated mode without the user's site packages.
+
+### Node.js
+
+`js/provider_runner.mjs` loads package-local ES modules and supports synchronous or asynchronous Provider methods. Node built-ins are allowed; remote module imports, CommonJS entrypoints, non-file imports, and paths outside the signed package are rejected.
+
+The supported runtime is Node.js 22.20.0 with `module.registerHooks`. A distributable package must declare its package-local Node executable instead of relying on the user's `PATH`.
+
+### QuickJS
+
+`quickjs/provider_runner.mjs` runs with the locked QuickJS 2026-06-04 runtime. It validates the package-local module graph, keeps stdout protocol-only, bounds proxy payloads, and exposes only host capabilities declared by the signed manifest.
+
+Available host capabilities are `console`, `base64`, `md5`, `url`, `http`, `jsp`, `crypto`, `persistence`, `text`, `module`, `timer`, and `local_proxy`. Host requests use request IDs and a bounded single-in-flight queue. Cancellation rejects queued work and forwards cancellation for an in-flight host request.
+
+### Java
+
+`java/` contains the Java 21 Runner, the `NetVplayerProvider` interface, and a reflection adapter for conventional CatVod method names. The stable interface is:
+
+```java
+public interface NetVplayerProvider {
+    JsonElement invoke(String operation, JsonObject arguments) throws Exception;
+}
+```
+
+The Runner loads only the manifest-selected package-local JAR and class. A distributable package must carry a Java 21 `jlink` image and its required signed dependencies, including Gson when used by the Runner or Provider.
+
+## Standard CatVod mapping
+
+| Operation | Provider method |
+| --- | --- |
+| `init` | `init(ext[, site])` |
+| `home` | `homeContent(filter)` |
+| `home_video` | `homeVideoContent()` |
+| `category` | `categoryContent(category_id, page, filter, extend)` |
+| `search` | `searchContent(keyword, quick, page)` |
+| `detail` | `detailContent(ids)` |
+| `player` | `playerContent(flag, id, vip_flags)` |
+| `live` | `liveContent(url)` |
+| `proxy` | `localProxy(parameters)` or `proxy(parameters)` |
+| `action` | `action(action[, value])` |
+| `manual_video_check` | `manualVideoCheck()` |
+| `is_video_format` | `isVideoFormat(url)` |
+| `destroy` | `destroy()` |
+
+`handshake`, `health`, `cancel`, and `shutdown` are Runner-owned lifecycle operations. Protocol v1 declares `epg`, but the standard CatVod Runners do not map an EPG method; a package must not advertise EPG through these Runners.
+
+## Signed package requirements
+
+Every Runner, runtime, Provider, dependency, and license file must be declared in the signed manifest with a package-relative path, SHA-256, and executable flag. The package validator rejects undeclared payloads, missing runtime executables, path traversal, symlinks, digest mismatches, and metadata drift.
+
+Manifest examples are provided for each runtime:
 
 - `java/fixtures/manifest.template.json`
 - `js/fixtures/manifest.template.json`
 - `python/fixtures/manifest.template.json`
 
-Private CI fills the asset hashes after assembling the package-local JRE, Node-compatible runtime, or CPython image. Run `python3 script/validate_provider_package.py /path/to/provider.zip` after `script/build_provider_package.py`; this structural gate rejects undeclared payloads, metadata drift, missing runtime executables, path traversal, and digest mismatches. It does not replace the shell's Ed25519 verification.
+These templates are inputs to package assembly. `script/build_provider_package.py` computes the final asset hashes and adds the required `LICENSES/PROVIDER.txt`.
 
-The Python and JS fixtures each load one package-local dependency, so the
-matrix also exercises import resolution without any remote module or `pip`
-installation.
+## Verification
 
-The reproducible POC entry point is `script/test_provider_runtime_matrix.py`. It
-requires `NETVPLAYER_GSON_JAR` (or `--gson-jar`), builds both Java fixtures,
-executes four Java/JS/Python Runner lifecycles, assembles temporary Java/JS/Python
-packages, validates them, extracts them, and repeats the lifecycle through each
-manifest-selected package-local runtime. The matrix also runs package/catalog
-tests and records the Android/Dex audit as JSON. Its Java and package results
-are explicitly host-runtime POC evidence;
-production CI must still provide a Java 21 `jlink` image and package-local JS
-and CPython runtimes.
-
-QuickJS has its own contract layers rather than sharing the Node POC matrix:
+Run the public contract checks from the repository root:
 
 ```bash
+python3 script/test_provider_runners.py -v
+python3 script/test_provider_package.py -v
 python3 script/test_quickjs_provider_runner.py
 python3 script/test_quickjs_provider_golden.py
-python3 script/test_quickjs_android_golden.py
-python3 script/test_private_bili_script_providers.py
 ```
 
-The signed Bili QuickJS package additionally runs through the generated App
-Sandbox launcher and the product Swift HTTP host. See
-`NetVplayer/Docs/quickjs_compatibility_plan_20260823.md` for the evidence matrix.
-The public package fixture is assembled by `script/test_provider_package.py`;
-site-specific QuickJS manifest templates stay in the private Provider source.
+Validate an assembled archive:
 
-Private CI must run `script/validate_node_runtime.py` against the assembled JS
-runtime and `script/validate_cpython_runtime.py` against CPython. The Node gate
-allows package-relative Mach-O references and Apple system libraries, but
-rejects unresolved `@rpath` entries and absolute Homebrew/package-manager
-dylibs. Official single-binary Node distributions are supported; `libnode` is
-included only when the selected runtime actually ships it separately.
+```bash
+python3 script/validate_provider_package.py \
+  /absolute/path/to/provider.zip
+```
 
-The Java image must pass `script/validate_java_runtime.py --version 21`. This
-checks that `bin/java` and the reported `java.home` stay inside the signed
-runtime, verifies the major version, and applies the same Mach-O dependency
-gate to every executable and dylib in the `jlink` image.
+Validate the package-local runtime before distribution:
 
-The CPython gate verifies isolated `sys.executable`, `sys.prefix`,
-`sys.base_prefix`, every `sys.path` entry, and all packaged Mach-O dependencies.
-The public POC reports `host-dependent` when a copied host Python or Node still
-resolves package-manager assets; execution success never upgrades that status.
+```bash
+python3 script/validate_java_runtime.py \
+  /absolute/path/to/jre --version 21
+
+python3 script/validate_node_runtime.py \
+  /absolute/path/to/node-runtime --version 22
+
+python3 script/validate_cpython_runtime.py \
+  /absolute/path/to/cpython-runtime --version 3.12
+```
+
+Use each command's `--help` output as the source of truth for required paths and optional release parameters. Passing these local checks does not make the official application trust a package; official distribution also requires approved signing keys, App Sandbox validation, license and service-term review, and inclusion in the signed distribution index.
