@@ -28,6 +28,25 @@ import LiveEngine
     #expect(groups[1].channels.count == 1)
 }
 
+@Test func liveParserKeepsDistinctDisplayNamesThatShareAnEPGName() throws {
+    let source = """
+    #EXTM3U
+    #EXTINF:-1 tvg-name="春晚" group-title="历年春晚",春晚1983
+    https://archive.example.test/spring-1983.mp4
+    #EXTINF:-1 tvg-name="春晚" group-title="历年春晚",春晚2025
+    https://archive.example.test/spring-2025.m3u8
+    #EXTINF:-1 tvg-name="春晚" group-title="历年春晚",春晚2026
+    https://archive.example.test/spring-2026.m3u8
+    """
+
+    let group = try #require(LiveParser.parse(text: source).first)
+
+    #expect(group.name == "历年春晚")
+    #expect(group.channels.map(\.name) == ["春晚1983", "春晚2025", "春晚2026"])
+    #expect(group.channels.allSatisfy { $0.tvgName == "春晚" && $0.epgName == "春晚" })
+    #expect(group.channels.allSatisfy { $0.urls.count == 1 })
+}
+
 @Test func liveParserMergesNormalizedTXTAndJSONChannelNames() throws {
     let txt = """
     央视频道,#genre#

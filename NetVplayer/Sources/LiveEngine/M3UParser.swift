@@ -85,7 +85,7 @@ public struct M3UParser: Sendable {
 
         if let lastComma = line.lastIndex(of: ",") {
             let name = String(line[line.index(after: lastComma)...]).trimmingCharacters(in: .whitespaces)
-            channel.name = channel.tvgName.isEmpty ? name : channel.tvgName
+            channel.name = name.isEmpty ? channel.tvgName : name
             if channel.epgName.isEmpty { channel.epgName = channel.name }
         }
 

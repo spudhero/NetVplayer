@@ -118,6 +118,60 @@ struct AppStateLiveRefreshTests {
     }
 
     @MainActor
+    @Test func extensionlessHLSUsesDirectPlaybackAfterPlayableProbe() async throws {
+        let sourceURL = "https://live-detect.example.test/channels.txt"
+        let streamURL = "https://live-detect.example.test/live.php?id=zhejiang-4k"
+        let finalURL = "https://live-cdn.example.test/live/channel4k2160p.m3u8"
+        LiveRefreshURLProtocol.reset()
+        defer { LiveRefreshURLProtocol.reset() }
+        LiveRefreshURLProtocol.register(
+            url: sourceURL,
+            responses: [
+                .init(
+                    body: "4K8K频道,#genre#\n浙江卫视,\(streamURL)\n",
+                    statusCode: 200,
+                    contentType: "text/plain"
+                ),
+            ]
+        )
+        LiveRefreshURLProtocol.register(
+            url: streamURL,
+            responses: [
+                .init(
+                    body: "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:6.000,\nchannel4k2160p/segment.ts\n",
+                    statusCode: 200,
+                    contentType: "application/vnd.apple.mpegurl",
+                    finalURL: URL(string: finalURL)
+                ),
+            ]
+        )
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LiveRefreshURLProtocol.self]
+        let appState = AppState(
+            loadDefaultConfig: false,
+            startProxyServer: false,
+            liveHTTPClient: HTTPClient(session: URLSession(configuration: configuration))
+        )
+        appState.activeLive = Live(name: "redirected-source", url: sourceURL)
+        appState.presentLivePlayer()
+        defer { appState.dismissLivePlayer() }
+        #expect(await appState.loadLiveContent())
+        let channel = try #require(appState.channelGroups.first?.channels.first)
+        appState.selectedGroup = appState.channelGroups.first
+
+        var capturedSpec: PlaySpec?
+        appState.playSpecHandler = { capturedSpec = $0 }
+        await appState.playChannel(channel)
+
+        let spec = try #require(capturedSpec)
+        #expect(spec.url == finalURL)
+        #expect(spec.format == "hls")
+        #expect(spec.metadata[LiveHLSRelayPolicy.transportMetadataKey] == LiveHLSRelayPolicy.directTransport)
+        #expect(spec.mpvOptions["stream-lavf-o"] == "icy=0")
+    }
+
+    @MainActor
     @Test func directHLSEOFFallsBackToRelayBeforeRefreshingContent() async throws {
         let sourceURL = "https://live-relay.example.test/channels.txt"
         let streamURL = "https://live-relay.example.test/cctv1.m3u8"
@@ -242,6 +296,14 @@ private final class LiveRefreshURLProtocol: URLProtocol, @unchecked Sendable {
         let body: String
         let statusCode: Int
         let contentType: String
+        let finalURL: URL?
+
+        init(body: String, statusCode: Int, contentType: String, finalURL: URL? = nil) {
+            self.body = body
+            self.statusCode = statusCode
+            self.contentType = contentType
+            self.finalURL = finalURL
+        }
     }
 
     private static let lock = NSLock()
@@ -267,7 +329,7 @@ private final class LiveRefreshURLProtocol: URLProtocol, @unchecked Sendable {
             return
         }
         let response = HTTPURLResponse(
-            url: url,
+            url: responseSpec.finalURL ?? url,
             statusCode: responseSpec.statusCode,
             httpVersion: "HTTP/1.1",
             headerFields: ["Content-Type": responseSpec.contentType]

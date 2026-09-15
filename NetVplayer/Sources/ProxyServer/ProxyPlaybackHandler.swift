@@ -97,10 +97,11 @@ public enum ProxyPlaybackHandler {
                 responseHeaders.removeValue(forKey: "content-range")
                 DiagnosticLog.write("[PROXY_HLS_MEDIA_UNWRAP] \(upstreamLogLabel(targetURL)) strippedBytes=\(response.data.count - responseData.count) mediaBytes=\(responseData.count)")
             }
-            if shouldRewriteM3U8(url: urlStr, contentType: contentType),
+            let playlistBaseURL = response.finalURL?.absoluteString ?? urlStr
+            if shouldRewriteM3U8(url: playlistBaseURL, contentType: contentType),
                let rewritten = rewriteM3U8(
                    data: responseData,
-                   baseURL: urlStr,
+                   baseURL: playlistBaseURL,
                    header: headerString,
                    hmysSignSecret: params["hs64"]
                ) {

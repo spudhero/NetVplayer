@@ -43,8 +43,8 @@ NetVplayer 1.0.1 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒�
 
 | 跨来源搜索 | 直播播放 |
 | :---: | :---: |
-| <img src="website/assets/screen-search.webp" alt="跨来源搜索界面" width="720"> | <img src="website/assets/screen-live.webp" alt="直播播放器与频道指南界面" width="720"> |
-| **高密度搜索工作台**<br>只搜索用户已经连接并选择的内容入口。 | **独立直播窗口**<br>提供频道分组、线路切换和按需显示的频道指南。 |
+| <img src="website/assets/screen-search.webp" alt="跨来源搜索界面" width="720"> | <img src="website/assets/screen-live.webp" alt="直播播放器已经显示真实视频画面的运行界面" width="720"> |
+| **高密度搜索工作台**<br>只搜索用户已经连接并选择的内容入口。 | **独立直播窗口**<br>提供频道分组、同名线路合并和按需显示的频道指南。 |
 
 ### 用户自有内容
 
@@ -154,7 +154,7 @@ You can add your own compatible configuration, WebDAV, AList/OpenList, or suppor
 - **Details, routes, and episodes:** browse metadata, multiple playback routes, and naturally sorted episodes in one view.
 - **Native playback controls:** use libmpv with subtitle, audio-track, speed, aspect-ratio, and compact-window controls.
 - **Federated search:** search only across content entry points the user has already connected and selected.
-- **Live playback:** use a dedicated player window with channel groups, route switching, and an on-demand channel guide.
+- **Live playback:** use a dedicated player window with channel groups, same-channel route merging, and an on-demand channel guide.
 - **Personal themes:** choose from the built-in appearance catalog without changing the underlying native interaction model.
 
 The screenshots above come from the running application and are also used by the [project website](https://spudhero.github.io/NetVplayer/).

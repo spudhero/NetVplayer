@@ -3392,6 +3392,13 @@ final class AppState: ObservableObject {
                 self.log("[\(logContext)] 直播探测失败但继续交给播放器尝试: channel=\(channel.name) message=\(probe.message)")
             }
 
+            if probe.isPlayable, probe.isHLS {
+                spec.format = "hls"
+                if let finalURL = probe.finalURL {
+                    spec.url = finalURL.absoluteString
+                }
+            }
+
             spec.metadata["playback.kind"] = "live"
             spec.metadata["live.sessionID"] = sessionID.uuidString
             spec.metadata["live.attemptIndex"] = "\(attemptIndex)"
