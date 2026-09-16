@@ -5,7 +5,7 @@ import Security
 import Models
 @testable import ProviderRuntime
 @testable import ProviderSDK
-import SpiderEngine
+@testable import SpiderEngine
 import ProxyServer
 
 private func makeProviderLicense(in root: URL) throws -> ProviderAsset {
@@ -30,11 +30,19 @@ private final class ProviderFixtureURLProtocol: URLProtocol, @unchecked Sendable
     private static let lock = NSLock()
     nonisolated(unsafe) private static var routes: [URL: Route] = [:]
     nonisolated(unsafe) private static var requests: [URLRequest] = []
+    nonisolated(unsafe) private static var transientFailures: [URL: Int] = [:]
 
     static func install(_ values: [URL: Route]) {
         lock.lock()
         routes = values
         requests = []
+        transientFailures = [:]
+        lock.unlock()
+    }
+
+    static func failNextRequests(_ values: [URL: Int]) {
+        lock.lock()
+        transientFailures = values
         lock.unlock()
     }
 
@@ -42,6 +50,12 @@ private final class ProviderFixtureURLProtocol: URLProtocol, @unchecked Sendable
         lock.lock()
         defer { lock.unlock() }
         return requests.last { $0.url == url }
+    }
+
+    static func requestCount(for url: URL) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests.count { $0.url == url }
     }
 
     static func reset() {
@@ -59,8 +73,19 @@ private final class ProviderFixtureURLProtocol: URLProtocol, @unchecked Sendable
     override func startLoading() {
         Self.lock.lock()
         Self.requests.append(request)
+        let shouldFail: Bool
+        if let url = request.url, let remaining = Self.transientFailures[url], remaining > 0 {
+            Self.transientFailures[url] = remaining - 1
+            shouldFail = true
+        } else {
+            shouldFail = false
+        }
         let route = request.url.flatMap { Self.routes[$0] }
         Self.lock.unlock()
+        if shouldFail {
+            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            return
+        }
         guard let url = request.url, let route else {
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
             return
@@ -3186,6 +3211,19 @@ private func signedDistributionDocument(
     }
 }
 
+@Test func providerDistributionProxyDictionaryUsesValidatedLoopbackPort() throws {
+    let proxy = try #require(ProviderRuntimeBootstrap.distributionProxyDictionary(port: 7_897))
+    #expect(proxy["HTTPEnable"] as? Int == 1)
+    #expect(proxy["HTTPProxy"] as? String == "127.0.0.1")
+    #expect(proxy["HTTPPort"] as? Int == 7_897)
+    #expect(proxy["HTTPSEnable"] as? Int == 1)
+    #expect(proxy["HTTPSProxy"] as? String == "127.0.0.1")
+    #expect(proxy["HTTPSPort"] as? Int == 7_897)
+    #expect(ProviderRuntimeBootstrap.distributionProxyDictionary(port: nil) == nil)
+    #expect(ProviderRuntimeBootstrap.distributionProxyDictionary(port: 0) == nil)
+    #expect(ProviderRuntimeBootstrap.distributionProxyDictionary(port: 65_536) == nil)
+}
+
 @Test func bootstrapAutomaticallyInstallsLatestProviderAndSkipsCurrentVersion() async throws {
     let fixture = try #require(Bundle.module.url(
         forResource: "mock_runner",
@@ -3241,6 +3279,7 @@ private func signedDistributionDocument(
         v1URL: .init(statusCode: 200, data: try Data(contentsOf: v1Archive)),
         v2URL: .init(statusCode: 200, data: try Data(contentsOf: v2Archive)),
     ])
+    ProviderFixtureURLProtocol.failNextRequests([indexURL: 1, v2URL: 1])
 
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [ProviderFixtureURLProtocol.self]
@@ -3278,6 +3317,11 @@ private func signedDistributionDocument(
     )])
     #expect(first.failures.isEmpty)
     #expect(first.installed.first?.manifest.version == "2.0.0")
+    let archiveRequest = try #require(ProviderFixtureURLProtocol.recordedRequest(for: v2URL))
+    #expect(archiveRequest.cachePolicy == .reloadIgnoringLocalCacheData)
+    #expect(archiveRequest.timeoutInterval == ProviderDistributionClient.defaultArchiveRequestTimeout)
+    #expect(ProviderFixtureURLProtocol.requestCount(for: indexURL) == 2)
+    #expect(ProviderFixtureURLProtocol.requestCount(for: v2URL) == 2)
 
     ProviderFixtureURLProtocol.install([
         indexURL: .init(statusCode: 200, data: indexData),
@@ -3538,6 +3582,33 @@ private extension ProviderInstallPhase {
     let activeManifests = await manager.activeManifests()
     #expect(activeManifests.count == 1)
     #expect(activeManifests.first?.manifest.sourceBindings == manifest.sourceBindings)
+
+    func observedSite(_ site: Site) async throws -> String? {
+        let response = try await manager.request(
+            ProviderRequest(
+                providerID: manifest.providerID,
+                operation: .action,
+                site: site,
+                arguments: ["read_initialized_site": .bool(true)]
+            ),
+            initializing: site,
+            timeout: .seconds(5)
+        )
+        guard case .object(let result) = response.result,
+              case .string(let siteKey) = result["site_key"] else {
+            return nil
+        }
+        return siteKey
+    }
+
+    let serializedSiteA = Site(key: "serialized-site-a", name: "A", type: 3, api: "fixture")
+    let serializedSiteB = Site(key: "serialized-site-b", name: "B", type: 3, api: "fixture")
+    async let observedA = observedSite(serializedSiteA)
+    try await Task.sleep(for: .milliseconds(20))
+    async let observedB = observedSite(serializedSiteB)
+    let serializedResults = try await (observedA, observedB)
+    #expect(serializedResults.0 == serializedSiteA.key)
+    #expect(serializedResults.1 == serializedSiteB.key)
 
     await SpiderReplacementRegistry.shared.clear()
     let bootstrap = ProviderRuntimeBootstrap(manager: manager, allowedSourcePolicies: nil)

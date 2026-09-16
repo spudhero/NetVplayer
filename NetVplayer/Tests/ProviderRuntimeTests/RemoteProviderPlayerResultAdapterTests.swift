@@ -7,6 +7,12 @@ import ProxyServer
 import Testing
 @testable import SpiderEngine
 
+@Test func remoteProviderRequestPolicyAllowsSlowSignedProviders() {
+    #expect(RemoteProviderRequestPolicy.timeoutSeconds(configured: 0) == 30)
+    #expect(RemoteProviderRequestPolicy.timeoutSeconds(configured: 10) == 30)
+    #expect(RemoteProviderRequestPolicy.timeoutSeconds(configured: 45) == 45)
+}
+
 @Test func remoteProviderPlayerResultAdapterLocalizesSignedHLSDescriptor() throws {
     let mediaURL = "http://media.example.test/vod/index.m3u8?k=abc&uid=7"
     let headers = #"{"Accept":"*/*","User-Agent":"Mozi"}"#
@@ -155,6 +161,65 @@ import Testing
     #expect(selected?.providerID == "public.config")
 }
 
+@Test func hmysJavaHelperLoadsLiveCatalogWhenEnabled() async throws {
+    let environment = ProcessInfo.processInfo.environment
+    guard environment["NETVPLAYER_REAL_HMYS_JAVA_CATALOG_TEST"] == "1" else { return }
+    let javaPath = try #require(environment["NETVPLAYER_JAVA_EXECUTABLE"])
+    let runnerPath = try #require(environment["NETVPLAYER_JAVA_RUNNER"])
+    let providerPath = try #require(environment["NETVPLAYER_JAVA_HMYS_PROVIDER"])
+    let packageRootPath = try #require(environment["NETVPLAYER_HMYS_JAVA_PACKAGE_ROOT"])
+    let state = FileManager.default.temporaryDirectory
+        .appendingPathComponent("hmys-java-live-catalog-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: state) }
+    let packageRoot = URL(fileURLWithPath: packageRootPath, isDirectory: true)
+    let client = ProviderProcessClient(command: ProviderCommand(
+        executableURL: URL(fileURLWithPath: javaPath),
+        arguments: [
+            "-jar", runnerPath,
+            "--provider", providerPath,
+            "--class", "com.netvplayer.privateprovider.hmys.HmysProvider"
+        ],
+        currentDirectoryURL: packageRoot,
+        stateDirectoryURL: state,
+        environment: [
+            "NETVPLAYER_PROVIDER_ID": "migration.hmys.java",
+            "NETVPLAYER_PROVIDER_ROOT": packageRoot.path,
+            "NETVPLAYER_PROVIDER_STATE": state.path,
+            "NETVPLAYER_PROVIDER_PROTOCOL": "1"
+        ]
+    ))
+    let site = Site(key: "海绵", name: "海绵", type: 3, api: "csp_HmysGuard", timeout: 30)
+
+    do {
+        let handshake = try await client.request(ProviderRequest(
+            providerID: "migration.hmys.java",
+            operation: .handshake
+        ), timeout: .seconds(10))
+        #expect(handshake.ok)
+        let initialized = try await client.request(ProviderRequest(
+            providerID: "migration.hmys.java",
+            operation: .initialize,
+            site: site,
+            arguments: ["extend": .string("")]
+        ), timeout: .seconds(30))
+        #expect(initialized.ok)
+        let response = try await client.request(ProviderRequest(
+            providerID: "migration.hmys.java",
+            operation: .home,
+            site: site,
+            arguments: ["filter": .bool(true)]
+        ), timeout: .seconds(30))
+        let home = try response.decodedResult(Result.self)
+        #expect(home.types.count >= 2)
+        #expect(!home.list.isEmpty)
+        print("[REAL_HMYS_JAVA_CATALOG] classes=\(home.types.count) home=\(home.list.count)")
+        await client.stop()
+    } catch {
+        await client.stop(graceful: false)
+        throw error
+    }
+}
+
 @Test func hmysJavaHelperCompletesLiveSwiftProxyAndDecodeWhenEnabled() async throws {
     let environment = ProcessInfo.processInfo.environment
     guard environment["NETVPLAYER_REAL_HMYS_JAVA_TEST"] == "1" else { return }
@@ -207,6 +272,7 @@ import Testing
         ), timeout: .seconds(30))
         let home = try homeResponse.decodedResult(Result.self)
         #expect(!home.list.isEmpty)
+        print("[REAL_HMYS_JAVA_HOME] home=\(home.list.count)")
 
         var mediaResponse: ProxyResponse?
         var detailsAttempted = 0
@@ -265,6 +331,16 @@ import Testing
                 }
                 if mediaResponse != nil { break }
             } catch {
+                let detail: String
+                if let providerError = error as? ProviderErrorPayload {
+                    detail = "\(providerError.code): \(providerError.message)"
+                } else {
+                    detail = error.localizedDescription
+                }
+                print(
+                    "[REAL_HMYS_JAVA_SAMPLE_FAILED] details=\(detailsAttempted) "
+                        + "players=\(playersAttempted) error=\(detail)"
+                )
                 continue
             }
         }

@@ -5,6 +5,8 @@ import os
 import sys
 import time
 
+initialized_site = ""
+
 for line in sys.stdin:
     request = json.loads(line)
     operation = request.get("operation")
@@ -24,6 +26,11 @@ for line in sys.stdin:
         ]
         if host_capabilities:
             result["capabilities"] = ["core-lifecycle", *host_capabilities]
+    elif operation == "init":
+        initialized_site = request.get("site", {}).get("key", "")
+        if initialized_site == "serialized-site-a":
+            time.sleep(0.2)
+        result = request.get("arguments", {})
     elif operation == "health":
         result = {"status": "ok"}
     elif operation == "proxy":
@@ -49,6 +56,8 @@ for line in sys.stdin:
             "error": None,
         }, separators=(",", ":")), flush=True)
         continue
+    elif operation == "action" and request.get("arguments", {}).get("read_initialized_site"):
+        result = {"site_key": initialized_site}
     elif operation == "shutdown":
         result = {"shutdown": True}
     else:

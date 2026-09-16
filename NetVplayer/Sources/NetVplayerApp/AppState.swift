@@ -416,7 +416,12 @@ final class AppState: ObservableObject {
         if let providerRuntimeBootstrap {
             providerRuntimeBusy = true
             providerRuntimeStatus = "正在检查 Provider 支持包"
+            let shouldDetectProviderProxy = startProxyServer
             providerRuntimeStartupTask = Task { @MainActor [weak self] in
+                if shouldDetectProviderProxy {
+                    let proxyPort = await ProxyDetector.shared.detectActiveProxy()
+                    await providerRuntimeBootstrap.configureDistributionProxy(port: proxyPort)
+                }
                 await self?.synchronizeProviderRuntime(using: providerRuntimeBootstrap)
             }
         }
@@ -448,6 +453,8 @@ final class AppState: ObservableObject {
         guard !providerRuntimeBusy else { return }
         providerRuntimeBusy = true
         Task { @MainActor [weak self] in
+            let proxyPort = await ProxyDetector.shared.detectActiveProxy()
+            await bootstrap.configureDistributionProxy(port: proxyPort)
             await self?.synchronizeProviderRuntime(using: bootstrap)
         }
     }

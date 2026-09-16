@@ -177,6 +177,8 @@ public enum PlaybackProxyPolicy {
             || host == "vip.dytt-cine.com"
             || host == "play.phimgood.com"
             || host == "hhjx.hhplayer.com"
+            || host == "py1080p.com"
+            || host.hasSuffix(".py1080p.com")
             || bypassReason(for: spec) == .quarkSmartPlaySignedURL
             || isNBYWrappedHLS(url)
         return needsCompatibilityRelay && isDirectHLS(url: url, spec: spec)

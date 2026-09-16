@@ -113,6 +113,15 @@ import Testing
     #expect(Data(base64Encoded: response.proxy?.bodyBase64 ?? "") == Data([0, 1, 2]))
 }
 
+@Test func providerErrorPayloadExposesItsRedactedMessageAsLocalizedDescription() {
+    let payload = ProviderErrorPayload(
+        code: "verification_required",
+        message: "Source requires interactive verification"
+    )
+
+    #expect(payload.localizedDescription == "Source requires interactive verification")
+}
+
 @Test func providerDiagnosticsRedactsURLsAndSensitiveHeaders() {
     let value = ProviderDiagnostics.redact(
         "url=https://example.invalid/video.m3u8?token=secret\nCookie: session=secret\nAuthorization: Bearer secret"
