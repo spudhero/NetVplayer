@@ -250,7 +250,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ProviderRuntimeTests",
-            dependencies: ["ProviderRuntime", "ProviderSDK", "Models", "SpiderEngine", "DriveEngine"],
+            dependencies: ["ProviderRuntime", "ProviderSDK", "Models", "SpiderEngine", "DriveEngine", "Networking"],
             path: "Tests/ProviderRuntimeTests",
             resources: [
                 .copy("Fixtures")

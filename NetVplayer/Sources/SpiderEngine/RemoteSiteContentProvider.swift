@@ -66,6 +66,9 @@ public struct RemoteSiteContentProvider: SiteContentProvider, Sendable {
             site: site,
             arguments: ["flag": .string(flag), "id": .string(id), "vip_flags": .array([])]
         )
+        if let interaction = decoded.interaction {
+            throw PlaybackInteractionRequiredError(interaction: interaction)
+        }
         return try RemoteProviderPlayerResultAdapter.localize(
             decoded,
             site: site,
@@ -98,6 +101,16 @@ public struct RemoteSiteContentProvider: SiteContentProvider, Sendable {
         )
         return try response.decodedResult(Result.self)
     }
+}
+
+public struct PlaybackInteractionRequiredError: LocalizedError, Equatable, Sendable {
+    public let interaction: PlaybackInteraction
+
+    public init(interaction: PlaybackInteraction) {
+        self.interaction = interaction
+    }
+
+    public var errorDescription: String? { interaction.message }
 }
 
 enum RemoteProviderPlayerResultError: Error, Equatable {

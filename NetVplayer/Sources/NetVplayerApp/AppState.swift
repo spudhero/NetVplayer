@@ -77,6 +77,15 @@ struct CloudAuthRequest: Identifiable, Equatable {
     }
 }
 
+struct PlaybackVerificationRequest: Identifiable {
+    let interaction: PlaybackInteraction
+    let episode: Episode
+
+    var id: String {
+        [interaction.kind.rawValue, interaction.url, episode.url].joined(separator: ":")
+    }
+}
+
 enum SettingsNavigationDestination: Equatable {
     case dataSource
     case providers
@@ -233,6 +242,7 @@ final class AppState: ObservableObject {
     @Published var isPlaybackErrorPresented: Bool = false
     @Published var playbackErrorMessage: String?
     @Published var playbackErrorAuthProvider: DriveProvider?
+    @Published var playbackVerificationRequest: PlaybackVerificationRequest?
     @Published var playbackWarningMessage: String?
     @Published var playbackDowngradeMessage: String?
     @Published private(set) var drivePlaybackRoutes: [DrivePlaybackRouteOption] = []
@@ -2348,10 +2358,20 @@ final class AppState: ObservableObject {
     }
 
     func handlePlaybackError(_ error: Error, episode: Episode) {
-        lastFeedbackFailureStage = error is DriveEngineError ? "Source.resolve" : "Player.prepare"
-        lastFeedbackFailureCategory = error is DriveEngineError ? .source : .player
+        let isSourceFailure = error is DriveEngineError || error is PlaybackInteractionRequiredError
+        lastFeedbackFailureStage = isSourceFailure ? "Source.resolve" : "Player.prepare"
+        lastFeedbackFailureCategory = isSourceFailure ? .source : .player
         playbackErrorMessage = error.localizedDescription
         playbackErrorAuthProvider = nil
+
+        if let interactionError = error as? PlaybackInteractionRequiredError {
+            playbackVerificationRequest = PlaybackVerificationRequest(
+                interaction: interactionError.interaction,
+                episode: episode
+            )
+            isPlaybackErrorPresented = false
+            return
+        }
 
         if let driveError = error as? DriveEngineError {
             switch driveError {
@@ -2367,6 +2387,18 @@ final class AppState: ObservableObject {
         }
 
         isPlaybackErrorPresented = true
+    }
+
+    func completePlaybackVerification() {
+        guard let request = playbackVerificationRequest else { return }
+        playbackVerificationRequest = nil
+        Task { @MainActor in
+            await playEpisode(request.episode)
+        }
+    }
+
+    func cancelPlaybackVerification() {
+        playbackVerificationRequest = nil
     }
 
     func clearPlaybackError() {

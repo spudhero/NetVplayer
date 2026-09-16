@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Models
 
@@ -25,6 +26,19 @@ import Testing
     let result = Result.fromJSON(json)
     #expect(result.url == "http://test.m3u8")
     #expect(result.needParse == false)
+}
+
+@Test func testResultRoundTripsManualPlaybackInteraction() throws {
+    let interaction = PlaybackInteraction(
+        kind: .manualVerification,
+        url: "https://verify.example.test/check.html",
+        message: "请完成验证"
+    )
+    let encoded = try JSONEncoder().encode(Result(interaction: interaction))
+    let decoded = try JSONDecoder().decode(Result.self, from: encoded)
+
+    #expect(decoded.interaction == interaction)
+    #expect(decoded.url.isEmpty)
 }
 
 @Test func testResultFromJSONToleratesOutOfRangeNumbers() {

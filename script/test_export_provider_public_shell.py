@@ -80,6 +80,18 @@ class ProviderPublicExportTests(unittest.TestCase):
             "internal-migration-tooling",
         )
         self.assertEqual(
+            exclusion_reason(".github/workflows/private-covers-public.yml"),
+            "internal-migration-tooling",
+        )
+        self.assertEqual(
+            exclusion_reason("script/verify_private_covers_public.py"),
+            "internal-migration-tooling",
+        )
+        self.assertEqual(
+            exclusion_reason("script/test_verify_private_covers_public.py"),
+            "internal-migration-tooling",
+        )
+        self.assertEqual(
             exclusion_reason("script/test_provider_runtime_packages.py"),
             "internal-migration-tooling",
         )

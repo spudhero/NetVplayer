@@ -3,6 +3,22 @@
 
 import Foundation
 
+public struct PlaybackInteraction: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        case manualVerification = "manual_verification"
+    }
+
+    public var kind: Kind
+    public var url: String
+    public var message: String
+
+    public init(kind: Kind, url: String, message: String) {
+        self.kind = kind
+        self.url = url
+        self.message = message
+    }
+}
+
 /// Spider/CMS API 统一返回结果
 public struct Result: Codable, Sendable {
     /// 分类列表
@@ -46,6 +62,8 @@ public struct Result: Codable, Sendable {
     public var drm: Drm?
     /// 可供用户选择的播放候选；旧 Provider 默认留空
     public var playbackCandidates: [PlaybackCandidate]
+    /// 播放前必须由用户完成的交互，例如源站滑块验证
+    public var interaction: PlaybackInteraction?
 
     // MARK: - 分页
     public var page: Int
@@ -76,6 +94,7 @@ public struct Result: Codable, Sendable {
         subs: [Sub] = [],
         drm: Drm? = nil,
         playbackCandidates: [PlaybackCandidate] = [],
+        interaction: PlaybackInteraction? = nil,
         page: Int = 1,
         pagecount: Int = 1,
         total: Int = 0,
@@ -101,6 +120,7 @@ public struct Result: Codable, Sendable {
         self.subs = subs
         self.drm = drm
         self.playbackCandidates = playbackCandidates
+        self.interaction = interaction
         self.page = page
         self.pagecount = pagecount
         self.total = total
@@ -109,7 +129,7 @@ public struct Result: Codable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case types, list, filters, url, parse, jx, flag, header, playUrl, externalAudioURL, contentLength, format, artwork, click, jxFrom, key, subs, drm, playbackCandidates, page, pagecount, total, msg, code
+        case types, list, filters, url, parse, jx, flag, header, playUrl, externalAudioURL, contentLength, format, artwork, click, jxFrom, key, subs, drm, playbackCandidates, interaction, page, pagecount, total, msg, code
     }
 
     private struct ClassKey: CodingKey {
@@ -155,6 +175,7 @@ public struct Result: Codable, Sendable {
         self.subs = (try? container.decode([Sub].self, forKey: .subs)) ?? []
         self.drm = try? container.decode(Drm.self, forKey: .drm)
         self.playbackCandidates = (try? container.decode([PlaybackCandidate].self, forKey: .playbackCandidates)) ?? []
+        self.interaction = try? container.decode(PlaybackInteraction.self, forKey: .interaction)
         self.page = (try? container.decodeIfPresent(JSONDynamicValue.self, forKey: .page))?.intValue ?? 1
         self.pagecount = (try? container.decodeIfPresent(JSONDynamicValue.self, forKey: .pagecount))?.intValue ?? 1
         self.total = (try? container.decodeIfPresent(JSONDynamicValue.self, forKey: .total))?.intValue ?? 0

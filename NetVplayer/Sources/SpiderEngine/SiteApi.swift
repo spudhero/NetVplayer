@@ -161,7 +161,11 @@ public final class SiteApi: Sendable {
     public func playerContent(key: String, flag: String, id: String, sites: [Site]) async throws -> Result {
         guard let originalSite = sites.first(where: { $0.key == key }) else { return .empty }
         if let provider = await SpiderReplacementRegistry.shared.nativeProvider(for: originalSite) {
-            return try await provider.playerContent(site: originalSite, flag: flag, id: id)
+            let result = try await provider.playerContent(site: originalSite, flag: flag, id: id)
+            if let interaction = result.interaction {
+                throw PlaybackInteractionRequiredError(interaction: interaction)
+            }
+            return result
         }
 
         let site = await effectiveSite(originalSite)
