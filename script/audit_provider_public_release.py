@@ -28,11 +28,13 @@ REQUIRED_FILES = (
     "script/test_provider_app_sandbox.py",
 )
 INTERNAL_ONLY_FILES = (
+    ".github/workflows/private-covers-public.yml",
     ".github/workflows/provider-runtime-poc.yml",
     "script/audit_provider_private_source.py",
     "script/build_all_private_java_providers.sh",
     "script/export_provider_private_source.py",
     "script/run_provider_private_source_gate.py",
+    "script/test_verify_private_covers_public.py",
     "script/test_provider_runtime_matrix.py",
     "script/test_provider_runtime_packages.py",
     "script/test_provider_catalog.py",
@@ -40,6 +42,7 @@ INTERNAL_ONLY_FILES = (
     "script/verify_bili_quickjs_live.py",
     "script/verify_generic_python_provider.py",
     "script/verify_hmys_java_provider.py",
+    "script/verify_private_covers_public.py",
 )
 PUBLIC_RELEASE_DOCUMENTS = {
     "docs/data/provider-public-boundary-v1.json",

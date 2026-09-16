@@ -105,6 +105,14 @@ struct MainContainerView: View {
             }
             .environment(\.appThemePalette, palette)
         }
+        .sheet(item: $appState.playbackVerificationRequest) { request in
+            PlaybackVerificationView(
+                request: request,
+                onVerified: appState.completePlaybackVerification,
+                onCancel: appState.cancelPlaybackVerification
+            )
+            .environment(\.appThemePalette, palette)
+        }
         .background {
             PlayerWindowChromeController(
                 isPlaybackPresented: appState.isPlayerPresented,

@@ -6,6 +6,7 @@ import DriveEngine
 import Networking
 import PlayerEngine
 import ProxyServer
+import SpiderEngine
 @testable import NetVplayerApp
 
 private enum TestDriveFallbackMetadataKey {
@@ -916,6 +917,29 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
     #expect(appState.isPlaybackErrorPresented == false)
     #expect(appState.playbackErrorAuthProvider == .uc)
     #expect(appState.cloudAuthRequest == CloudAuthRequest(provider: .uc, pendingEpisodeURL: episode.url))
+}
+
+@MainActor
+@Test func testManualPlaybackVerificationOpensInteractiveSheetInsteadOfGenericAlert() {
+    let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
+    let episode = Episode(name: "第1集", url: "hmys://episode/1")
+    let interaction = PlaybackInteraction(
+        kind: .manualVerification,
+        url: "https://verify.example.test/check.html",
+        message: "请完成源站验证"
+    )
+
+    appState.handlePlaybackError(
+        PlaybackInteractionRequiredError(interaction: interaction),
+        episode: episode
+    )
+
+    #expect(appState.isPlaybackErrorPresented == false)
+    #expect(appState.playbackVerificationRequest?.interaction == interaction)
+    #expect(appState.playbackVerificationRequest?.episode.name == episode.name)
+    #expect(appState.playbackVerificationRequest?.episode.url == episode.url)
+    #expect(appState.lastFeedbackFailureStage == "Source.resolve")
+    #expect(appState.lastFeedbackFailureCategory == .source)
 }
 
 @Test func testQuarkSignedChildStreamsBeforeUpstreamCompletes() async throws {

@@ -43,6 +43,9 @@ PRIVATE_TEST_FILES = {
     "NetVplayer/Tests/ConfigEngineTests/VodCardRoutingTests.swift",
 }
 INTERNAL_MIGRATION_FILES = {
+    ".github/workflows/private-covers-public.yml",
+    "script/test_verify_private_covers_public.py",
+    "script/verify_private_covers_public.py",
     "script/audit_all_provider_release_candidates.py",
     "script/build_all_private_java_providers.sh",
     "script/build_diagnostic_provider_release.py",
