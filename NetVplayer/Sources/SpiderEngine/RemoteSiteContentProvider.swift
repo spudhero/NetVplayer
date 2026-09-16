@@ -5,6 +5,14 @@ import ProviderRuntime
 import ProviderSDK
 import ProxyServer
 
+enum RemoteProviderRequestPolicy {
+    static let minimumTimeoutSeconds = 30
+
+    static func timeoutSeconds(configured: Int) -> Int {
+        max(configured, minimumTimeoutSeconds)
+    }
+}
+
 public struct RemoteSiteContentProvider: SiteContentProvider, Sendable {
     public let providerID: String
     public let manager: ProviderManager
@@ -83,10 +91,10 @@ public struct RemoteSiteContentProvider: SiteContentProvider, Sendable {
             providerID: providerID,
             manager: manager
         )
-        try await manager.initialize(providerID: providerID, site: site)
         let response = try await manager.request(
             ProviderRequest(providerID: providerID, operation: operation, site: site, arguments: arguments),
-            timeout: .seconds(max(site.timeout, 1))
+            initializing: site,
+            timeout: .seconds(RemoteProviderRequestPolicy.timeoutSeconds(configured: site.timeout))
         )
         return try response.decodedResult(Result.self)
     }

@@ -22,6 +22,20 @@ public enum ProviderManagerError: LocalizedError, Sendable {
     }
 }
 
+private actor ProviderOperationGate {
+    private var tail: Task<Void, Never>?
+
+    func run<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        let previous = tail
+        let task = Task<T, Error> {
+            await previous?.value
+            return try await operation()
+        }
+        tail = Task { _ = try? await task.value }
+        return try await task.value
+    }
+}
+
 public actor ProviderManager {
     private let store: ProviderPackageStore
     private let httpSession: URLSession?
@@ -29,6 +43,7 @@ public actor ProviderManager {
     private var sessions: [String: ProviderProcessClient] = [:]
     private var initializedSites: [String: Data] = [:]
     private var launches: [String: [Date]] = [:]
+    private var operationGates: [String: ProviderOperationGate] = [:]
 
     public init(
         store: ProviderPackageStore,
@@ -75,6 +90,7 @@ public actor ProviderManager {
                 await old.stop()
             }
             initializedSites.removeValue(forKey: document.manifest.providerID)
+            operationGates.removeValue(forKey: document.manifest.providerID)
             launches[document.manifest.providerID] = []
             return installed
         } catch {
@@ -156,7 +172,20 @@ public actor ProviderManager {
         }
     }
 
-    public func initialize(providerID: String, site: Site) async throws {
+    public func request(
+        _ request: ProviderRequest,
+        initializing site: Site,
+        timeout: Duration = .seconds(15)
+    ) async throws -> ProviderResponse {
+        let gate = operationGates[request.providerID] ?? ProviderOperationGate()
+        operationGates[request.providerID] = gate
+        return try await gate.run { [self] in
+            try await initialize(providerID: request.providerID, site: site, timeout: timeout)
+            return try await self.request(request, timeout: timeout)
+        }
+    }
+
+    public func initialize(providerID: String, site: Site, timeout: Duration? = nil) async throws {
         let configuration = try JSONEncoder.providerCanonical.encode(site)
         if initializedSites[providerID] == configuration,
            let client = sessions[providerID], await client.isRunning {
@@ -169,7 +198,7 @@ public actor ProviderManager {
                 site: site,
                 arguments: ["extend": .string(site.ext)]
             ),
-            timeout: .seconds(max(site.timeout, 1))
+            timeout: timeout ?? .seconds(max(site.timeout, 1))
         )
         guard response.ok else { throw response.error ?? ProviderManagerError.initializationFailed }
         initializedSites[providerID] = configuration
@@ -185,7 +214,7 @@ public actor ProviderManager {
         parameters: [String: String],
         maximumBodyBytes: Int = ProviderProxyResponseAdapter.defaultMaximumBodyBytes
     ) async throws -> ProxyResponse {
-        try await initialize(providerID: providerID, site: site)
+        let timeout = Duration.seconds(max(site.timeout, 1))
         let response = try await request(
             ProviderRequest(
                 providerID: providerID,
@@ -193,7 +222,8 @@ public actor ProviderManager {
                 site: site,
                 arguments: ["parameters": .object(parameters)]
             ),
-            timeout: .seconds(max(site.timeout, 1))
+            initializing: site,
+            timeout: timeout
         )
         guard response.ok else {
             throw response.error ?? ProviderManagerError.missingProxyPayload
@@ -208,6 +238,7 @@ public actor ProviderManager {
     }
 
     public func shutdown(providerID: String) async {
+        operationGates.removeValue(forKey: providerID)
         guard let client = sessions.removeValue(forKey: providerID) else { return }
         initializedSites.removeValue(forKey: providerID)
         await client.stop()
@@ -217,6 +248,7 @@ public actor ProviderManager {
         let active = sessions.values
         sessions.removeAll()
         initializedSites.removeAll()
+        operationGates.removeAll()
         for client in active { await client.stop() }
     }
 
@@ -237,6 +269,7 @@ public actor ProviderManager {
     }
 
     public func rollback(providerID: String) async throws {
+        operationGates.removeValue(forKey: providerID)
         if let client = sessions.removeValue(forKey: providerID) { await client.stop(graceful: false) }
         initializedSites.removeValue(forKey: providerID)
         _ = try await store.rollback(providerID: providerID)

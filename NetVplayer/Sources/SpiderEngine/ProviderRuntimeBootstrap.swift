@@ -53,7 +53,8 @@ public struct ProviderRuntimeSyncResult: Sendable {
 /// for newer compatible support packages.
 public actor ProviderRuntimeBootstrap {
     public let manager: ProviderManager
-    private let distribution: ProviderDistributionClient?
+    private var distribution: ProviderDistributionClient?
+    private var distributionSession: URLSession?
     private let distributionVerifier: ProviderDistributionIndexVerifier?
     private let distributionIndexURL: URL?
     private let allowedSourcePolicies: Set<ProviderSourcePolicy>?
@@ -127,6 +128,32 @@ public actor ProviderRuntimeBootstrap {
             guard let sourcePolicy = $0.manifest.sourcePolicy else { return false }
             return allowedSourcePolicies.contains(sourcePolicy)
         }
+    }
+
+    public func configureDistributionProxy(port: Int?) {
+        distributionSession?.invalidateAndCancel()
+        distributionSession = nil
+        distribution = ProviderDistributionClient()
+        guard let proxyDictionary = Self.distributionProxyDictionary(port: port) else { return }
+
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        configuration.connectionProxyDictionary = proxyDictionary
+        let session = URLSession(configuration: configuration)
+        distributionSession = session
+        distribution = ProviderDistributionClient(session: session)
+    }
+
+    static func distributionProxyDictionary(port: Int?) -> [AnyHashable: Any]? {
+        guard let port, (1...65_535).contains(port) else { return nil }
+        return [
+            "HTTPEnable": 1,
+            "HTTPProxy": "127.0.0.1",
+            "HTTPPort": port,
+            "HTTPSEnable": 1,
+            "HTTPSProxy": "127.0.0.1",
+            "HTTPSPort": port,
+        ]
     }
 
     public func fetchCatalog() async throws -> [VerifiedProviderRelease] {
@@ -247,5 +274,7 @@ public actor ProviderRuntimeBootstrap {
 
     public func shutdown() async {
         await manager.shutdownAll()
+        distributionSession?.invalidateAndCancel()
+        distributionSession = nil
     }
 }

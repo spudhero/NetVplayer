@@ -63,7 +63,7 @@ public struct ProviderRequest: Codable, Sendable {
     }
 }
 
-public struct ProviderErrorPayload: Codable, Error, Equatable, Sendable {
+public struct ProviderErrorPayload: Codable, Error, LocalizedError, Equatable, Sendable {
     public var code: String
     public var message: String
     public var retryable: Bool
@@ -75,6 +75,8 @@ public struct ProviderErrorPayload: Codable, Error, Equatable, Sendable {
         self.retryable = retryable
         self.diagnostic = diagnostic
     }
+
+    public var errorDescription: String? { message }
 }
 
 public struct ProviderProxyPayload: Codable, Equatable, Sendable {

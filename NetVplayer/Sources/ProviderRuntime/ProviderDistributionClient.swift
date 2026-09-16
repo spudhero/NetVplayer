@@ -246,18 +246,23 @@ public struct ProviderDistributionIndexVerifier: Sendable {
 
 public actor ProviderDistributionClient {
     private static let maximumIndexBytes: Int64 = 8 * 1024 * 1024
+    private static let maximumNetworkAttempts = 3
+    public static let defaultArchiveRequestTimeout: TimeInterval = 10 * 60
     private let session: URLSession
     private let fileManager: FileManager
     private let maximumArchiveBytes: Int64
+    private let archiveRequestTimeout: TimeInterval
 
     public init(
         session: URLSession = .shared,
         fileManager: FileManager = .default,
-        maximumArchiveBytes: Int64 = 512 * 1024 * 1024
+        maximumArchiveBytes: Int64 = 512 * 1024 * 1024,
+        archiveRequestTimeout: TimeInterval = defaultArchiveRequestTimeout
     ) {
         self.session = session
         self.fileManager = fileManager
         self.maximumArchiveBytes = maximumArchiveBytes
+        self.archiveRequestTimeout = archiveRequestTimeout
     }
 
     /// Fetches and verifies the signed release index. The caller supplies the
@@ -273,7 +278,7 @@ public actor ProviderDistributionClient {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await dataWithRetries(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw ProviderDistributionError.httpStatus(0)
         }
@@ -312,8 +317,13 @@ public actor ProviderDistributionClient {
             let downloaded: URL
             let response: URLResponse
             do {
-                (downloaded, response) = try await session.download(
-                    from: release.archiveURL,
+                let request = URLRequest(
+                    url: release.archiveURL,
+                    cachePolicy: .reloadIgnoringLocalCacheData,
+                    timeoutInterval: archiveRequestTimeout
+                )
+                (downloaded, response) = try await downloadWithRetries(
+                    for: request,
                     delegate: delegate
                 )
             } catch {
@@ -380,5 +390,63 @@ public actor ProviderDistributionClient {
 
     public func removeTemporaryPackage(_ package: DownloadedProviderPackage) {
         try? fileManager.removeItem(at: package.temporaryRootURL)
+    }
+
+    private func dataWithRetries(for request: URLRequest) async throws -> (Data, URLResponse) {
+        var attempt = 0
+        while true {
+            do {
+                return try await session.data(for: request)
+            } catch {
+                attempt += 1
+                guard attempt < Self.maximumNetworkAttempts,
+                      Self.isRetryableNetworkError(error) else {
+                    throw error
+                }
+                try await Self.waitBeforeRetry(attempt: attempt)
+            }
+        }
+    }
+
+    private func downloadWithRetries(
+        for request: URLRequest,
+        delegate: ProviderDownloadProgressDelegate
+    ) async throws -> (URL, URLResponse) {
+        var attempt = 0
+        while true {
+            do {
+                return try await session.download(for: request, delegate: delegate)
+            } catch {
+                await delegate.drain()
+                attempt += 1
+                guard attempt < Self.maximumNetworkAttempts,
+                      Self.isRetryableNetworkError(error) else {
+                    throw error
+                }
+                try await Self.waitBeforeRetry(attempt: attempt)
+            }
+        }
+    }
+
+    private static func waitBeforeRetry(attempt: Int) async throws {
+        try await Task.sleep(for: .milliseconds(250 * attempt))
+    }
+
+    private static func isRetryableNetworkError(_ error: Error) -> Bool {
+        guard let error = error as? URLError else { return false }
+        switch error.code {
+        case .timedOut,
+             .cannotFindHost,
+             .cannotConnectToHost,
+             .networkConnectionLost,
+             .dnsLookupFailed,
+             .notConnectedToInternet,
+             .secureConnectionFailed,
+             .cannotLoadFromNetwork,
+             .resourceUnavailable:
+            return true
+        default:
+            return false
+        }
     }
 }
