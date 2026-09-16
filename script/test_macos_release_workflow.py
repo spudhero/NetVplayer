@@ -25,7 +25,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Provider public shell must pass", self.workflow)
 
     def test_release_pins_xcode_with_icon_composer_support(self) -> None:
-        self.assertIn("runs-on: macos-15", self.workflow)
+        self.assertIn("runs-on: macos-26", self.workflow)
         self.assertIn(
             "DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer",
             self.workflow,
