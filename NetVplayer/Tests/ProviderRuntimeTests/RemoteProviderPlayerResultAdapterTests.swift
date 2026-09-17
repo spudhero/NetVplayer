@@ -48,6 +48,14 @@ import Testing
     #expect(query["hls"] == "1")
     #expect(localized.format == "m3u8")
     #expect(localized.key == "海绵")
+
+    let catalogLocalized = try RemoteProviderPlayerResultAdapter.localize(
+        result,
+        site: Site(key: "海绵", name: "海绵", type: 3, api: "csp_HmysGuard"),
+        providerID: "netvplayer.catalog.java",
+        proxyServer: server
+    )
+    #expect(URLComponents(string: catalogLocalized.url)?.path == "/proxy.m3u8")
 }
 
 @Test func remoteProviderPlayerResultAdapterLeavesDirectResultsUntouched() throws {
@@ -74,14 +82,14 @@ import Testing
     #expect(throws: RemoteProviderPlayerResultError.invalidTargetURL) {
         try RemoteProviderPlayerResultAdapter.localize(
             Result(url: "netvplayer-provider-proxy://hmys-hls-v1?url=file:///tmp/video.m3u8&headers=%7B%7D&sign_secret=x"),
-            site: Site(key: "unsafe", name: "Unsafe", type: 3, api: "csp_Unsafe"),
+            site: Site(key: "海绵", name: "海绵", type: 3, api: "csp_HmysGuard"),
             providerID: "migration.hmys.java"
         )
     }
     #expect(throws: RemoteProviderPlayerResultError.invalidHeaderJSON) {
         try RemoteProviderPlayerResultAdapter.localize(
             Result(url: "netvplayer-provider-proxy://hmys-hls-v1?url=https://media.example.test/a.m3u8&headers=%5B%5D&sign_secret=x"),
-            site: Site(key: "unsafe", name: "Unsafe", type: 3, api: "csp_Unsafe"),
+            site: Site(key: "海绵", name: "海绵", type: 3, api: "csp_HmysGuard"),
             providerID: "migration.hmys.java"
         )
     }
@@ -90,6 +98,13 @@ import Testing
             Result(url: "netvplayer-provider-proxy://hmys-hls-v1?url=https://media.example.test/a.m3u8&headers=%7B%7D&sign_secret=x"),
             site: Site(key: "unsafe", name: "Unsafe", type: 3, api: "csp_Unsafe"),
             providerID: "migration.other.java"
+        )
+    }
+    #expect(throws: RemoteProviderPlayerResultError.unauthorizedProvider) {
+        try RemoteProviderPlayerResultAdapter.localize(
+            Result(url: "netvplayer-provider-proxy://hmys-hls-v1?url=https://media.example.test/a.m3u8&headers=%7B%7D&sign_secret=x"),
+            site: Site(key: "unsafe", name: "Unsafe", type: 3, api: "csp_Unsafe"),
+            providerID: "netvplayer.catalog.java"
         )
     }
 }

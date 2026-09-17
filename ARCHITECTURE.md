@@ -140,6 +140,8 @@ sequenceDiagram
 
 Provider 的 player result 也可以返回受限的 `PlaybackInteraction`。当前 `manual_verification` 只携带经过公开 HTTP(S) 目标校验的验证页、交互类型和用户消息，不携带媒体 URL；`SiteApi` 将其转换为类型化中断，`AppState` 显示用户驱动的 WebView，收到源站成功回调后重新请求原集数。该状态不会进入 `PlaySpec`，也不会由播放器或自动化绕过。
 
+交互字段只有在响应没有可用媒体、且交互结果能够改变同一 Provider 的后续请求时才成立。海绵响应同时提供 `check_page_url` 和有效 `vod_url` 时，Java Provider 必须优先返回媒体；正式聚合 Java Provider 的 `hmys-hls-v1` 描述符只在海绵 API 绑定上获准本地化，避免把聚合包权限扩大到其它站点。
+
 标准 HLS/MP4 在不需要改写时直接交给 libmpv。Spider callback、清单改写、注册文件、远端 Range 流或其它明确需要中转的输入才进入 `ProxyServer`。
 
 ### 本地代理路由
@@ -209,6 +211,8 @@ The sandbox launches only the package-local runtime, Runner, and Provider entryp
 Content results, drive plans, parser output, headers, subtitles, DRM, and format metadata are normalized into `PlaySpec`. `PlayerEngine` accepts that single input contract and passes it to libmpv.
 
 A Provider player result may instead request a bounded `PlaybackInteraction`. The current `manual_verification` form carries only a validated public HTTP(S) verification page, an interaction kind, and a user-facing message; it exposes no media URL. `SiteApi` raises a typed interruption, `AppState` presents a user-driven WebView, and the selected episode is requested again only after the upstream success callback. This state never becomes a `PlaySpec` and automation does not bypass it.
+
+An interaction is valid only when no usable media is present and its result can change a later request in the same Provider session. When Hmys returns both `check_page_url` and a valid `vod_url`, the Java Provider must prefer media. The aggregate Java Provider may localize `hmys-hls-v1` only for Hmys API bindings, so catalog-level authority does not extend to unrelated sites.
 
 Direct HLS/MP4 bypasses the local proxy when no rewrite or mediation is required. Spider callbacks, playlist rewriting, registered files, remote Range streams, and other explicitly mediated inputs use `ProxyServer`. The server binds only to loopback and rejects local-file, localhost, private-network, link-local, and multicast remote targets.
 

@@ -17,8 +17,8 @@ struct BuildRunPackagingTests {
             contentsOf: packageRoot.appendingPathComponent("script/build_and_run.sh"), encoding: .utf8
         )
 
-        #expect(info["CFBundleShortVersionString"] as? String == "1.0.3")
-        #expect(info["CFBundleVersion"] as? String == "4")
+        #expect(info["CFBundleShortVersionString"] as? String == "1.0.4")
+        #expect(info["CFBundleVersion"] as? String == "5")
         #expect(buildScript.contains("APP_VERSION=\"$(plutil -extract CFBundleShortVersionString"))
         #expect(buildScript.contains("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
         #expect(buildScript.contains("^[1-9][0-9]*$"))
