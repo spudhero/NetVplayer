@@ -67,7 +67,7 @@ class HmysJavaVerificationTests(unittest.TestCase):
 
     def test_media_probe_resigns_manifest_child_and_requires_video(self) -> None:
         opener = FakeOpener([
-            FakeResponse(b"#EXTM3U\nsegment.ts\n"),
+            FakeResponse(b"#EXTM3U\n#EXTINF:180.0,\nsegment.ts\n"),
             FakeResponse(b"media-bytes", content_type="video/mp2t"),
         ])
         decoded = {
@@ -91,6 +91,7 @@ class HmysJavaVerificationTests(unittest.TestCase):
 
         self.assertEqual(hops, 1)
         self.assertEqual(media["bytes_read"], len(b"media-bytes"))
+        self.assertEqual(media["playlist_duration_seconds"], 180.0)
         self.assertEqual(actual_decode, decoded)
         self.assertEqual(len(opener.requests), 2)
         parsed_requests = [urlsplit(request_url) for request_url in opener.requests]
@@ -174,6 +175,7 @@ class HmysJavaVerificationTests(unittest.TestCase):
                     "content_type": "video/mp2t",
                     "bytes_read": 262_144,
                     "sample_sha256": "0" * 64,
+                    "playlist_duration_seconds": 600.0,
                 }, {
                     "format_name": "mpegts",
                     "duration_seconds": "10.0",
@@ -194,7 +196,7 @@ class HmysJavaVerificationTests(unittest.TestCase):
         self.assertEqual(evidence["network"]["status"], "usable")
         self.assertEqual(evidence["parser"]["proxy_descriptor"], "hmys-hls-v1")
         self.assertEqual(evidence["parser"]["hls_manifest_hops"], 2)
-        self.assertEqual(evidence["parser"]["aes_256_cbc_response_decryption"], "passed")
+        self.assertEqual(evidence["parser"]["desede_response_decryption"], "passed")
         self.assertTrue(evidence["playback_verified"])
         self.assertFalse(evidence["sensitive_values_persisted"])
         serialized = json.dumps(evidence, ensure_ascii=False)

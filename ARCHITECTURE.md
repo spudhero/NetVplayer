@@ -140,7 +140,7 @@ sequenceDiagram
 
 Provider 的 player result 也可以返回受限的 `PlaybackInteraction`。当前 `manual_verification` 只携带经过公开 HTTP(S) 目标校验的验证页、交互类型和用户消息，不携带媒体 URL；`SiteApi` 将其转换为类型化中断，`AppState` 显示用户驱动的 WebView，收到源站成功回调后重新请求原集数。该状态不会进入 `PlaySpec`，也不会由播放器或自动化绕过。
 
-交互结果必须能改变同一 Provider 的后续请求。海绵响应里的 `vod_url` 可能只是 11 秒升级警告片；出现 `check_page_url` 时，WebView 将有界 `session_id/sig/nc_token` 通过 Provider `action` 回传给同一会话，然后重试原集数。正式聚合 Java Provider 的 `hmys-hls-v1` 描述符只在海绵 API 绑定上获准本地化，避免把聚合包权限扩大到其它站点。
+交互结果必须能改变同一 Provider 的后续请求。海绵不再使用带 `check_page_url` 的逐集滑块接口；Swift fallback 与正式 Java Provider 都使用无验证码的 `/api/user/init -> /api/vod/play_url` 加密合同，把上游原始域替换为已验证的播放域，再由 `hmys-hls-v1` 为主清单和子资源动态签名。发布验收要求 HLS 总时长超过 120 秒，从合同层拒绝 11 秒升级提示片。该描述符仍只在海绵 API 绑定上获准本地化，避免把聚合包权限扩大到其它站点。
 
 标准 HLS/MP4 在不需要改写时直接交给 libmpv。Spider callback、清单改写、注册文件、远端 Range 流或其它明确需要中转的输入才进入 `ProxyServer`。
 
@@ -212,7 +212,7 @@ Content results, drive plans, parser output, headers, subtitles, DRM, and format
 
 A Provider player result may instead request a bounded `PlaybackInteraction`. The current `manual_verification` form carries only a validated public HTTP(S) verification page, an interaction kind, and a user-facing message; it exposes no media URL. `SiteApi` raises a typed interruption, `AppState` presents a user-driven WebView, and the selected episode is requested again only after the upstream success callback. This state never becomes a `PlaySpec` and automation does not bypass it.
 
-An interaction result must change a later request in the same Provider session. Hmys may include an 11-second upgrade warning in `vod_url`; when `check_page_url` is present, the WebView sends bounded `session_id`, `sig`, and `nc_token` values through the Provider `action` operation before retrying the episode. The aggregate Java Provider may localize `hmys-hls-v1` only for Hmys API bindings, so catalog-level authority does not extend to unrelated sites.
+An interaction result must change a later request in the same Provider session. Hmys no longer uses the per-episode slider API that returns `check_page_url`. The Swift fallback and signed Java Provider use the no-challenge `/api/user/init -> /api/vod/play_url` encrypted contract, replace the advisory origin with the verified playback host, and let `hmys-hls-v1` refresh signatures for manifests and child resources. Release verification requires more than 120 seconds of HLS media, rejecting the 11-second upgrade advisory by contract. The descriptor remains restricted to Hmys API bindings, so catalog-level authority does not extend to unrelated sites.
 
 Direct HLS/MP4 bypasses the local proxy when no rewrite or mediation is required. Spider callbacks, playlist rewriting, registered files, remote Range streams, and other explicitly mediated inputs use `ProxyServer`. The server binds only to loopback and rejects local-file, localhost, private-network, link-local, and multicast remote targets.
 
