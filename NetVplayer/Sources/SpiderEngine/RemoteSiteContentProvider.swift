@@ -123,6 +123,16 @@ enum RemoteProviderPlayerResultError: Error, Equatable {
 
 enum RemoteProviderPlayerResultAdapter {
     static let proxyScheme = "netvplayer-provider-proxy"
+    private static let hmysProviderIDs: Set<String> = [
+        "migration.hmys.java",
+        "netvplayer.catalog.java"
+    ]
+    private static let hmysAPIs: Set<String> = [
+        "csp_Hmys",
+        "csp_HmysGuard",
+        "Hmys",
+        "HmysGuard"
+    ]
 
     static func localize(
         _ result: Result,
@@ -134,7 +144,7 @@ enum RemoteProviderPlayerResultAdapter {
               descriptor.scheme?.lowercased() == proxyScheme else {
             return result
         }
-        guard providerID == "migration.hmys.java" else {
+        guard hmysProviderIDs.contains(providerID), hmysAPIs.contains(site.api) else {
             throw RemoteProviderPlayerResultError.unauthorizedProvider
         }
         guard descriptor.host?.lowercased() == "hmys-hls-v1" else {

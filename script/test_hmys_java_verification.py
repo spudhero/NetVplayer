@@ -65,7 +65,7 @@ class HmysJavaVerificationTests(unittest.TestCase):
             "https://media.example/public.m3u8",
         )
 
-    def test_media_probe_resigns_manifest_child_and_requires_video_audio(self) -> None:
+    def test_media_probe_resigns_manifest_child_and_requires_video(self) -> None:
         opener = FakeOpener([
             FakeResponse(b"#EXTM3U\nsegment.ts\n"),
             FakeResponse(b"media-bytes", content_type="video/mp2t"),
@@ -116,7 +116,20 @@ class HmysJavaVerificationTests(unittest.TestCase):
             }),
         )
         with patch("script.verify_hmys_java_provider.subprocess.run", return_value=ffprobe_result):
-            with self.assertRaisesRegex(VerificationError, "both video and audio"):
+            decoded_video = ffprobe_sample(
+                Path("/usr/bin/true"), b"sample", "https://media.example/sample.ts", "video/mp2t"
+            )
+        self.assertEqual(decoded_video["streams"], [{"codec_type": "video", "codec_name": "h264"}])
+
+        audio_only_result = SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "format": {"format_name": "mpegts"},
+                "streams": [{"codec_type": "audio", "codec_name": "aac"}],
+            }),
+        )
+        with patch("script.verify_hmys_java_provider.subprocess.run", return_value=audio_only_result):
+            with self.assertRaisesRegex(VerificationError, "video stream"):
                 ffprobe_sample(Path("/usr/bin/true"), b"sample", "https://media.example/sample.ts", "video/mp2t")
 
     def test_media_probe_rejects_excessive_manifest_hops(self) -> None:
