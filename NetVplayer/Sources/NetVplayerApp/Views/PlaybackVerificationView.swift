@@ -1,12 +1,12 @@
+import Models
 import SwiftUI
 import WebKit
 
 struct PlaybackVerificationView: View {
     let request: PlaybackVerificationRequest
-    let onVerified: () -> Void
+    let onVerified: (PlaybackVerificationResult) -> Void
     let onCancel: () -> Void
 
-    @Environment(\.openURL) private var openURL
     @Environment(\.appThemePalette) private var palette
     @State private var reloadID = UUID()
     @State private var statusMessage = "请完成页面中的滑块验证"
@@ -52,9 +52,9 @@ struct PlaybackVerificationView: View {
 
             PlaybackVerificationWebView(
                 url: request.interaction.url,
-                onVerified: {
+                onVerified: { result in
                     statusMessage = "验证成功，正在重试播放..."
-                    onVerified()
+                    onVerified(result)
                 },
                 onFailure: { message in
                     statusMessage = message
@@ -66,26 +66,12 @@ struct PlaybackVerificationView: View {
             Divider()
 
             HStack(spacing: 12) {
-                Button {
-                    if let url = URL(string: request.interaction.url) {
-                        openURL(url)
-                    }
-                } label: {
-                    Label("浏览器打开", systemImage: "safari")
-                }
-
                 Spacer()
 
                 Button("取消", role: .cancel) {
                     onCancel()
                 }
 
-                Button {
-                    onVerified()
-                } label: {
-                    Label("完成验证并重试", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
             }
             .padding(.horizontal, 18)
             .frame(height: 62)
@@ -97,7 +83,7 @@ struct PlaybackVerificationView: View {
 
 private struct PlaybackVerificationWebView: NSViewRepresentable {
     let url: String
-    let onVerified: () -> Void
+    let onVerified: (PlaybackVerificationResult) -> Void
     let onFailure: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -146,10 +132,13 @@ private struct PlaybackVerificationWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         static let messageName = "netvplayerVerification"
 
-        private let onVerified: () -> Void
+        private let onVerified: (PlaybackVerificationResult) -> Void
         private let onFailure: (String) -> Void
 
-        init(onVerified: @escaping () -> Void, onFailure: @escaping (String) -> Void) {
+        init(
+            onVerified: @escaping (PlaybackVerificationResult) -> Void,
+            onFailure: @escaping (String) -> Void
+        ) {
             self.onVerified = onVerified
             self.onFailure = onFailure
         }
@@ -157,15 +146,11 @@ private struct PlaybackVerificationWebView: NSViewRepresentable {
         func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == Self.messageName,
                   let payload = message.body as? String,
-                  let data = payload.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  Self.hasValue("session_id", in: object),
-                  Self.hasValue("sig", in: object),
-                  Self.hasValue("nc_token", in: object) else {
+                  let result = PlaybackVerificationResult(jsonPayload: payload) else {
                 onFailure("验证结果无效，请重新完成滑块验证")
                 return
             }
-            onVerified()
+            onVerified(result)
         }
 
         func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
@@ -176,9 +161,5 @@ private struct PlaybackVerificationWebView: NSViewRepresentable {
             onFailure("验证页加载失败：\(error.localizedDescription)")
         }
 
-        private static func hasValue(_ key: String, in object: [String: Any]) -> Bool {
-            guard let value = object[key] as? String else { return false }
-            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
     }
 }

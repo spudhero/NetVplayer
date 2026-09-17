@@ -1995,7 +1995,8 @@ final class AppState: ObservableObject {
         resumePosition: Int64? = nil,
         resumeDuration: Int64? = nil,
         automaticSelection: Bool = false,
-        lineFallbackApplied: Bool = false
+        lineFallbackApplied: Bool = false,
+        verificationResult: PlaybackVerificationResult? = nil
     ) async {
         guard let site = activeSite else { return }
         resetDrivePlaybackRoutes()
@@ -2040,6 +2041,21 @@ final class AppState: ObservableObject {
         self.log("[PLAY_EPISODE] 开始播放剧集 title=\(episode.name), url=\(redactedPlaybackURL(episode.url))")
         
         do {
+            if let verificationResult {
+                let data = try JSONEncoder().encode(verificationResult)
+                guard let value = String(data: data, encoding: .utf8) else {
+                    throw SpiderEngineError.nativeReplacementUnsupported(
+                        site: site.key,
+                        capability: "源站验证结果编码失败"
+                    )
+                }
+                try await SiteApi.shared.action(
+                    key: site.key,
+                    action: "playback_verification",
+                    value: value,
+                    sites: self.sites
+                )
+            }
             // 调用 SiteApi 抓取该剧集对应的播放流地址
             let result = try await SiteApi.shared.playerContent(
                 key: site.key,
@@ -2389,11 +2405,11 @@ final class AppState: ObservableObject {
         isPlaybackErrorPresented = true
     }
 
-    func completePlaybackVerification() {
+    func completePlaybackVerification(_ result: PlaybackVerificationResult) {
         guard let request = playbackVerificationRequest else { return }
         playbackVerificationRequest = nil
         Task { @MainActor in
-            await playEpisode(request.episode)
+            await playEpisode(request.episode, verificationResult: result)
         }
     }
 

@@ -11,10 +11,18 @@ public protocol SiteContentProvider: Sendable {
     func detailContent(site: Site, id: String) async throws -> Result
     func playerContent(site: Site, flag: String, id: String) async throws -> Result
     func searchContent(site: Site, keyword: String, quick: Bool, page: String) async throws -> Result
+    func action(site: Site, action: String, value: String) async throws
 }
 
 public extension SiteContentProvider {
     func homeVideoContent(site: Site) async throws -> Result? {
         nil
+    }
+
+    func action(site: Site, action: String, value: String) async throws {
+        throw SpiderEngineError.nativeReplacementUnsupported(
+            site: site.api,
+            capability: "当前 Provider 不支持交互结果回传"
+        )
     }
 }
