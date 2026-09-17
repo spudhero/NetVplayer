@@ -35,7 +35,7 @@ NetVplayer 1.0.6 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒�
 ### 1.0.6 播放修复
 
 - 签名 Provider 返回网页播放器壳时，应用会先解析并验证真实 HLS，再把媒体交给本地清单代理和 libmpv；HTTP 200 HTML 不再被当成视频格式。
-- 海绵切回 FongMi 可用的无验证码加密接口，直接生成签名 HLS 正片；播放验收要求清单总时长超过 120 秒，11 秒升级提示片不会再通过门禁，也不会再弹出滑块页。
+- 海绵保留原有 6 个业务分类和筛选，并把 catalog 的不透明影片身份按标题与海报精确映射到无验证码播放库；播放验收要求清单总时长超过 120 秒，11 秒升级提示片不会再通过门禁，也不会再弹出滑块页。
 
 你可以添加自己的兼容配置、WebDAV、AList/OpenList 或受支持的云盘账号。全新安装保持空白，直到用户主动添加内容入口；已保存的配置可以在后续启动时恢复。
 
@@ -155,7 +155,7 @@ NetVplayer 1.0.6 is a native macOS media player built with SwiftUI and an embedd
 ### Playback fixes in 1.0.6
 
 - When a signed Provider returns an HTML player shell, NetVplayer resolves and validates the actual HLS media before handing it to the local playlist relay and libmpv. An HTTP 200 HTML page is no longer treated as video.
-- Hmys now uses the no-challenge encrypted contract that remains playable in FongMi and returns signed full-length HLS directly. Release verification requires a playlist longer than 120 seconds, so the 11-second upgrade advisory cannot pass as episode media or trigger a slider sheet.
+- Hmys keeps its six catalog categories and filters, then maps opaque catalog identities to the no-challenge playback catalog by exact title and poster filename. Release verification requires a playlist longer than 120 seconds, so the 11-second upgrade advisory cannot pass as episode media or trigger a slider sheet.
 
 You can add your own compatible configuration, WebDAV, AList/OpenList, or supported cloud-drive account. A fresh installation stays empty until the user adds an entry point. Saved configurations can be restored on later launches.
 
