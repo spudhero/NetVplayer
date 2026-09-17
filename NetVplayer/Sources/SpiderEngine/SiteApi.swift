@@ -189,6 +189,24 @@ public final class SiteApi: Sendable {
         }
     }
 
+    public func action(
+        key: String,
+        action: String,
+        value: String,
+        sites: [Site]
+    ) async throws {
+        guard let site = sites.first(where: { $0.key == key }) else {
+            throw SpiderEngineError.nativeReplacementUnsupported(site: key, capability: "找不到交互请求对应的站点")
+        }
+        guard let provider = await SpiderReplacementRegistry.shared.nativeProvider(for: site) else {
+            throw SpiderEngineError.nativeReplacementUnsupported(
+                site: site.key,
+                capability: "当前站点没有可接收交互结果的签名 Provider"
+            )
+        }
+        try await provider.action(site: site, action: action, value: value)
+    }
+
     /// 搜索内容
     public func searchContent(site: Site, keyword: String, quick: Bool, page: String) async throws -> Result {
         if let provider = await SpiderReplacementRegistry.shared.nativeProvider(for: site) {

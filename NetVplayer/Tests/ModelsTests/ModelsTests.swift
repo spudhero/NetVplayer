@@ -41,6 +41,25 @@ import Testing
     #expect(decoded.url.isEmpty)
 }
 
+@Test func testPlaybackVerificationResultParsesAndBoundsBridgePayload() throws {
+    let payload = #"{"session_id":" session ","sig":"signature","nc_token":"nc-token"}"#
+    let result = try #require(PlaybackVerificationResult(jsonPayload: payload))
+    #expect(result == PlaybackVerificationResult(
+        sessionID: "session",
+        signature: "signature",
+        ncToken: "nc-token"
+    ))
+
+    #expect(PlaybackVerificationResult(jsonPayload: #"{"session_id":"","sig":"x","nc_token":"y"}"#) == nil)
+    let oversized = String(repeating: "x", count: 4 * 1024 + 1)
+    let oversizedPayload = try JSONSerialization.data(withJSONObject: [
+        "session_id": oversized,
+        "sig": "signature",
+        "nc_token": "nc-token"
+    ])
+    #expect(PlaybackVerificationResult(jsonPayload: String(decoding: oversizedPayload, as: UTF8.self)) == nil)
+}
+
 @Test func testResultFromJSONToleratesOutOfRangeNumbers() {
     let json = "{\"url\":\"http://test.m3u8\",\"page\":1e20,\"pagecount\":-1e20,\"total\":1e20,\"code\":1e20}"
     let result = Result.fromJSON(json)

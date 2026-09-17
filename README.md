@@ -30,12 +30,12 @@
 
 ### 原生 macOS 媒体播放器
 
-NetVplayer 1.0.4 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+NetVplayer 1.0.5 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
 
-### 1.0.4 播放修复
+### 1.0.5 播放修复
 
 - 签名 Provider 返回网页播放器壳时，应用会先解析并验证真实 HLS，再把媒体交给本地清单代理和 libmpv；HTTP 200 HTML 不再被当成视频格式。
-- 海绵响应同时包含验证页字段和有效媒体地址时，应用直接播放媒体，不再打开无法写回源站会话的滑块页。聚合 Java Provider 仅在海绵站点绑定上获准使用签名 HLS 代理；没有媒体地址时会明确失败。
+- 海绵源站要求滑块验证时，应用在内嵌页面接收 `session_id`、`sig` 和 `nc_token`，通过同一个签名 Provider 会话回传后再请求原集数。外部浏览器和手动“完成”按钮已移除，因为它们无法把验证结果送回 Provider；源站附带的 11 秒升级警告片不会再被当成正片。
 
 你可以添加自己的兼容配置、WebDAV、AList/OpenList 或受支持的云盘账号。全新安装保持空白，直到用户主动添加内容入口；已保存的配置可以在后续启动时恢复。
 
@@ -150,12 +150,12 @@ NetVplayer 与 FongMi/TV 没有隶属或官方合作关系。NetVplayer 使用�
 
 ### A native media player for macOS
 
-NetVplayer 1.0.4 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+NetVplayer 1.0.5 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
 
-### Playback fixes in 1.0.4
+### Playback fixes in 1.0.5
 
 - When a signed Provider returns an HTML player shell, NetVplayer resolves and validates the actual HLS media before handing it to the local playlist relay and libmpv. An HTTP 200 HTML page is no longer treated as video.
-- When Hmys returns both an advisory verification page and a valid media URL, NetVplayer plays the media directly instead of opening a challenge that cannot update the Provider session. The aggregate Java Provider may use the signed HLS relay only for Hmys site bindings; a response without media fails explicitly.
+- When Hmys requires a slider challenge, the embedded page returns `session_id`, `sig`, and `nc_token` to the same signed Provider session before NetVplayer retries the selected episode. External-browser and manual-completion controls were removed because they cannot return that state. The accompanying 11-second upgrade warning is no longer treated as episode media.
 
 You can add your own compatible configuration, WebDAV, AList/OpenList, or supported cloud-drive account. A fresh installation stays empty until the user adds an entry point. Saved configurations can be restored on later launches.
 
@@ -200,7 +200,7 @@ Start with the [Provider SDK development guide](provider-sdk/README.md), which r
 
 ### Download and build
 
-The current 1.0.4 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The current 1.0.5 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
 
 Building from source requires Xcode and the Homebrew libmpv dependencies:
 

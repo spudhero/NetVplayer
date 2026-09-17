@@ -84,22 +84,38 @@ public struct RemoteSiteContentProvider: SiteContentProvider, Sendable {
         )
     }
 
+    public func action(site: Site, action: String, value: String) async throws {
+        _ = try await response(
+            operation: .action,
+            site: site,
+            arguments: ["action": .string(action), "value": .string(value)]
+        )
+    }
+
     private func result(
         operation: ProviderOperation,
         site: Site,
         arguments: [String: ProviderJSONValue] = [:]
     ) async throws -> Result {
+        let response = try await response(operation: operation, site: site, arguments: arguments)
+        return try response.decodedResult(Result.self)
+    }
+
+    private func response(
+        operation: ProviderOperation,
+        site: Site,
+        arguments: [String: ProviderJSONValue] = [:]
+    ) async throws -> ProviderResponse {
         await SpiderReplacementRegistry.shared.registerRemoteProxyRoute(
             site: site,
             providerID: providerID,
             manager: manager
         )
-        let response = try await manager.request(
+        return try await manager.request(
             ProviderRequest(providerID: providerID, operation: operation, site: site, arguments: arguments),
             initializing: site,
             timeout: .seconds(RemoteProviderRequestPolicy.timeoutSeconds(configured: site.timeout))
         )
-        return try response.decodedResult(Result.self)
     }
 }
 

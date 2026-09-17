@@ -19,6 +19,43 @@ public struct PlaybackInteraction: Codable, Equatable, Sendable {
     }
 }
 
+public struct PlaybackVerificationResult: Codable, Equatable, Sendable {
+    public var sessionID: String
+    public var signature: String
+    public var ncToken: String
+
+    public init(sessionID: String, signature: String, ncToken: String) {
+        self.sessionID = sessionID
+        self.signature = signature
+        self.ncToken = ncToken
+    }
+
+    public init?(jsonPayload: String) {
+        guard jsonPayload.utf8.count <= 16 * 1024,
+              let data = jsonPayload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sessionID = Self.boundedValue(object["session_id"]),
+              let signature = Self.boundedValue(object["sig"]),
+              let ncToken = Self.boundedValue(object["nc_token"]) else {
+            return nil
+        }
+        self.init(sessionID: sessionID, signature: signature, ncToken: ncToken)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case signature = "sig"
+        case ncToken = "nc_token"
+    }
+
+    private static func boundedValue(_ value: Any?) -> String? {
+        guard let value = value as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.utf8.count <= 4 * 1024 else { return nil }
+        return trimmed
+    }
+}
+
 /// Spider/CMS API 统一返回结果
 public struct Result: Codable, Sendable {
     /// 分类列表
