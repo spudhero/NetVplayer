@@ -160,7 +160,8 @@ class HmysJavaVerificationTests(unittest.TestCase):
                 patch.dict(os.environ, {
                     "JAVA_TOOL_OPTIONS": " ".join((
                         "-Dnetvplayer.hmys.allowLoopback=true",
-                        f"-Dnetvplayer.hmys.initialBase={base}",
+                        f"-Dnetvplayer.hmys.catalogInitialBase={base}",
+                        f"-Dnetvplayer.hmys.playbackInitialBase={base}",
                         "-Dnetvplayer.hmys.deviceId=abcdefghijklmnop",
                         f"-Dnetvplayer.hmys.fixedClock={FIXED_CLOCK}",
                     )),
@@ -196,7 +197,10 @@ class HmysJavaVerificationTests(unittest.TestCase):
         self.assertEqual(evidence["network"]["status"], "usable")
         self.assertEqual(evidence["parser"]["proxy_descriptor"], "hmys-hls-v1")
         self.assertEqual(evidence["parser"]["hls_manifest_hops"], 2)
+        self.assertEqual(evidence["parser"]["class_count"], 6)
+        self.assertEqual(evidence["parser"]["aes_256_cbc_catalog_decryption"], "passed")
         self.assertEqual(evidence["parser"]["desede_response_decryption"], "passed")
+        self.assertEqual(evidence["parser"]["catalog_to_playback_identity_mapping"], "passed")
         self.assertTrue(evidence["playback_verified"])
         self.assertFalse(evidence["sensitive_values_persisted"])
         serialized = json.dumps(evidence, ensure_ascii=False)
