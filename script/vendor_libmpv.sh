@@ -17,6 +17,7 @@ copy_prepared_runtime() {
   local runtime_bundle="$1"
   local runtime_frameworks="$runtime_bundle/Contents/Frameworks"
   local runtime_licenses="$runtime_bundle/Contents/Resources/ThirdPartyLicenses"
+  local runtime_license_texts="$runtime_licenses/libmpv"
   if [[ ! -f "$runtime_frameworks/libmpv.2.dylib" ]]; then
     echo "prepared libmpv runtime is missing libmpv.2.dylib: $runtime_frameworks" >&2
     exit 66
@@ -25,10 +26,15 @@ copy_prepared_runtime() {
     echo "prepared libmpv runtime is missing license metadata: $runtime_licenses" >&2
     exit 66
   fi
+  if [[ ! -d "$runtime_license_texts" || -z "$(find "$runtime_license_texts" -type f -print -quit)" ]]; then
+    echo "prepared libmpv runtime is missing license texts: $runtime_license_texts" >&2
+    exit 66
+  fi
   cp -R "$runtime_frameworks/." "$FRAMEWORKS_DIR/"
   mkdir -p "$APP_BUNDLE/Contents/Resources/ThirdPartyLicenses"
   cp "$runtime_licenses/libmpv-runtime.json" "$APP_BUNDLE/Contents/Resources/ThirdPartyLicenses/"
   cp "$runtime_licenses/libmpv-runtime.md" "$APP_BUNDLE/Contents/Resources/ThirdPartyLicenses/"
+  cp -R "$runtime_license_texts" "$APP_BUNDLE/Contents/Resources/ThirdPartyLicenses/"
   install_name_tool -add_rpath "@executable_path/../Frameworks" "$EXECUTABLE_PATH" 2>/dev/null || true
   echo "Bundled prepared libmpv runtime: $(find "$FRAMEWORKS_DIR" -type f -name '*.dylib' | wc -l | tr -d ' ') dylibs"
 }

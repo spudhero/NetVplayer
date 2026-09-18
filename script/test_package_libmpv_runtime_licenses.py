@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -68,6 +69,39 @@ class Fixture:
 
 
 class LibmpvRuntimeLicenseTests(unittest.TestCase):
+    def test_prepared_runtime_copy_includes_license_texts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / "runtime/NetVplayer.app"
+            runtime_frameworks = runtime / "Contents/Frameworks"
+            runtime_licenses = runtime / "Contents/Resources/ThirdPartyLicenses"
+            license_text = runtime_licenses / "libmpv/example/COPYING"
+            runtime_frameworks.mkdir(parents=True)
+            license_text.parent.mkdir(parents=True)
+            (runtime_frameworks / "libmpv.2.dylib").write_bytes(b"runtime")
+            (runtime_licenses / "libmpv-runtime.json").write_text("{}\n", encoding="utf-8")
+            (runtime_licenses / "libmpv-runtime.md").write_text("notices\n", encoding="utf-8")
+            license_text.write_text("license\n", encoding="utf-8")
+
+            app = root / "output/NetVplayer.app"
+            executable = app / "Contents/MacOS/NetVplayerApp"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"executable")
+            environment = dict(os.environ)
+            environment["NETVPLAYER_LIBMPV_RUNTIME_BUNDLE"] = str(runtime)
+            subprocess.run(
+                ["bash", str(Path(__file__).resolve().parent / "vendor_libmpv.sh"), str(app), str(executable)],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            output_licenses = app / "Contents/Resources/ThirdPartyLicenses"
+            self.assertEqual((output_licenses / "libmpv-runtime.json").read_text(), "{}\n")
+            self.assertEqual((output_licenses / "libmpv-runtime.md").read_text(), "notices\n")
+            self.assertEqual((output_licenses / "libmpv/example/COPYING").read_text(), "license\n")
+
     def test_reads_metadata_from_exact_installed_formula_archive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Fixture(Path(directory), formula="historical", version="1.5")
