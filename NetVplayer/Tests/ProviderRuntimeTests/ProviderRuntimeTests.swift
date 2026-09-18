@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Testing
 import Security
@@ -286,15 +287,13 @@ private final class QuickJSRealHTTPFixture {
         while line.last != 0x0A {
             let chunk = output.fileHandleForReading.readData(ofLength: 1)
             guard !chunk.isEmpty else {
-                serverProcess.terminate()
-                serverProcess.waitUntilExit()
+                Self.stop(serverProcess)
                 throw NSError(domain: "QuickJSRealHTTPFixture", code: 1)
             }
             line.append(chunk)
         }
         guard let port = Int(String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            serverProcess.terminate()
-            serverProcess.waitUntilExit()
+            Self.stop(serverProcess)
             throw NSError(domain: "QuickJSRealHTTPFixture", code: 2)
         }
         self.process = serverProcess
@@ -302,11 +301,21 @@ private final class QuickJSRealHTTPFixture {
     }
 
     deinit {
-        if process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
-        }
+        Self.stop(process)
         try? FileManager.default.removeItem(at: root)
+    }
+
+    private static func stop(_ process: Process) {
+        guard process.isRunning else { return }
+        let pid = process.processIdentifier
+        process.terminate()
+        let deadline = Date().addingTimeInterval(1)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if process.isRunning {
+            _ = Darwin.kill(pid, SIGKILL)
+        }
     }
 }
 

@@ -30,7 +30,20 @@
 
 ### 原生 macOS 媒体播放器
 
-NetVplayer 1.0.7 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+NetVplayer 1.0.8 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+
+### 项目背景
+
+FongMi/TV、OK影视、影视仓、TVBox 等常用工具主要服务 Android 生态。我一直没有找到符合自己使用习惯的 macOS 版本，于是从 SwiftUI 与 libmpv 开始，写了 NetVplayer。
+
+NetVplayer 的目标不是照搬手机或电视端界面，而是把内容浏览、搜索、选集、点播和直播重新组织成一套原生 Mac 桌面体验。NetVplayer 不是上述项目的官方 Mac 版，与它们不存在隶属或官方合作关系；项目感谢 FongMi/TV 等开源实践提供的兼容性参考，并保持独立的 Swift/macOS 实现。
+
+### 1.0.8 网盘起播与返回体验
+
+- UC 个人盘原文件的安全探测改为最小 Range，并复用已经解析的个人盘记录，不再在起播前重复下载相同探测数据。
+- MP4 读取文件尾部元数据后会复用已经完成的头部分段；慢速 UC CDN 下无需再次下载同一批起播数据。
+- 玩偶详情页会并发展开多个网盘分享，同时保持原页面中的线路和剧集顺序。
+- 从同站搜索结果进入播放时会保留原首页目录；退出播放器后恢复影片详情，不再回到空白“推荐”页。
 
 ### 1.0.7 兼容性修复
 
@@ -111,6 +124,20 @@ flowchart TB
 
 当前公开版本面向 macOS 14 或更高版本和 Apple Silicon。请从[项目官网](https://spudhero.github.io/NetVplayer/)或[最新 GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest)下载。
 
+#### 小白安装步骤
+
+1. 点击 macOS 左上角苹果菜单，打开“关于本机”，确认芯片是 Apple M 系列，系统为 macOS 14 或更高版本。当前公开版本暂不支持 Intel Mac。
+2. 下载名称中包含 `macos-arm64.zip` 的最新正式安装包。
+3. 双击 ZIP 解压，将 `NetVplayer.app` 拖入“应用程序”文件夹。
+4. 首次启动时，在 Finder 中右键 NetVplayer 并选择“打开”，再在确认框中选择一次“打开”。
+5. 如果仍被系统拦截，进入“系统设置 → 隐私与安全性”，确认应用名称后选择“仍要打开”。当前版本使用社区 ad-hoc 签名，首次放行通常只需一次。
+6. 启动后等待“扩展支持”显示就绪。首次准备和后续更新扩展时，网络需要能够正常连接 GitHub；下载并验证完成后，离线时仍可继续使用本机已经安装且有效的组件。
+7. 进入“设置 → 数据源设置”，填写你自己有权使用的兼容配置。看到加载成功后返回首页即可开始浏览和播放。
+
+![NetVplayer 设置中的扩展支持页面，显示扩展能力已就绪与重新检查按钮](website/assets/screen-extension-support.webp)
+
+在“设置 → 扩展支持”看到“扩展能力已就绪”后，即可继续配置自己的内容入口。遇到异常时选择“重新检查”。
+
 从源码构建需要 Xcode 和 Homebrew 提供的 libmpv 依赖：
 
 ```bash
@@ -127,6 +154,17 @@ bash NetVplayer/script/build_and_run.sh \
 
 该命令会拒绝脏的公开检出和额外源码/资源输入，并检查运行库许可证、SBOM、签名和最终 `.app` 的无源边界。它不会替换或启动 `/Applications/NetVplayer.app`。
 
+### 常见问题
+
+- **支持 Intel Mac 吗？** 当前不支持。公开版本只提供 Apple Silicon arm64 构建。
+- **为什么第一次打开会被 macOS 拦截？** 当前版本使用社区 ad-hoc 签名，没有使用 Apple Developer ID 公证。请确认应用名称和下载来源后完成首次放行。
+- **软件自带视频源或直播列表吗？** 不自带。公开应用不内置、不提供也不托管视频源、直播列表、账号或媒体内容。
+- **配置地址从哪里获得？** 请使用你自己维护、购买或明确获得授权的内容服务。项目不提供、推荐或代找视频源地址。
+- **播放扩展需要手动安装吗？** 正常情况下不需要。首次准备或后续更新时，网络必须能连接 GitHub，否则下载与更新无法完成。已经安装并验证通过的组件在离线时仍可继续使用；状态异常时可在“设置 → 扩展支持”中选择“重新检查”。
+- **配置和授权凭据保存在哪里？** 配置与授权凭据只保存在本机；非敏感备份不会包含云盘 Token、Cookie 等授权信息。
+- **这是 FongMi、影视仓或 TVBox 的官方 Mac 版吗？** 不是。NetVplayer 是独立的 Swift/macOS 实现，与这些项目不存在隶属或官方合作关系。
+- **遇到问题如何反馈？** 使用应用内“问题反馈”生成脱敏信息并描述复现步骤。不要公开账号、Token、Cookie 或完整配置地址。
+
 ### 仓库结构
 
 | 路径 | 用途 |
@@ -136,6 +174,7 @@ bash NetVplayer/script/build_and_run.sh \
 | `provider-runners/` | Java、Node.js、QuickJS 和 Python Runner 合同 |
 | `script/` | 构建、签名、沙盒、边界审计与发行检查 |
 | `website/` | 项目官网及真实产品截图 |
+| `docs/marketing/xiaohongshu/` | 小红书发布文案、可重复渲染模板、脱敏素材与 14 张成品卡片 |
 
 ### 致谢
 
@@ -153,7 +192,20 @@ NetVplayer 与 FongMi/TV 没有隶属或官方合作关系。NetVplayer 使用�
 
 ### A native media player for macOS
 
-NetVplayer 1.0.7 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+NetVplayer 1.0.8 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+
+### Project background
+
+FongMi/TV, OK影视, 影视仓, and TVBox primarily serve the Android ecosystem. I could not find a macOS version that matched how I wanted to use a desktop media app, so I started NetVplayer with SwiftUI and libmpv.
+
+The goal is not to copy a phone or TV interface. NetVplayer reorganizes discovery, search, episode selection, on-demand playback, and live playback as a native Mac experience. It is not an official Mac edition of those projects and has no affiliation or official partnership with them. Their open-source work remains an important compatibility reference, while NetVplayer uses an independent Swift/macOS implementation.
+
+### Cloud-drive startup and navigation fixes in 1.0.8
+
+- UC personal-drive originals now use a minimal safety probe and reuse the resolved saved-file record instead of downloading the same probe data twice before playback.
+- MP4 playback reuses completed head ranges after reading tail metadata, avoiding a second download of the startup window on slow UC CDN paths.
+- WoGG detail pages expand multiple cloud-drive shares concurrently while preserving the source order of routes and episodes.
+- Opening a same-site search result keeps the loaded home catalog, and leaving playback restores the movie detail instead of an empty Recommended page.
 
 ### Compatibility fixes in 1.0.7
 
@@ -206,7 +258,21 @@ Start with the [Provider SDK development guide](provider-sdk/README.md), which r
 
 ### Download and build
 
-The current 1.0.7 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The current 1.0.8 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+
+#### Beginner installation
+
+1. Open Apple menu → About This Mac. Confirm that the chip is an Apple M-series chip and that the system is macOS 14 or later. The current public build does not support Intel Macs.
+2. Download the latest release file whose name contains `macos-arm64.zip`.
+3. Double-click the ZIP and move `NetVplayer.app` into Applications.
+4. On first launch, right-click NetVplayer in Finder, choose Open, and confirm Open once more.
+5. If macOS still blocks the app, open System Settings → Privacy & Security, confirm the application name, and choose Open Anyway. The community ad-hoc build normally needs this approval only once.
+6. Wait for Verified Extensions to become ready. The first preparation and later updates require a network connection that can reach GitHub. After the components are downloaded and verified, installed components that remain valid can continue to work offline.
+7. Open Settings → Data Sources and load a compatible configuration that you are authorized to use.
+
+![NetVplayer Verified Extensions screen showing that extension support is ready and the Check Again button](website/assets/screen-extension-support.webp)
+
+Continue to your content configuration after this screen reports that extension support is ready. Use Check Again if the status reports a problem.
 
 Building from source requires Xcode and the Homebrew libmpv dependencies:
 
@@ -223,6 +289,17 @@ bash NetVplayer/script/build_and_run.sh \
 ```
 
 The command rejects a dirty public checkout and unexpected source or resource inputs. It verifies runtime licenses, SBOM data, signatures, and the source-free boundary of the final `.app`. It does not replace or launch `/Applications/NetVplayer.app`.
+
+### FAQ
+
+- **Does it support Intel Macs?** Not currently. The public release is an Apple Silicon arm64 build.
+- **Why can macOS block the first launch?** The current release uses community ad-hoc signing rather than Apple Developer ID notarization. Verify the application name and download source before approving the first launch.
+- **Does the app include video sources or live channel lists?** No. The public app does not bundle, provide, or host catalogs, live lists, accounts, or media.
+- **Where do configuration URLs come from?** Use only services that you maintain, purchase, or are explicitly authorized to access. The project does not provide or recommend source URLs.
+- **Do I install Provider extensions manually?** Normally no. The initial preparation and later updates require network access to GitHub; without it, downloads and updates cannot complete. Components that are already installed and verified can continue to work offline. Use Settings → Verified Extensions → Check Again when the status reports a problem.
+- **Where are configurations and credentials stored?** Configurations and authorization credentials remain on the Mac. Non-sensitive backups exclude cloud-drive tokens and cookies.
+- **Is this an official Mac version of FongMi, OK影视, 影视仓, or TVBox?** No. NetVplayer is an independent Swift/macOS implementation with no affiliation or official partnership.
+- **How do I report a problem?** Use the in-app Problem Report flow to generate redacted diagnostics and describe the reproduction steps. Never publish accounts, tokens, cookies, or full configuration URLs.
 
 ### Repository layout
 

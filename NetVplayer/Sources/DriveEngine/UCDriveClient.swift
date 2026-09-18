@@ -171,7 +171,7 @@ public final class UCDriveClient: @unchecked Sendable {
     private static let maxPagesPerDirectory = 8
     private static let maxTaskPolls = 20
     private static let driveReferer = "https://drive.uc.cn/"
-    private static let originalProbeRange = "bytes=0-4194303"
+    private static let originalProbeRange = "bytes=0-0"
     private static let originalPlaybackBootstrapPwdID = "d0d8d587c9e94"
 
     private let httpClient: HTTPClient
@@ -447,6 +447,20 @@ public final class UCDriveClient: @unchecked Sendable {
         )
         guard playResult.playbackRoute == DrivePlaybackRoute.ucSmartPlay else {
             throw DriveEngineError.noDownloadURL(playable.file.name)
+        }
+        return playResult
+    }
+
+    func fetchSavedPersonalPlayURLResult(
+        for savedFile: DriveSavedFileRecord,
+        cookie: String
+    ) async throws -> UCDownloadResult {
+        let playResult = try await personalPlayResultWaitingIfNeeded(
+            for: savedFile,
+            cookie: cookie
+        )
+        guard playResult.playbackRoute == DrivePlaybackRoute.ucSmartPlay else {
+            throw DriveEngineError.noDownloadURL(savedFile.originalName)
         }
         return playResult
     }

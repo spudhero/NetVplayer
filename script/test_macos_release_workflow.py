@@ -86,10 +86,10 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             info = plistlib.load(handle)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertEqual(info["CFBundleShortVersionString"], "1.0.7")
-        self.assertEqual(info["CFBundleVersion"], "8")
-        self.assertIn("NetVplayer 1.0.7", readme)
-        self.assertIn("current 1.0.7 release", readme)
+        self.assertEqual(info["CFBundleShortVersionString"], "1.0.8")
+        self.assertEqual(info["CFBundleVersion"], "9")
+        self.assertIn("NetVplayer 1.0.8", readme)
+        self.assertIn("current 1.0.8 release", readme)
 
 
 if __name__ == "__main__":

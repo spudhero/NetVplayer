@@ -308,7 +308,7 @@ public final class UCShareExtractor: SourceExtractorProtocol {
     private func probeTVOriginalLink(_ link: CloudDriveLink) async throws -> TVOriginalProbe {
         var headers = playbackHeaders(from: link.headers)
         headers["Accept"] = "*/*"
-        headers["Range"] = "bytes=0-4194303"
+        headers["Range"] = "bytes=0-0"
 
         let response = try await httpClient.request(
             url: link.url,

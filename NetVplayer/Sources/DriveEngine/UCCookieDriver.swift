@@ -65,16 +65,15 @@ public final class UCCookieDriver: @unchecked Sendable {
             throw DriveEngineError.noPlayableFile(selected.file.name)
         }
 
-        let personalLink = try await savedPersonalLink(
+        let personal = try await savedPersonalLink(
             for: selected,
             share: share,
             cookie: accountCookie
         )
         return await attachingPersonalTranscodeFallback(
-            to: personalLink,
-            selected: selected,
-            share: share,
-            cookie: personalLink.updatedCredential?.secret ?? accountCookie
+            to: personal.link,
+            savedFile: personal.result.savedFile,
+            cookie: personal.result.updatedCookie
         )
     }
 
@@ -94,7 +93,11 @@ public final class UCCookieDriver: @unchecked Sendable {
         return .cookie(provider: .uc, value: updatedCookie)
     }
 
-    private func savedPersonalLink(for selected: UCPlayableFile, share: UCShareRequest, cookie: String) async throws -> CloudDriveLink {
+    private func savedPersonalLink(
+        for selected: UCPlayableFile,
+        share: UCShareRequest,
+        cookie: String
+    ) async throws -> (link: CloudDriveLink, result: UCDownloadResult) {
         guard selected.file.isPlayableVideo else {
             throw DriveEngineError.noPlayableFile(selected.file.name)
         }
@@ -102,7 +105,7 @@ public final class UCCookieDriver: @unchecked Sendable {
         guard let savedURL = savedResult.url, !savedURL.isEmpty else {
             throw DriveEngineError.noDownloadURL(selected.file.name)
         }
-        return personalDownloadLink(
+        let link = personalDownloadLink(
             url: savedURL,
             cookie: savedResult.updatedCookie,
             metadata: savedResult.savedFile?.playbackMetadata(provider: .uc) ?? [:],
@@ -113,22 +116,22 @@ public final class UCCookieDriver: @unchecked Sendable {
             selectedReason: savedResult.selectedReason,
             candidateSummary: savedResult.candidateSummary
         )
+        return (link, savedResult)
     }
 
     private func attachingPersonalTranscodeFallback(
         to originalLink: CloudDriveLink,
-        selected: UCPlayableFile,
-        share: UCShareRequest,
+        savedFile: DriveSavedFileRecord?,
         cookie: String
     ) async -> CloudDriveLink {
         guard originalLink.metadata[DrivePlaybackMetadataKey.route] == DrivePlaybackRoute.ucOriginalProxy else {
             return originalLink
         }
+        guard let savedFile else { return originalLink }
 
         do {
             let fallbackLink = try await savedPersonalTranscodeLink(
-                for: selected,
-                share: share,
+                for: savedFile,
                 cookie: cookie
             )
             return attachingFallbackLink(fallbackLink, to: originalLink)
@@ -178,22 +181,20 @@ public final class UCCookieDriver: @unchecked Sendable {
     }
 
     private func savedPersonalTranscodeLink(
-        for selected: UCPlayableFile,
-        share: UCShareRequest,
+        for savedFile: DriveSavedFileRecord,
         cookie: String
     ) async throws -> CloudDriveLink {
         let savedResult = try await client.fetchSavedPersonalPlayURLResult(
-            for: selected,
-            share: share,
+            for: savedFile,
             cookie: cookie
         )
         guard let savedURL = savedResult.url, !savedURL.isEmpty else {
-            throw DriveEngineError.noDownloadURL(selected.file.name)
+            throw DriveEngineError.noDownloadURL(savedFile.originalName)
         }
         return personalDownloadLink(
             url: savedURL,
             cookie: savedResult.updatedCookie,
-            metadata: savedResult.savedFile?.playbackMetadata(provider: .uc) ?? [:],
+            metadata: savedFile.playbackMetadata(provider: .uc),
             userAgent: savedResult.playbackUserAgent,
             route: DrivePlaybackRoute.personalTranscode,
             selectedReason: savedResult.selectedReason,

@@ -260,6 +260,9 @@ final class AppState: ObservableObject {
     func beginPlayerDismissalReturningToDetail() {
         playerDismissalDetailTask?.cancel()
         isDetailReturnPendingAfterPlayerExit = detailVod != nil
+        DiagnosticLog.write(
+            "[VOD_PLAYER_EXIT] stage=begin hasDetail=\(detailVod != nil) returnPending=\(isDetailReturnPendingAfterPlayerExit)"
+        )
         isDetailPresented = false
         isPlayerPresented = false
         playerDismissalDetailTask = Task { @MainActor [weak self] in
@@ -270,12 +273,21 @@ final class AppState: ObservableObject {
     }
 
     func completePlayerDismissalPresentation() {
-        guard isDetailReturnPendingAfterPlayerExit else { return }
+        guard isDetailReturnPendingAfterPlayerExit else {
+            DiagnosticLog.write("[VOD_PLAYER_EXIT] stage=complete returnPending=false")
+            return
+        }
         playerDismissalDetailTask?.cancel()
         playerDismissalDetailTask = nil
         isDetailReturnPendingAfterPlayerExit = false
-        guard !isPlayerPresented, detailVod != nil else { return }
+        guard !isPlayerPresented, detailVod != nil else {
+            DiagnosticLog.write(
+                "[VOD_PLAYER_EXIT] stage=complete restored=false playerPresented=\(isPlayerPresented) hasDetail=\(detailVod != nil)"
+            )
+            return
+        }
         isDetailPresented = true
+        DiagnosticLog.write("[VOD_PLAYER_EXIT] stage=complete restored=true")
     }
 
     @Published var cloudAuthRequest: CloudAuthRequest?
@@ -1818,7 +1830,9 @@ final class AppState: ObservableObject {
 
     /// 搜索结果已确定目标站点，只重置旧目录并直接加载详情，避免等待无关的首页请求。
     func openSearchResultVod(_ vod: Vod, from site: Site) async {
-        activateSite(site)
+        if activeSite?.key != site.key {
+            activateSite(site)
+        }
         await selectVod(vod)
     }
 

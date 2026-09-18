@@ -870,6 +870,47 @@ actor RemoteStreamBuffer {
         return proxyResponse(from: cached, requestedRange: requestedRange, method: .GET)
     }
 
+    func parallelContinuousChunk(
+        for requestedRange: RemoteStreamRange,
+        fetch: @escaping @Sendable (RemoteStreamRange) async throws -> RemoteStreamChunk
+    ) async throws -> RemoteStreamChunk {
+        if let cached = assembledCachedChunk(containing: requestedRange) {
+            DiagnosticLog.write("[REMOTE_STREAM_CONTINUOUS_CACHE_HIT] id=\(id), range=\(requestedRange.headerValue)")
+            return cached
+        }
+
+        if let marker = inFlight[requestedRange] {
+            let chunk = try await marker.task.value
+            store(chunk, prefetch: false)
+            return assembledCachedChunk(containing: requestedRange) ?? chunk
+        }
+
+        let task = Task<RemoteStreamChunk, Error> {
+            try await fetch(requestedRange)
+        }
+        let marker = RemoteStreamInFlight(
+            id: UUID(),
+            generation: generation,
+            kind: .demand,
+            task: task
+        )
+        inFlight[requestedRange] = marker
+
+        do {
+            let chunk = try await task.value
+            if inFlight[requestedRange]?.id == marker.id {
+                inFlight.removeValue(forKey: requestedRange)
+            }
+            store(chunk, prefetch: false)
+            return assembledCachedChunk(containing: requestedRange) ?? chunk
+        } catch {
+            if inFlight[requestedRange]?.id == marker.id {
+                inFlight.removeValue(forKey: requestedRange)
+            }
+            throw error
+        }
+    }
+
     func storeContinuousChunk(_ chunk: RemoteStreamChunk) {
         if isSeek(from: activeStart, to: chunk.range.start) {
             cancelPrefetch(except: [])
@@ -1844,6 +1885,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         responseState: ContinuousRemoteStreamResponseState
     ) async throws {
         let segmentSize = stream.parallelUpstreamSegmentSize
+        let startupSegmentSize = min(segmentSize, 64 * 1024)
         let concurrency = stream.parallelUpstreamConcurrency
         let startedAt = Date()
         var deliveredBytes: Int64 = 0
@@ -1855,24 +1897,21 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         func scheduleAvailableSegments(totalLength: Int64) {
             while inFlight.count < concurrency, nextScheduleStart < totalLength {
                 let start = nextScheduleStart
-                let end = min(totalLength - 1, start + segmentSize - 1)
+                let scheduledSegmentSize = start == requestedStart ? startupSegmentSize : segmentSize
+                let end = min(totalLength - 1, start + scheduledSegmentSize - 1)
                 let range = RemoteStreamRange(start: start, end: end)
                 inFlight[start] = Task {
-                    try await self.fetchRemoteStreamChunkWithRetry(
-                        stream: stream,
-                        range: range,
-                        ifRange: nil,
-                        kind: .demand,
-                        useCurl: stream.parallelUpstreamUsesCurl
-                    )
+                    try await stream.buffer.parallelContinuousChunk(for: range) { requestedRange in
+                        try await self.fetchRemoteStreamChunkWithRetry(
+                            stream: stream,
+                            range: requestedRange,
+                            ifRange: nil,
+                            kind: .demand,
+                            useCurl: stream.parallelUpstreamUsesCurl
+                        )
+                    }
                 }
                 nextScheduleStart = end + 1
-            }
-        }
-
-        defer {
-            for task in inFlight.values {
-                task.cancel()
             }
         }
 

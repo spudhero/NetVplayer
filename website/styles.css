@@ -257,10 +257,13 @@ main {
 }
 
 .hero,
+.origin-section,
 .feature-section,
 .content-section,
 .theme-section,
+.install-section,
 .security-section,
+.faq-section,
 .open-source-section {
   padding-inline: 24px;
 }
@@ -280,15 +283,22 @@ main {
 
 .hero-copy,
 .section-heading,
+.origin-inner,
+.origin-facts,
 .product-stage,
 .wide-media,
 .feature-notes,
 .experience-showcase,
 .content-capabilities,
 .theme-showcase,
+.install-compatibility,
+.install-steps,
+.extension-support-guide,
+.first-run,
 .boundary-note,
 .verification-chain,
 .privacy-statement,
+.faq-list,
 .open-source-inner,
 .footer-inner {
   width: min(100%, var(--content-width));
@@ -451,6 +461,81 @@ h2 {
   margin: 28px auto 0;
 }
 
+.origin-section {
+  padding-top: 112px;
+  padding-bottom: 112px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.origin-inner {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 88px;
+  align-items: start;
+}
+
+.origin-heading h2 {
+  max-width: 660px;
+  font-size: 64px;
+}
+
+.origin-copy {
+  padding-top: 38px;
+}
+
+.origin-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.7;
+}
+
+.origin-copy p + p {
+  margin-top: 22px;
+}
+
+.origin-copy .origin-lead {
+  color: var(--fg);
+  font-family: var(--display-font);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.origin-disclaimer {
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+}
+
+.origin-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 72px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.origin-facts div {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px 28px;
+}
+
+.origin-facts div + div {
+  border-left: 1px solid var(--border);
+}
+
+.origin-facts dt {
+  color: var(--muted);
+}
+
+.origin-facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+
 .wide-media {
   margin-top: clamp(54px, 8vw, 96px);
 }
@@ -523,6 +608,163 @@ h2 {
 
 .theme-section .theme-showcase {
   margin-top: 48px;
+}
+
+.install-section {
+  padding-top: 120px;
+  padding-bottom: 120px;
+}
+
+.install-compatibility {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-width: 860px;
+  margin-top: 64px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.install-compatibility div {
+  display: grid;
+  gap: 7px;
+  padding: 22px 30px;
+  text-align: center;
+}
+
+.install-compatibility div + div {
+  border-left: 1px solid var(--border);
+}
+
+.install-compatibility dt {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.install-compatibility dd {
+  margin: 0;
+  font-family: var(--display-font);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.install-steps {
+  max-width: 940px;
+  margin-top: 64px;
+  padding: 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.install-steps li {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 24px;
+  padding: 30px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.install-step-number {
+  padding-top: 3px;
+  color: var(--accent);
+  font-family: var(--mono-font);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.install-steps strong {
+  display: block;
+  font-family: var(--display-font);
+  font-size: 24px;
+}
+
+.install-steps p {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 17px;
+}
+
+code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--surface);
+  font-family: var(--mono-font);
+  font-size: 0.9em;
+}
+
+.first-run {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 64px;
+  max-width: 940px;
+  margin-top: 72px;
+  padding: 36px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.extension-support-guide {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.55fr);
+  gap: 48px;
+  align-items: center;
+  margin-top: 88px;
+}
+
+.extension-support-media {
+  margin: 0;
+}
+
+.extension-support-image-link {
+  display: block;
+  cursor: zoom-in;
+}
+
+.extension-support-media img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #14111f;
+  box-shadow: 0 24px 70px rgba(28, 25, 40, 0.14);
+}
+
+.extension-support-media figcaption {
+  margin-top: 13px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.extension-support-copy h3 {
+  margin: 0;
+  font-family: var(--display-font);
+  font-size: 34px;
+  line-height: 1.25;
+}
+
+.extension-support-copy p:not(.eyebrow) {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+.first-run h3 {
+  margin: 0;
+  font-family: var(--display-font);
+  font-size: 36px;
+}
+
+.first-run p:last-child {
+  max-width: 660px;
+  margin: 16px 0 0;
+  color: var(--muted);
+}
+
+.first-run .button {
+  white-space: nowrap;
 }
 
 .experience-picker,
@@ -719,6 +961,66 @@ h2 {
   color: var(--muted);
 }
 
+.faq-section {
+  padding-top: 120px;
+  padding-bottom: 120px;
+}
+
+.faq-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 48px;
+  max-width: 1040px;
+  margin-top: 64px;
+  border-top: 1px solid var(--border);
+}
+
+.faq-list details {
+  border-bottom: 1px solid var(--border);
+}
+
+.faq-list summary {
+  position: relative;
+  min-height: 72px;
+  padding: 24px 40px 22px 0;
+  cursor: pointer;
+  font-family: var(--display-font);
+  font-size: 19px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.faq-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-list summary::after {
+  content: "+";
+  position: absolute;
+  top: 21px;
+  right: 4px;
+  color: var(--accent);
+  font-family: var(--mono-font);
+  font-size: 22px;
+  font-weight: 400;
+}
+
+.faq-list details[open] summary::after {
+  content: "−";
+}
+
+.faq-list details[open] summary {
+  color: var(--accent-hover);
+}
+
+.faq-list details p {
+  margin: 0;
+  padding: 0 32px 26px 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
 .open-source-section {
   display: grid;
   align-items: center;
@@ -868,6 +1170,20 @@ h2 {
     gap: 42px 0;
   }
 
+  .origin-inner {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+
+  .origin-copy {
+    max-width: 760px;
+    padding-top: 0;
+  }
+
+  .extension-support-guide {
+    grid-template-columns: 1fr;
+  }
+
   .verification-chain li:nth-child(4)::after {
     display: none;
   }
@@ -884,6 +1200,10 @@ h2 {
   .site-footer p {
     grid-column: 1 / -1;
     grid-row: 2;
+  }
+
+  .faq-list {
+    gap: 0 34px;
   }
 }
 
@@ -969,10 +1289,13 @@ h2 {
   }
 
   .hero,
+  .origin-section,
   .feature-section,
   .content-section,
   .theme-section,
+  .install-section,
   .security-section,
+  .faq-section,
   .open-source-section {
     padding-inline: 20px;
   }
@@ -1017,6 +1340,71 @@ h2 {
 
   h2 {
     font-size: 44px;
+  }
+
+  .origin-section,
+  .install-section,
+  .faq-section {
+    padding-top: 76px;
+    padding-bottom: 76px;
+  }
+
+  .origin-heading h2 {
+    font-size: 44px;
+  }
+
+  .origin-copy .origin-lead {
+    font-size: 21px;
+  }
+
+  .origin-facts,
+  .install-compatibility {
+    grid-template-columns: 1fr;
+  }
+
+  .origin-facts div,
+  .install-compatibility div {
+    padding-inline: 0;
+  }
+
+  .origin-facts div + div,
+  .install-compatibility div + div {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .install-compatibility div {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    text-align: left;
+  }
+
+  .install-steps li {
+    grid-template-columns: 46px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .first-run {
+    grid-template-columns: 1fr;
+    gap: 30px;
+  }
+
+  .extension-support-guide {
+    gap: 28px;
+    margin-top: 64px;
+  }
+
+  .extension-support-copy h3 {
+    font-size: 28px;
+  }
+
+  .first-run .button {
+    width: 100%;
+  }
+
+  .faq-list {
+    grid-template-columns: 1fr;
+    gap: 0;
   }
 
   .hero-tagline {

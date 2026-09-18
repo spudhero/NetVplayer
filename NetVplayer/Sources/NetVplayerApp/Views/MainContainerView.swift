@@ -141,7 +141,8 @@ struct MainContainerView: View {
         appState.saveCurrentPlaybackProgress()
         appState.cleanupDrivePlaybackIfNeeded(spec: appState.playerState.currentSpec)
         MPVPlayerEngine.vod.stop()
-        appState.isPlayerPresented = false
+        DiagnosticLog.write("[VOD_PLAYER_EXIT] action=window-close")
+        appState.beginPlayerDismissalReturningToDetail()
     }
 }
 
