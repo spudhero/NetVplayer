@@ -17,6 +17,9 @@ import zipfile
 from prepare_provider_runtimes import fetch_artifact, sha256
 
 
+MACOS_DEPLOYMENT_TARGET = "14.0"
+
+
 ARCHITECTURE_ALIASES = {
     "arm64": "arm64",
     "aarch64": "arm64",
@@ -115,6 +118,7 @@ def warm_runtime_bootstrap(executable: Path, output: Path) -> Path | None:
     with tempfile.TemporaryDirectory(prefix="netvplayer-quickjs-bootstrap-") as temporary:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary
+        environment["MACOSX_DEPLOYMENT_TARGET"] = MACOS_DEPLOYMENT_TARGET
         result = subprocess.run(
             ["/bin/sh", str(executable), "-e", "console.log('quickjs-bootstrap')"],
             check=False,

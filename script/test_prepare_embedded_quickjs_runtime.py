@@ -53,6 +53,7 @@ class EmbeddedQuickJSRuntimePreparationTests(unittest.TestCase):
             self.assertTrue((output / "bin/qjs-cosmo").is_file())
             self.assertTrue((output / "LICENSE").is_file())
             self.assertTrue((output / "runtime-manifest.json").is_file())
+            self.assertEqual(run.call_args_list[0].kwargs["env"]["MACOSX_DEPLOYMENT_TARGET"], "14.0")
             self.assertEqual(run.call_args.args[0][:2], ["/bin/sh", str(output / "bin/qjs")])
 
 
