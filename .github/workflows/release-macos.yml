@@ -30,7 +30,7 @@ jobs:
           runtime_root="$RUNNER_TEMP/libmpv-runtime"
           runtime_bundle="$runtime_root/NetVplayer.app"
           runtime_host="$runtime_bundle/Contents/MacOS/RuntimeHost"
-          mkdir -p "$(dirname "$runtime_host")"
+          mkdir -p "$(dirname "$runtime_host")" "$runtime_bundle/Contents/Resources"
           xcrun clang -target arm64-apple-macos14.0 -x c -o "$runtime_host" - <<'EOF'
           int main(void) { return 0; }
           EOF

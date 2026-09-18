@@ -36,6 +36,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             "libmpv-runtime:",
             "runs-on: macos-14",
             "xcrun clang -target arm64-apple-macos14.0",
+            'mkdir -p "$(dirname "$runtime_host")" "$runtime_bundle/Contents/Resources"',
             "libmpv-runtime-macos14-arm64",
             "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
             "NETVPLAYER_LIBMPV_RUNTIME_BUNDLE",
