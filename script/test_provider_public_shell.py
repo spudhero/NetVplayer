@@ -132,6 +132,7 @@ def main() -> int:
             "script/test_validate_provider_release.py",
             "script/test_validate_provider_sandbox.py",
             "script/test_prepare_provider_runtimes.py",
+            "script/test_prepare_embedded_quickjs_runtime.py",
             "script/test_validate_provider_trust_inputs.py",
             "script/test_audit_provider_public_boundary.py",
             "script/test_audit_provider_public_release.py",
