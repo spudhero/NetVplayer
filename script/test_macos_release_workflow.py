@@ -31,6 +31,21 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             self.workflow,
         )
 
+    def test_release_prepares_libmpv_on_the_oldest_supported_macos(self) -> None:
+        required = (
+            "libmpv-runtime:",
+            "runs-on: macos-14-arm64",
+            "xcrun clang -target arm64-apple-macos14.0",
+            "libmpv-runtime-macos14-arm64",
+            "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+            "NETVPLAYER_LIBMPV_RUNTIME_BUNDLE",
+            "validate_macos_compatibility.py",
+            "--maximum-version 14.0",
+        )
+        for fragment in required:
+            self.assertIn(fragment, self.workflow)
+        self.assertIn("needs: libmpv-runtime", self.workflow)
+
     def test_release_builds_and_rechecks_the_extracted_public_app(self) -> None:
         required = (
             "build_and_run.sh --package-public",
@@ -68,10 +83,10 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             info = plistlib.load(handle)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertEqual(info["CFBundleShortVersionString"], "1.0.6")
-        self.assertEqual(info["CFBundleVersion"], "7")
-        self.assertIn("NetVplayer 1.0.6", readme)
-        self.assertIn("current 1.0.6 release", readme)
+        self.assertEqual(info["CFBundleShortVersionString"], "1.0.7")
+        self.assertEqual(info["CFBundleVersion"], "8")
+        self.assertIn("NetVplayer 1.0.7", readme)
+        self.assertIn("current 1.0.7 release", readme)
 
 
 if __name__ == "__main__":

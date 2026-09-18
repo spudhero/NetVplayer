@@ -30,12 +30,13 @@
 
 ### 原生 macOS 媒体播放器
 
-NetVplayer 1.0.6 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+NetVplayer 1.0.7 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
 
-### 1.0.6 播放修复
+### 1.0.7 兼容性修复
 
-- 签名 Provider 返回网页播放器壳时，应用会先解析并验证真实 HLS，再把媒体交给本地清单代理和 libmpv；HTTP 200 HTML 不再被当成视频格式。
-- 海绵保留原有 6 个业务分类和筛选，并把 catalog 的不透明影片身份按标题与海报精确映射到无验证码播放库；播放验收要求清单总时长超过 120 秒，11 秒升级提示片不会再通过门禁，也不会再弹出滑块页。
+- 内嵌 libmpv 及其依赖现在由 macOS 14 ARM 构建任务独立产出，macOS 14/15 不再因发布机版本过高而无法加载播放器。
+- Provider 安全启动器显式以 macOS 14 为部署目标构建；Java 数据源兼容包可以在受支持系统上自动下载、验证并启用。
+- 发布流程会检查最终 App、动态库和 Provider 启动器的真实最低系统版本；高于公开兼容范围的产物会直接阻断发布。
 
 你可以添加自己的兼容配置、WebDAV、AList/OpenList 或受支持的云盘账号。全新安装保持空白，直到用户主动添加内容入口；已保存的配置可以在后续启动时恢复。
 
@@ -150,12 +151,13 @@ NetVplayer 与 FongMi/TV 没有隶属或官方合作关系。NetVplayer 使用�
 
 ### A native media player for macOS
 
-NetVplayer 1.0.6 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+NetVplayer 1.0.7 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
 
-### Playback fixes in 1.0.6
+### Compatibility fixes in 1.0.7
 
-- When a signed Provider returns an HTML player shell, NetVplayer resolves and validates the actual HLS media before handing it to the local playlist relay and libmpv. An HTTP 200 HTML page is no longer treated as video.
-- Hmys keeps its six catalog categories and filters, then maps opaque catalog identities to the no-challenge playback catalog by exact title and poster filename. Release verification requires a playlist longer than 120 seconds, so the 11-second upgrade advisory cannot pass as episode media or trigger a slider sheet.
+- The embedded libmpv runtime is now produced separately on macOS 14 ARM, preventing macOS 14/15 from receiving libraries that require the newer release runner.
+- Provider sandbox launchers explicitly target macOS 14, allowing the Java compatibility package to download, verify, and activate on supported systems.
+- Release checks now inspect the actual deployment target of every packaged app binary, dynamic library, and Provider launcher and reject incompatible artifacts.
 
 You can add your own compatible configuration, WebDAV, AList/OpenList, or supported cloud-drive account. A fresh installation stays empty until the user adds an entry point. Saved configurations can be restored on later launches.
 
@@ -200,7 +202,7 @@ Start with the [Provider SDK development guide](provider-sdk/README.md), which r
 
 ### Download and build
 
-The current 1.0.6 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The current 1.0.7 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
 
 Building from source requires Xcode and the Homebrew libmpv dependencies:
 

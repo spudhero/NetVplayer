@@ -53,7 +53,9 @@ def public_fixture(root: Path) -> Path:
     )
     for name in (
         "build_provider_sandbox_launcher.py",
+        "validate_macos_compatibility.py",
         "validate_provider_sandbox.py",
+        "test_validate_macos_compatibility.py",
         "test_provider_app_sandbox.py",
     ):
         (repo / "script" / name).write_text("# fixture\n", encoding="utf-8")

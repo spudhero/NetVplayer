@@ -24,7 +24,9 @@ REQUIRED_FILES = (
     ".github/workflows/release-macos.yml",
     "docs/data/provider-public-boundary-v1.json",
     "script/build_provider_sandbox_launcher.py",
+    "script/validate_macos_compatibility.py",
     "script/validate_provider_sandbox.py",
+    "script/test_validate_macos_compatibility.py",
     "script/test_provider_app_sandbox.py",
 )
 INTERNAL_ONLY_FILES = (

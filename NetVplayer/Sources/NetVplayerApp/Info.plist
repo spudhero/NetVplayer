@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.6</string>
+    <string>1.0.7</string>
     <key>CFBundleVersion</key>
-    <string>7</string>
+    <string>8</string>
     <key>NetVplayerFeedbackRepositoryURL</key>
     <string>https://github.com/spudhero/NetVplayer</string>
     <key>NSAppTransportSecurity</key>

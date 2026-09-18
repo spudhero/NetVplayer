@@ -13,14 +13,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from build_provider_sandbox_launcher import (
     COMMUNITY_ADHOC_RELEASE_PROFILE,
+    DEFAULT_MACOS_MINIMUM_VERSION,
     DEVELOPER_ID_RELEASE_PROFILE,
     build_bundle,
+    compile_launcher,
     signature_scope_errors,
 )
+from validate_macos_compatibility import inspect_macho, version_parts
 from validate_provider_sandbox import validate
 
 
 class ProviderSandboxValidationTests(unittest.TestCase):
+    def test_launcher_compiler_pins_the_declared_macos_target(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="netvplayer-sandbox-target-") as temporary:
+            root = Path(temporary)
+            source = root / "main.swift"
+            output = root / "ProviderSandboxLauncher"
+            source.write_text("import Foundation\nprint(\"ok\")\n")
+            compile_launcher(source, output, "arm64", root / "ModuleCache")
+            versions = inspect_macho(output)
+            self.assertTrue(versions)
+            self.assertTrue(all(
+                version_parts(version) <= version_parts(DEFAULT_MACOS_MINIMUM_VERSION)
+                for version in versions
+            ))
+
     def build_fixture(self, root: Path, provider_id: str = "fixture.sandbox") -> dict[str, object]:
         launcher = root / "launcher"
         shutil.copyfile("/usr/bin/true", launcher)

@@ -17,8 +17,8 @@ struct BuildRunPackagingTests {
             contentsOf: packageRoot.appendingPathComponent("script/build_and_run.sh"), encoding: .utf8
         )
 
-        #expect(info["CFBundleShortVersionString"] as? String == "1.0.6")
-        #expect(info["CFBundleVersion"] as? String == "7")
+        #expect(info["CFBundleShortVersionString"] as? String == "1.0.7")
+        #expect(info["CFBundleVersion"] as? String == "8")
         #expect(buildScript.contains("APP_VERSION=\"$(plutil -extract CFBundleShortVersionString"))
         #expect(buildScript.contains("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
         #expect(buildScript.contains("^[1-9][0-9]*$"))
@@ -163,6 +163,14 @@ struct BuildRunPackagingTests {
         #expect(vendorScript.contains("COPIED_SOURCE_RECORDS"))
         #expect(vendorScript.contains("--mapping \"$SOURCE_MAPPING\""))
         #expect(vendorScript.contains("--fallback-root \"$LICENSE_FALLBACK_ROOT\""))
+        #expect(vendorScript.contains("NETVPLAYER_LIBMPV_RUNTIME_BUNDLE"))
+        #expect(vendorScript.contains("copy_prepared_runtime"))
+        let shim = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/MPVShim/MPVShim.c"),
+            encoding: .utf8
+        )
+        #expect(shim.contains("dlerror()"))
+        #expect(!shim.contains("未找到 libmpv.2.dylib"))
         #expect(buildScript.contains("--app-bundle \"$STAGING_APP_BUNDLE\""))
         #expect(buildScript.contains("--audit-only"))
     }

@@ -15,6 +15,7 @@ from build_provider_sandbox_launcher import (
     signature_scope_errors,
     state_write_path,
 )
+from validate_macos_compatibility import inspect_macho, version_parts
 
 
 ALLOWED_ENTITLEMENTS = {
@@ -106,6 +107,19 @@ def validate(
         errors.append("sandbox Info.plist bundle identifier mismatch")
     if info.get("CFBundleExecutable") != launcher.name:
         errors.append("sandbox Info.plist executable mismatch")
+    declared_macos = manifest.get("macos_min_version")
+    if isinstance(declared_macos, str):
+        if info.get("LSMinimumSystemVersion") != declared_macos:
+            errors.append("sandbox Info.plist minimum macOS version mismatch")
+        try:
+            launcher_versions = inspect_macho(launcher)
+            if any(version_parts(version) > version_parts(declared_macos) for version in launcher_versions):
+                errors.append(
+                    "sandbox launcher requires macOS "
+                    f"{max(launcher_versions, key=version_parts)}, above declared {declared_macos}"
+                )
+        except ValueError as error:
+            errors.append(f"sandbox launcher compatibility is invalid: {error}")
 
     verified = subprocess.run(
         [

@@ -14,6 +14,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from validate_provider_package import extract_archive, validate_package
+from build_provider_sandbox_launcher import compile_launcher
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,8 +65,12 @@ class ProviderPackageTests(unittest.TestCase):
         )
         archive = root / "fixture.zip"
         launcher = root / "ProviderSandboxLauncher"
-        shutil.copyfile("/usr/bin/true", launcher)
-        launcher.chmod(0o755)
+        compile_launcher(
+            ROOT / "NetVplayer/Sources/ProviderSandboxLauncher/main.swift",
+            launcher,
+            "arm64",
+            root / "LauncherModuleCache",
+        )
         subprocess.run(
             [
                 "python3", str(BUILDER),
@@ -172,8 +177,12 @@ class ProviderPackageTests(unittest.TestCase):
             )
             archive = root / "quickjs-fixture.zip"
             launcher = root / "ProviderSandboxLauncher"
-            shutil.copyfile("/usr/bin/true", launcher)
-            launcher.chmod(0o755)
+            compile_launcher(
+                ROOT / "NetVplayer/Sources/ProviderSandboxLauncher/main.swift",
+                launcher,
+                "arm64",
+                root / "LauncherModuleCache",
+            )
             subprocess.run([
                 "python3", str(BUILDER),
                 "--source", str(source),

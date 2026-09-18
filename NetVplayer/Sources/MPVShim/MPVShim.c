@@ -90,7 +90,7 @@ static int executable_framework_path(char *buffer, size_t length) {
     return 1;
 }
 
-static void *load_library(char *loaded_path, size_t length) {
+static void *load_library(char *loaded_path, size_t length, char *error, size_t error_length) {
     const char *env = getenv("NETVPLAYER_LIBMPV_PATH");
     const char *paths[6] = {0};
     char bundled[PATH_MAX] = {0};
@@ -106,10 +106,15 @@ static void *load_library(char *loaded_path, size_t length) {
     paths[index++] = "/usr/local/opt/mpv/lib/libmpv.2.dylib";
 
     for (int i = 0; i < index; i++) {
+        dlerror();
         void *handle = dlopen(paths[i], RTLD_NOW | RTLD_LOCAL);
         if (handle) {
             snprintf(loaded_path, length, "%s", paths[i]);
             return handle;
+        }
+        const char *reason = dlerror();
+        if (reason && reason[0] && !error[0]) {
+            snprintf(error, error_length, "%s: %s", paths[i], reason);
         }
     }
     return NULL;
@@ -148,9 +153,16 @@ NVMPVContext *nv_mpv_create(void) {
     NVMPVContext *context = calloc(1, sizeof(NVMPVContext));
     if (!context) { return NULL; }
 
-    context->library = load_library(context->loaded_path, sizeof(context->loaded_path));
+    context->library = load_library(
+        context->loaded_path,
+        sizeof(context->loaded_path),
+        context->last_error,
+        sizeof(context->last_error)
+    );
     if (!context->library) {
-        set_error(context, "未找到 libmpv.2.dylib，请先运行打包脚本内置 libmpv，或安装 Homebrew mpv。");
+        if (!context->last_error[0]) {
+            set_error(context, "无法加载 libmpv.2.dylib，发布包可能不完整。");
+        }
         return context;
     }
     if (!load_symbols(context->library, context)) {

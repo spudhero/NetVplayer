@@ -18,6 +18,33 @@ LAUNCHER_RELATIVE_PATH = "Sandbox/ProviderSandboxLauncher.app/Contents/MacOS/Pro
 COMMUNITY_ADHOC_RELEASE_PROFILE = "community-adhoc"
 DEVELOPER_ID_RELEASE_PROFILE = "developer-id"
 RELEASE_PROFILES = (COMMUNITY_ADHOC_RELEASE_PROFILE, DEVELOPER_ID_RELEASE_PROFILE)
+DEFAULT_MACOS_MINIMUM_VERSION = "14.0"
+
+
+def compile_launcher(
+    source: Path,
+    output: Path,
+    architecture: str,
+    module_cache: Path,
+    minimum_macos_version: str = DEFAULT_MACOS_MINIMUM_VERSION,
+) -> None:
+    if architecture not in {"arm64", "x86_64"}:
+        raise ValueError(f"unsupported Provider launcher architecture: {architecture}")
+    subprocess.run(
+        [
+            "xcrun",
+            "swiftc",
+            str(source.resolve(strict=True)),
+            "-target",
+            f"{architecture}-apple-macos{minimum_macos_version}",
+            "-module-cache-path",
+            str(module_cache),
+            "-O",
+            "-o",
+            str(output),
+        ],
+        check=True,
+    )
 
 
 def validate_release_profile(release_profile: str, codesign_identity: str) -> str:
@@ -100,7 +127,7 @@ def build_bundle(
         "CFBundleShortVersionString": "1.0",
         "CFBundleVersion": "1",
         "LSBackgroundOnly": True,
-        "LSMinimumSystemVersion": "14.0",
+        "LSMinimumSystemVersion": DEFAULT_MACOS_MINIMUM_VERSION,
     }
     with (output / "Contents" / "Info.plist").open("wb") as handle:
         plistlib.dump(info, handle, sort_keys=True)

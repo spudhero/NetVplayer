@@ -72,6 +72,8 @@ def compile_launcher(destination: Path) -> Path:
             "xcrun",
             "swiftc",
             str(PACKAGE_ROOT / "Sources/ProviderSandboxLauncher/main.swift"),
+            "-target",
+            f"{platform.machine()}-apple-macos14.0",
             "-module-cache-path",
             str(destination.parent / "ModuleCache"),
             "-O",
