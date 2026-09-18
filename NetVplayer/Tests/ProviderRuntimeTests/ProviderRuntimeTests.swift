@@ -3690,7 +3690,7 @@ private extension ProviderInstallPhase {
                 requestID: cancelID,
                 providerID: manifest.providerID,
                 operation: .search,
-                arguments: ["delay": .number(0.1)]
+                arguments: ["delay": .number(2.0)]
             ),
             timeout: .seconds(2)
         )
