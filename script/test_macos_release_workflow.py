@@ -34,7 +34,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
     def test_release_prepares_libmpv_on_the_oldest_supported_macos(self) -> None:
         required = (
             "libmpv-runtime:",
-            "runs-on: macos-14-arm64",
+            "runs-on: macos-14",
             "xcrun clang -target arm64-apple-macos14.0",
             "libmpv-runtime-macos14-arm64",
             "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
@@ -45,6 +45,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         for fragment in required:
             self.assertIn(fragment, self.workflow)
         self.assertIn("needs: libmpv-runtime", self.workflow)
+        self.assertNotIn("runs-on: macos-14-arm64", self.workflow)
 
     def test_release_builds_and_rechecks_the_extracted_public_app(self) -> None:
         required = (

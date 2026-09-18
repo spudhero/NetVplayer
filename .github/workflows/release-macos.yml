@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   libmpv-runtime:
-    runs-on: macos-14-arm64
+    runs-on: macos-14
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
