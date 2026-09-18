@@ -37,6 +37,8 @@ NetVplayer 1.0.7 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒�
 - 内嵌 libmpv 及其依赖现在由 macOS 14 ARM 构建任务独立产出，macOS 14/15 不再因发布机版本过高而无法加载播放器。
 - Provider 安全启动器显式以 macOS 14 为部署目标构建；Java 数据源兼容包可以在受支持系统上自动下载、验证并启用。
 - 发布流程会检查最终 App、动态库和 Provider 启动器的真实最低系统版本；高于公开兼容范围的产物会直接阻断发布。
+- 启动时会先恢复本机保存的数据源，Provider 网络更新继续在后台进行；若首次恢复确实缺少组件，同步完成后会自动重试。
+- UC 扫码确认后直接用官方 `service_ticket` 建立并验证个人盘 Cookie，不再依赖易受网页结构变化影响的单次 iframe 注入。
 
 你可以添加自己的兼容配置、WebDAV、AList/OpenList 或受支持的云盘账号。全新安装保持空白，直到用户主动添加内容入口；已保存的配置可以在后续启动时恢复。
 
@@ -158,6 +160,8 @@ NetVplayer 1.0.7 is a native macOS media player built with SwiftUI and an embedd
 - The embedded libmpv runtime is now produced separately on macOS 14 ARM, preventing macOS 14/15 from receiving libraries that require the newer release runner.
 - Provider sandbox launchers explicitly target macOS 14, allowing the Java compatibility package to download, verify, and activate on supported systems.
 - Release checks now inspect the actual deployment target of every packaged app binary, dynamic library, and Provider launcher and reject incompatible artifacts.
+- Saved data sources now restore before background Provider updates finish, with one automatic retry after synchronization when a required component was initially unavailable.
+- UC QR confirmation now exchanges the official `service_ticket` directly for a validated personal-drive Cookie instead of relying on a one-shot iframe bridge.
 
 You can add your own compatible configuration, WebDAV, AList/OpenList, or supported cloud-drive account. A fresh installation stays empty until the user adds an entry point. Saved configurations can be restored on later launches.
 

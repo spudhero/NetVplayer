@@ -362,7 +362,8 @@ final class AppState: ObservableObject {
         configResolver: ConfigResolver = .shared,
         storageManager: StorageManager = .shared,
         applicationLibraryPersistence: (any ApplicationLibraryPersistence)? = nil,
-        userPreferences: UserPreferences = .shared
+        userPreferences: UserPreferences = .shared,
+        providerRuntimeStartupOverride: (@MainActor @Sendable () async -> Void)? = nil
     ) {
         let resolvedLibraryPersistence = applicationLibraryPersistence ?? storageManager
         self.driveShareExpander = driveShareExpander
@@ -423,7 +424,14 @@ final class AppState: ObservableObject {
         self.sourceHygieneRules = SourceHygieneStore.shared.loadRules()
         self.selectedSearchSiteKeys = UserPreferences.shared.defaultSearchSiteKeys
 
-        if let providerRuntimeBootstrap {
+        if let providerRuntimeStartupOverride {
+            providerRuntimeBusy = true
+            providerRuntimeStatus = "正在检查 Provider 支持包"
+            providerRuntimeStartupTask = Task { @MainActor [weak self] in
+                await providerRuntimeStartupOverride()
+                self?.providerRuntimeBusy = false
+            }
+        } else if let providerRuntimeBootstrap {
             providerRuntimeBusy = true
             providerRuntimeStatus = "正在检查 Provider 支持包"
             let shouldDetectProviderProxy = startProxyServer
@@ -442,8 +450,16 @@ final class AppState: ObservableObject {
             if !savedURL.isEmpty {
                 let startupTask = providerRuntimeStartupTask
                 initialConfigTask = Task { @MainActor [weak self] in
-                    await startupTask?.value
-                    await self?.loadConfig(url: savedURL)
+                    guard let self else { return }
+                    await self.loadConfig(url: savedURL, waitForProviderRuntime: false)
+                    if let startupTask {
+                        await startupTask.value
+                        if !self.isConfigLoaded {
+                            await self.loadConfig(url: savedURL, waitForProviderRuntime: false)
+                        } else if self.vodError != nil {
+                            await self.loadHomeContent()
+                        }
+                    }
                 }
             }
         }
@@ -927,8 +943,14 @@ final class AppState: ObservableObject {
     }
 
     /// 加载配置
-    func loadConfig(url: String, persistUserConfig: Bool = true) async {
-        await providerRuntimeStartupTask?.value
+    func loadConfig(
+        url: String,
+        persistUserConfig: Bool = true,
+        waitForProviderRuntime: Bool = true
+    ) async {
+        if waitForProviderRuntime {
+            await providerRuntimeStartupTask?.value
+        }
         log("[DEBUG_LOGGER] 开始加载配置: \(url)")
         do {
             self.availableDepots = []

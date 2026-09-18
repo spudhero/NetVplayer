@@ -965,15 +965,30 @@ struct CloudAuthView: View {
     private func startUCWebLoginPolling(_ session: CloudAuthUCWebLoginSession) {
         ucWebLoginPollTask?.cancel()
         ucWebLoginPollTask = Task {
+            let client = CloudAuthUCWebLoginClient()
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if Task.isCancelled { return }
 
                 do {
-                    if let ticket = try await CloudAuthUCWebLoginClient().pollServiceTicket(token: session.token) {
+                    if let ticket = try await client.pollServiceTicket(token: session.token) {
                         await MainActor.run {
-                            ucWebLoginServiceTicket = ticket
+                            isWorking = true
                             statusMessage = "扫码已确认，正在登录 UC 网盘并验证个人盘账户..."
+                        }
+                        do {
+                            let cookie = try await client.exchangeServiceTicketForCookie(ticket)
+                            await MainActor.run {
+                                webCookie = cookie
+                                lastUCWebCookieCandidate = cookie
+                            }
+                            await complete(.cookie(provider: .uc, value: cookie))
+                        } catch {
+                            await MainActor.run {
+                                isWorking = false
+                                ucWebLoginServiceTicket = ticket
+                                statusMessage = "UC 票据直连验证失败，正在尝试网页登录：\(error.localizedDescription)"
+                            }
                         }
                         return
                     }
@@ -2185,6 +2200,7 @@ enum CloudAuthUCWebLoginError: LocalizedError {
     case invalidResponse
     case missingToken
     case missingQRCode
+    case missingCookie
 
     var errorDescription: String? {
         switch self {
@@ -2194,6 +2210,8 @@ enum CloudAuthUCWebLoginError: LocalizedError {
             return "UC 网页登录接口未返回扫码 Token。"
         case .missingQRCode:
             return "无法生成 UC 网盘登录二维码。"
+        case .missingCookie:
+            return "UC 登录已确认，但接口未返回有效登录 Cookie。"
         }
     }
 }
@@ -2244,6 +2262,38 @@ struct CloudAuthUCWebLoginClient {
         return members?["service_ticket"] as? String
     }
 
+    func exchangeServiceTicketForCookie(_ serviceTicket: String) async throws -> String {
+        let ticket = serviceTicket.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ticket.isEmpty else { throw CloudAuthUCWebLoginError.invalidResponse }
+        var components = URLComponents(string: "https://drive.uc.cn/account/info")!
+        components.queryItems = [URLQueryItem(name: "st", value: ticket)]
+        guard let url = components.url else { throw CloudAuthUCWebLoginError.invalidResponse }
+        let response = try await httpClient.get(
+            url: url.absoluteString,
+            headers: Self.accountLoginHeaders,
+            timeout: 12,
+            redactsURLInLogs: true
+        )
+        guard response.statusCode == 200,
+              let payload = try JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+              payload["success"] as? Bool == true else {
+            throw CloudAuthUCWebLoginError.invalidResponse
+        }
+
+        let finalURL = response.finalURL ?? url
+        let responseCookies = HTTPCookie.cookies(
+            withResponseHeaderFields: response.headers,
+            for: finalURL
+        )
+        let responseCookie = CloudAuthCookieFormatter.cookieString(from: responseCookies, provider: .uc)
+        let storedCookie = httpClient.cookieHeader(for: "https://drive.uc.cn/") ?? ""
+        for cookie in [storedCookie, responseCookie]
+        where CloudAuthCookieFormatter.containsLikelyAuthCookie(cookie, provider: .uc) {
+            return cookie
+        }
+        throw CloudAuthUCWebLoginError.missingCookie
+    }
+
     static func qrLoginURL(token: String) -> URL {
         var components = URLComponents(string: "https://su.uc.cn/1_n0ZCv")!
         components.percentEncodedQuery = [
@@ -2288,6 +2338,12 @@ struct CloudAuthUCWebLoginClient {
         "Content-Type": "application/x-www-form-urlencoded",
         "Origin": "https://broccoli.uc.cn",
         "Referer": "https://broccoli.uc.cn/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    ]
+
+    static let accountLoginHeaders: [String: String] = [
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://drive.uc.cn/",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     ]
 }

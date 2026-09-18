@@ -124,6 +124,19 @@ func testBaiduQRCodePresentationAcceptsQRCodeAndRejectsInvalidData() throws {
     #expect(url.absoluteString.contains("uc_biz_str=S%3Acustom%7CC%3Atitlebar_fix"))
 }
 
+@Test func testUCServiceTicketExchangesDirectlyForLoginCookie() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [UCServiceTicketURLProtocol.self]
+    let client = CloudAuthUCWebLoginClient(
+        httpClient: HTTPClient(session: URLSession(configuration: configuration))
+    )
+
+    let cookie = try await client.exchangeServiceTicketForCookie("service-ticket")
+
+    #expect(cookie.contains("__pus=uc-session"))
+    #expect(UCServiceTicketURLProtocol.requestedServiceTicket == "service-ticket")
+}
+
 @Test func testQRCodeImageInspectorRejectsBlankImage() {
     let image = makeImage(width: 220, height: 220) { _, _ in
         (red: 255, green: 255, blue: 255, alpha: 255)
@@ -544,6 +557,50 @@ private func queryItems(_ url: URL) -> [String: String] {
         uniqueKeysWithValues: (URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? [])
             .map { ($0.name, $0.value ?? "") }
     )
+}
+
+private final class UCServiceTicketURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var storedServiceTicket: String?
+
+    static var requestedServiceTicket: String? {
+        lock.withLock { storedServiceTicket }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "drive.uc.cn" && request.url?.path == "/account/info"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        Self.lock.withLock {
+            Self.storedServiceTicket = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?
+                .first(where: { $0.name == "st" })?
+                .value
+        }
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: [
+                "Content-Type": "application/json",
+                "Set-Cookie": "__pus=uc-session; Domain=.uc.cn; Path=/; Secure; HttpOnly"
+            ]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .allowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"success":true}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 private final class P115AuthMockURLProtocol: URLProtocol, @unchecked Sendable {
