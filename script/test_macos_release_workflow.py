@@ -47,6 +47,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             self.assertIn(fragment, self.workflow)
         self.assertIn("needs: libmpv-runtime", self.workflow)
         self.assertNotIn("runs-on: macos-14-arm64", self.workflow)
+        self.assertEqual(self.workflow.count("run: brew install mpv"), 2)
 
     def test_release_builds_and_rechecks_the_extracted_public_app(self) -> None:
         required = (

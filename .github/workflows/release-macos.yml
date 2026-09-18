@@ -69,6 +69,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install libmpv development files
+        run: brew install mpv
+
       - name: Validate release tag and public boundary
         shell: bash
         env:
