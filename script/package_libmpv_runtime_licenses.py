@@ -181,16 +181,15 @@ def load_fallback_provenance(root: Path) -> dict[str, Any]:
     return components
 
 
-def fallback_license_files(
-    root: Path,
+def validated_fallback_component(
     provenance: dict[str, Any],
     formula: str,
     version: str,
     source: dict[str, str],
-) -> list[Path]:
+) -> dict[str, Any] | None:
     record = provenance.get(formula)
     if not isinstance(record, dict):
-        return []
+        return None
     if record.get("version") != version:
         raise RuntimeLicenseError(f"fallback license version mismatch for {formula}")
     source_pins = {key: value for key, value in source.items() if key != "url"}
@@ -198,6 +197,19 @@ def fallback_license_files(
         record.get(f"source_{key}") != value for key, value in source_pins.items()
     ):
         raise RuntimeLicenseError(f"fallback source provenance mismatch for {formula}")
+    return record
+
+
+def fallback_license_files(
+    root: Path,
+    provenance: dict[str, Any],
+    formula: str,
+    version: str,
+    source: dict[str, str],
+) -> list[Path]:
+    record = validated_fallback_component(provenance, formula, version, source)
+    if record is None:
+        return []
     files = record.get("files")
     if not isinstance(files, dict) or not files:
         raise RuntimeLicenseError(f"fallback license files are missing for {formula}")
@@ -283,13 +295,22 @@ def package_runtime(
             raise RuntimeLicenseError(
                 f"installed formula version is not the pinned stable version: {formula} {version}"
             )
+        source_record = formula_source(metadata)
         license_expression = metadata.get("license")
         homepage = metadata.get("homepage")
         if not isinstance(license_expression, str) or not license_expression.strip():
-            raise RuntimeLicenseError(f"formula {formula} has no SPDX license expression")
+            fallback_record = validated_fallback_component(
+                fallback_provenance,
+                formula,
+                version,
+                source_record,
+            )
+            fallback_expression = fallback_record.get("license") if fallback_record else None
+            if not isinstance(fallback_expression, str) or not fallback_expression.strip():
+                raise RuntimeLicenseError(f"formula {formula} has no SPDX license expression")
+            license_expression = fallback_expression
         if not isinstance(homepage, str) or not homepage:
             raise RuntimeLicenseError(f"formula {formula} has no homepage")
-        source_record = formula_source(metadata)
         license_sources = formula_license_files(prefix)
         license_origin = "homebrew-bottle"
         license_source_root = prefix

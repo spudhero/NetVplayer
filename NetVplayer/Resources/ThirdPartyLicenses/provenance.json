@@ -16,6 +16,15 @@
       "files": {
         "LICENCE": "0c57e2ec42ece17791a75d2f9b2f8e0663181be008667a507f765b3ef22522db"
       }
+    },
+    "uchardet": {
+      "version": "0.0.8",
+      "license": "MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later",
+      "source_url": "https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz",
+      "source_sha256": "e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0",
+      "files": {
+        "COPYING": "107a29ccdd2d778aa2df5462f85dddfa099059abd22e064e07ec2cc9bafc37cd"
+      }
     }
   }
 }

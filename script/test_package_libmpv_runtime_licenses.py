@@ -146,11 +146,12 @@ class LibmpvRuntimeLicenseTests(unittest.TestCase):
     def test_uses_versioned_and_hashed_source_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Fixture(Path(directory), formula="fallback", version="2.0")
+            metadata = fixture.metadata
+            metadata[fixture.formula]["license"] = None
             license_data = b"Fallback license\n"
             component_root = fixture.fallback / fixture.formula
             component_root.mkdir()
             (component_root / "LICENCE").write_bytes(license_data)
-            metadata = fixture.metadata
             source = metadata[fixture.formula]["urls"]["stable"]
             (fixture.fallback / "provenance.json").write_text(
                 json.dumps(
@@ -159,6 +160,7 @@ class LibmpvRuntimeLicenseTests(unittest.TestCase):
                         "components": {
                             fixture.formula: {
                                 "version": fixture.version,
+                                "license": "MPL-1.1",
                                 "source_url": source["url"],
                                 "source_sha256": source["checksum"],
                                 "files": {"LICENCE": digest(license_data)},
@@ -180,6 +182,7 @@ class LibmpvRuntimeLicenseTests(unittest.TestCase):
                 manifest["components"][0]["license_files"][0]["origin"],
                 "audited-source-fallback",
             )
+            self.assertEqual(manifest["components"][0]["license"], "MPL-1.1")
 
     def test_accepts_git_source_only_when_revision_is_pinned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
