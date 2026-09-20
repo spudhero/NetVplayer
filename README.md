@@ -14,6 +14,7 @@
   <a href="#english">English</a> |
   <a href="https://spudhero.github.io/NetVplayer/">Website</a> |
   <a href="https://github.com/spudhero/NetVplayer/releases/latest">Download</a> |
+  <a href="CHANGELOG.md">Release History</a> |
   <a href="provider-sdk/README.md">Provider SDK</a>
 </p>
 
@@ -38,20 +39,7 @@ FongMi/TV、OK影视、影视仓、TVBox 等常用工具主要服务 Android 生
 
 NetVplayer 的目标不是照搬手机或电视端界面，而是把内容浏览、搜索、选集、点播和直播重新组织成一套原生 Mac 桌面体验。NetVplayer 不是上述项目的官方 Mac 版，与它们不存在隶属或官方合作关系；项目感谢 FongMi/TV 等开源实践提供的兼容性参考，并保持独立的 Swift/macOS 实现。
 
-### 1.0.8 网盘起播与返回体验
-
-- UC 个人盘原文件的安全探测改为最小 Range，并复用已经解析的个人盘记录，不再在起播前重复下载相同探测数据。
-- MP4 读取文件尾部元数据后会复用已经完成的头部分段；慢速 UC CDN 下无需再次下载同一批起播数据。
-- 玩偶详情页会并发展开多个网盘分享，同时保持原页面中的线路和剧集顺序。
-- 从同站搜索结果进入播放时会保留原首页目录；退出播放器后恢复影片详情，不再回到空白“推荐”页。
-
-### 1.0.7 兼容性修复
-
-- 内嵌 libmpv 及其依赖现在由 macOS 14 ARM 构建任务独立产出，macOS 14/15 不再因发布机版本过高而无法加载播放器。
-- Provider 安全启动器显式以 macOS 14 为部署目标构建；Java 数据源兼容包可以在受支持系统上自动下载、验证并启用。
-- 发布流程会检查最终 App、动态库和 Provider 启动器的真实最低系统版本；高于公开兼容范围的产物会直接阻断发布。
-- 启动时会先恢复本机保存的数据源，Provider 网络更新继续在后台进行；若首次恢复确实缺少组件，同步完成后会自动重试。
-- UC 扫码确认后直接用官方 `service_ticket` 建立并验证个人盘 Cookie，不再依赖易受网页结构变化影响的单次 iframe 注入。
+[查看版本与修复历史](CHANGELOG.md#中文)。README 只保留当前产品能力、安装方法和稳定使用说明。
 
 你可以添加自己的兼容配置、WebDAV、AList/OpenList 或受支持的云盘账号。全新安装保持空白，直到用户主动添加内容入口；已保存的配置可以在后续启动时恢复。
 
@@ -200,20 +188,7 @@ FongMi/TV, OK影视, 影视仓, and TVBox primarily serve the Android ecosystem.
 
 The goal is not to copy a phone or TV interface. NetVplayer reorganizes discovery, search, episode selection, on-demand playback, and live playback as a native Mac experience. It is not an official Mac edition of those projects and has no affiliation or official partnership with them. Their open-source work remains an important compatibility reference, while NetVplayer uses an independent Swift/macOS implementation.
 
-### Cloud-drive startup and navigation fixes in 1.0.8
-
-- UC personal-drive originals now use a minimal safety probe and reuse the resolved saved-file record instead of downloading the same probe data twice before playback.
-- MP4 playback reuses completed head ranges after reading tail metadata, avoiding a second download of the startup window on slow UC CDN paths.
-- WoGG detail pages expand multiple cloud-drive shares concurrently while preserving the source order of routes and episodes.
-- Opening a same-site search result keeps the loaded home catalog, and leaving playback restores the movie detail instead of an empty Recommended page.
-
-### Compatibility fixes in 1.0.7
-
-- The embedded libmpv runtime is now produced separately on macOS 14 ARM, preventing macOS 14/15 from receiving libraries that require the newer release runner.
-- Provider sandbox launchers explicitly target macOS 14, allowing the Java compatibility package to download, verify, and activate on supported systems.
-- Release checks now inspect the actual deployment target of every packaged app binary, dynamic library, and Provider launcher and reject incompatible artifacts.
-- Saved data sources now restore before background Provider updates finish, with one automatic retry after synchronization when a required component was initially unavailable.
-- UC QR confirmation now exchanges the official `service_ticket` directly for a validated personal-drive Cookie instead of relying on a one-shot iframe bridge.
+[Read the release and fix history](CHANGELOG.md#english). The README stays focused on current capabilities, installation, and stable usage guidance.
 
 You can add your own compatible configuration, WebDAV, AList/OpenList, or supported cloud-drive account. A fresh installation stays empty until the user adds an entry point. Saved configurations can be restored on later launches.
 
