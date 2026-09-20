@@ -12,6 +12,61 @@ import DriveEngine
     #expect(MPVPlayerEngine.shared === MPVPlayerEngine.vod)
 }
 
+@Test func testPlaybackDisplaySleepControllerTracksPlaybackWithoutLeakingActivities() {
+    final class ActivityToken: NSObject {}
+
+    var beginCount = 0
+    var endedTokens: [NSObjectProtocol] = []
+    let token = ActivityToken()
+    let controller = PlaybackDisplaySleepController(
+        beginActivity: {
+            beginCount += 1
+            return token
+        },
+        endActivity: { endedTokens.append($0) }
+    )
+
+    #expect(PlaybackDisplaySleepController.activityOptions.contains(.idleDisplaySleepDisabled))
+    #expect(controller.setPlaybackActive(true))
+    #expect(!controller.setPlaybackActive(true))
+    #expect(beginCount == 1)
+    #expect(controller.setPlaybackActive(false))
+    #expect(!controller.setPlaybackActive(false))
+    #expect(endedTokens.count == 1)
+    #expect(endedTokens.first === token)
+}
+
+@Test func testMPVPlaybackLifecycleControlsDisplaySleepPrevention() {
+    final class ActivityToken: NSObject {}
+
+    var beginCount = 0
+    var endCount = 0
+    let controller = PlaybackDisplaySleepController(
+        beginActivity: {
+            beginCount += 1
+            return ActivityToken()
+        },
+        endActivity: { _ in endCount += 1 }
+    )
+    let engine = MPVPlayerEngine(
+        videoSurface: .vod,
+        stopResourcePolicy: .fullDestroy,
+        displaySleepController: controller
+    )
+
+    engine.resume()
+    engine.resume()
+    #expect(beginCount == 1)
+    engine.pause()
+    engine.pause()
+    #expect(endCount == 1)
+    engine.resume()
+    #expect(beginCount == 2)
+    engine.stop()
+    engine.stop()
+    #expect(endCount == 2)
+}
+
 @Test func testMPVStopResourcePolicyDefaultsToFullDestroyAndSupportsWarmRollback() {
     #expect(MPVStopResourcePolicy.configured(environment: [:]) == .fullDestroy)
     #expect(MPVStopResourcePolicy.configured(environment: [

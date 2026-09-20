@@ -142,6 +142,7 @@ def main() -> int:
             "script/test_audit_torrent_bridge_licenses.py",
             "script/test_apply_torrent_bridge_replacements.py",
             "script/test_macos_release_workflow.py",
+            "script/test_app_update_release.py",
         ],
     )
     sandbox_output = run_step(

@@ -76,6 +76,13 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             'cmp SHA256SUMS.txt "$existing_assets/SHA256SUMS.txt"',
             "--verify-tag",
             "--latest",
+            "appcast.xml",
+            "SPARKLE_ED25519_PRIVATE_KEY",
+            "generate_appcast",
+            "sign_update",
+            "validate_app_update_feed.py",
+            "validate_macos_release_version.py",
+            "validate_app_update_key.swift",
         )
         for fragment in required:
             self.assertIn(fragment, self.workflow)
@@ -86,10 +93,10 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             info = plistlib.load(handle)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertEqual(info["CFBundleShortVersionString"], "1.0.8")
-        self.assertEqual(info["CFBundleVersion"], "9")
-        self.assertIn("NetVplayer 1.0.8", readme)
-        self.assertIn("current 1.0.8 release", readme)
+        self.assertEqual(info["CFBundleShortVersionString"], "1.0.9")
+        self.assertEqual(info["CFBundleVersion"], "10")
+        self.assertIn("NetVplayer 1.0.9", readme)
+        self.assertIn("current 1.0.9 release", readme)
 
 
 if __name__ == "__main__":

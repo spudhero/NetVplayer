@@ -31,7 +31,7 @@
 
 ### 原生 macOS 媒体播放器
 
-NetVplayer 1.0.8 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+NetVplayer 1.0.9 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
 
 ### 项目背景
 
@@ -112,6 +112,8 @@ flowchart TB
 
 当前公开版本面向 macOS 14 或更高版本和 Apple Silicon。请从[项目官网](https://spudhero.github.io/NetVplayer/)或[最新 GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest)下载。
 
+应用会检查主程序更新，并在侧栏和设置页的版本号旁提示。打开版本号后可查看新版并选择“更新”；下载和验证在后台完成，正常退出应用后安装，下次启动使用新版本。1.0.8 及更早版本不含应用内更新器，需要先手动安装一次 1.0.9 或更新版本。当前 ad-hoc 签名仍可能触发 macOS 的首次打开或安装授权提示。
+
 #### 小白安装步骤
 
 1. 点击 macOS 左上角苹果菜单，打开“关于本机”，确认芯片是 Apple M 系列，系统为 macOS 14 或更高版本。当前公开版本暂不支持 Intel Mac。
@@ -179,7 +181,7 @@ NetVplayer 与 FongMi/TV 没有隶属或官方合作关系。NetVplayer 使用�
 
 ### A native media player for macOS
 
-NetVplayer 1.0.8 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+NetVplayer 1.0.9 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
 
 ### Project background
 
@@ -232,7 +234,9 @@ Start with the [Provider SDK development guide](provider-sdk/README.md), which r
 
 ### Download and build
 
-The current 1.0.8 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The current 1.0.9 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+
+The app checks for application updates and marks the version in the sidebar and Settings when a new release is available. Open the version, review the update, and select Update to download and verify it in the background. Installation happens when the app normally quits. Version 1.0.8 and earlier need one manual installation of 1.0.9 or later to gain in-app updates. The current ad-hoc signature may still require macOS first-open or installation approval.
 
 #### Beginner installation
 

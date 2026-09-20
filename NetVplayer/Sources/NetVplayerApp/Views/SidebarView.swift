@@ -218,17 +218,8 @@ struct SidebarView: View {
     }
 
     private var aboutLabel: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "info.circle")
-            Text("关于 \(AppVersionDisplay.label())")
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .font(.system(size: 11, weight: .medium))
+        AppUpdateVersionButton(placement: .sidebar)
         .foregroundStyle(palette.muted.opacity(HomeVisualPolicy.mutedTextOpacity))
-        .padding(.horizontal, 10)
-        .frame(height: 30)
-        .help("关于 NetVplayer")
     }
 
     private func normalizeSelection() {

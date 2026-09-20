@@ -377,6 +377,16 @@ swift_build --product "$APP_NAME"
 BUILD_BIN_DIR="$(swift_build --show-bin-path)"
 BUILD_BINARY="$BUILD_BIN_DIR/$APP_NAME"
 BUILD_RESOURCE_BUNDLE="$BUILD_BIN_DIR/$APP_RESOURCE_BUNDLE_NAME"
+SPARKLE_FRAMEWORK_SOURCE="$(find "$ROOT_DIR/.build/artifacts" -type d -name Sparkle.framework -print -quit)"
+if [[ -z "$SPARKLE_FRAMEWORK_SOURCE" ]]; then
+  echo "error: SwiftPM Sparkle.framework artifact is missing" >&2
+  exit 1
+fi
+SPARKLE_LICENSE_SOURCE="$(dirname "$(dirname "$(dirname "$SPARKLE_FRAMEWORK_SOURCE")")")/LICENSE"
+if [[ ! -s "$SPARKLE_LICENSE_SOURCE" ]]; then
+  echo "error: Sparkle license is missing from the SwiftPM artifact" >&2
+  exit 1
+fi
 BUILD_ARCHITECTURES="$(/usr/bin/lipo -archs "$BUILD_BINARY")"
 if [[ "$BUILD_ARCHITECTURES" != "$NODE_RUNTIME_ARCHITECTURE" ]]; then
   echo "error: app architecture '$BUILD_ARCHITECTURES' does not match embedded Node '$NODE_RUNTIME_ARCHITECTURE'" >&2
@@ -429,6 +439,16 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
+SOURCE_INFO_PLIST="$ROOT_DIR/Sources/NetVplayerApp/Info.plist"
+plutil -insert SUFeedURL -string "$(plutil -extract SUFeedURL raw "$SOURCE_INFO_PLIST")" "$INFO_PLIST"
+plutil -insert SUPublicEDKey -string "$(plutil -extract SUPublicEDKey raw "$SOURCE_INFO_PLIST")" "$INFO_PLIST"
+plutil -insert SUEnableAutomaticChecks -bool NO "$INFO_PLIST"
+plutil -insert SUAllowsAutomaticUpdates -bool YES "$INFO_PLIST"
+plutil -insert SUAutomaticallyUpdate -bool YES "$INFO_PLIST"
+plutil -insert SUVerifyUpdateBeforeExtraction -bool YES "$INFO_PLIST"
+plutil -insert SURequireSignedFeed -bool YES "$INFO_PLIST"
+plutil -insert SUSignedFeedFailureExpirationInterval -integer 0 "$INFO_PLIST"
+
 if [[ "$PACKAGE_PUBLIC" == true ]]; then
   plutil -insert NetVplayerSourcePolicy -string user-configured-only "$INFO_PLIST"
   plutil -replace NetVplayerFeedbackRepositoryURL -string https://github.com/spudhero/NetVplayer "$INFO_PLIST"
@@ -464,6 +484,9 @@ rm -f "$APP_ICON_PARTIAL_INFO"
 cp "$LEGACY_APP_ICON_SOURCE" "$APP_RESOURCES/$APP_ICON_FILENAME"
 cp "$APP_ICON_SOURCE" "$APP_RESOURCES/AppIcon-Runtime.png"
 cp -R "$BUILD_RESOURCE_BUNDLE" "$APP_RESOURCES/$APP_RESOURCE_BUNDLE_NAME"
+/usr/bin/ditto "$SPARKLE_FRAMEWORK_SOURCE" "$APP_FRAMEWORKS/Sparkle.framework"
+mkdir -p "$APP_RESOURCES/ThirdPartyLicenses"
+cp "$SPARKLE_LICENSE_SOURCE" "$APP_RESOURCES/ThirdPartyLicenses/Sparkle.LICENSE"
 cp -R "$PREPARED_QUICKJS_RUNTIME_ROOT" "$BUNDLED_QUICKJS_RUNTIME_ROOT"
 cp -R "$PREPARED_NODE_RUNTIME_ROOT" "$BUNDLED_NODE_RUNTIME_ROOT"
 mkdir -p "$TORRENT_BRIDGE_DESTINATION"
@@ -477,7 +500,14 @@ if [[ -n "${NETVPLAYER_LIBMPV_PATH:-}" && -z "${NETVPLAYER_LIBMPV_SOURCE:-}" ]];
   export NETVPLAYER_LIBMPV_SOURCE="$NETVPLAYER_LIBMPV_PATH"
 fi
 "$REPOSITORY_ROOT/script/vendor_libmpv.sh" "$STAGING_APP_BUNDLE" "$APP_BINARY"
-find "$APP_FRAMEWORKS" -type f -name '*.dylib' -exec codesign --force --sign - {} \;
+find "$APP_FRAMEWORKS" -maxdepth 1 -type f -name '*.dylib' -exec codesign --force --sign - {} \;
+SPARKLE_FRAMEWORK="$APP_FRAMEWORKS/Sparkle.framework"
+SPARKLE_VERSION_ROOT="$SPARKLE_FRAMEWORK/Versions/B"
+codesign --force --sign - "$SPARKLE_VERSION_ROOT/XPCServices/Installer.xpc"
+codesign --force --sign - --preserve-metadata=entitlements "$SPARKLE_VERSION_ROOT/XPCServices/Downloader.xpc"
+codesign --force --sign - "$SPARKLE_VERSION_ROOT/Autoupdate"
+codesign --force --sign - "$SPARKLE_VERSION_ROOT/Updater.app"
+codesign --force --sign - "$SPARKLE_FRAMEWORK"
 codesign --force --sign - "$BUNDLED_NODE_EXECUTABLE"
 codesign --force --sign - "$BUNDLED_QUICKJS_EXECUTABLE"
 if [[ -f "$BUNDLED_QUICKJS_POLYGLOT" ]]; then
@@ -487,8 +517,9 @@ if [[ -f "$BUNDLED_QUICKJS_BOOTSTRAP" ]]; then
   codesign --force --sign - "$BUNDLED_QUICKJS_BOOTSTRAP"
 fi
 codesign --force --sign - "$APP_BINARY"
-codesign --force --deep --sign - "$STAGING_APP_BUNDLE"
+codesign --force --sign - "$STAGING_APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$STAGING_APP_BUNDLE"
+codesign --verify --deep --strict --verbose=2 "$SPARKLE_FRAMEWORK"
 codesign --verify --strict --verbose=2 "$BUNDLED_NODE_EXECUTABLE"
 codesign --verify --strict --verbose=2 "$BUNDLED_QUICKJS_EXECUTABLE"
 if [[ -f "$BUNDLED_QUICKJS_POLYGLOT" ]]; then

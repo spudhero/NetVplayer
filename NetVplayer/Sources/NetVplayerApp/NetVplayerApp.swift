@@ -79,6 +79,7 @@ final class NetVplayerAppDelegate: NSObject, NSApplicationDelegate {
             showMainWindowIfNeeded()
             PlayerVisualRegressionCaptureController.schedule(configuration: configuration)
         } else {
+            AppUpdateCoordinator.shared.start()
             showMainWindowIfNeeded(after: 0.2)
         }
     }

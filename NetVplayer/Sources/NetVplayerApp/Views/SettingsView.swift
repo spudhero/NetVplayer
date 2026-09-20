@@ -2167,7 +2167,7 @@ struct SettingsView: View {
 
             GroupBox(label: SettingsPanelLabel(
                 title: "关于 NetVplayer",
-                subtitle: "macOS 媒体中心 · \(AppVersionDisplay.label())",
+                subtitle: "macOS 媒体中心",
                 systemImage: "gearshape"
             )) {
                 HStack {
@@ -2175,8 +2175,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(palette.muted)
                     Spacer(minLength: 0)
-                    Text("NetVplayer")
-                        .font(.system(size: 12, weight: .semibold))
+                    AppUpdateVersionButton(placement: .settings)
                 }
             }
         }

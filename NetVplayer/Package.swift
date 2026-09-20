@@ -26,6 +26,7 @@ let package = Package(
         .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.7.0"),
         // 阿里云盘网页 API 设备会话签名
         .package(url: "https://github.com/21-DOT-DEV/swift-secp256k1.git", exact: "0.23.2"),
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.0"),
     ],
     targets: [
         // ═══════════════════════════════════════════
@@ -212,6 +213,7 @@ let package = Package(
                 "SearchEngine",
                 "DanmakuEngine",
                 "WebHomeEngine",
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources/NetVplayerApp",
             exclude: ["Info.plist"],
@@ -221,6 +223,7 @@ let package = Package(
             swiftSettings: privateLegacyProviderSettings,
             linkerSettings: [
                 .linkedFramework("WebKit"),
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate",
                     "-Xlinker", "__TEXT",

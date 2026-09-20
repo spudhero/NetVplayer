@@ -4,6 +4,11 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [1.0.9](https://github.com/spudhero/NetVplayer/releases/tag/1.0.9) - 2026-09-20
+
+- 侧栏和设置页的版本号会提示新版本；确认更新后在后台下载、校验，并在应用正常退出后安装。
+- 播放期间阻止显示器空闲变暗和休眠；暂停、结束或退出后恢复系统节能策略。
+
 ### [1.0.8](https://github.com/spudhero/NetVplayer/releases/tag/1.0.8) - 2026-09-18
 
 #### 网盘起播与返回体验
@@ -28,6 +33,11 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [1.0.9](https://github.com/spudhero/NetVplayer/releases/tag/1.0.9) - 2026-09-20
+
+- The version in the sidebar and Settings now marks available app updates. Confirming an update downloads and verifies it in the background, then installs it after the app normally quits.
+- Playback prevents the display from idle dimming or sleeping; pausing, ending playback, or quitting restores the system's energy-saving policy.
 
 ### [1.0.8](https://github.com/spudhero/NetVplayer/releases/tag/1.0.8) - 2026-09-18
 

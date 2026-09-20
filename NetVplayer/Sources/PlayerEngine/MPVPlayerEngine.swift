@@ -159,6 +159,64 @@ enum MPVPlaybackActivityPolicy {
     }
 }
 
+final class PlaybackDisplaySleepController: @unchecked Sendable {
+    typealias ActivityToken = NSObjectProtocol
+
+    static let activityOptions: ProcessInfo.ActivityOptions = [
+        .idleDisplaySleepDisabled,
+        .idleSystemSleepDisabled,
+        .userInitiated,
+    ]
+
+    private let lock = NSLock()
+    private let beginActivity: () -> ActivityToken
+    private let endActivity: (ActivityToken) -> Void
+    private var activityToken: ActivityToken?
+
+    convenience init(processInfo: ProcessInfo = .processInfo) {
+        self.init(
+            beginActivity: {
+                processInfo.beginActivity(
+                    options: Self.activityOptions,
+                    reason: "NetVplayer 正在播放视频"
+                )
+            },
+            endActivity: { processInfo.endActivity($0) }
+        )
+    }
+
+    init(
+        beginActivity: @escaping () -> ActivityToken,
+        endActivity: @escaping (ActivityToken) -> Void
+    ) {
+        self.beginActivity = beginActivity
+        self.endActivity = endActivity
+    }
+
+    @discardableResult
+    func setPlaybackActive(_ isActive: Bool) -> Bool {
+        if isActive {
+            lock.lock()
+            defer { lock.unlock() }
+            guard activityToken == nil else { return false }
+            activityToken = beginActivity()
+            return true
+        }
+
+        lock.lock()
+        let token = activityToken
+        activityToken = nil
+        lock.unlock()
+        guard let token else { return false }
+        endActivity(token)
+        return true
+    }
+
+    deinit {
+        setPlaybackActive(false)
+    }
+}
+
 struct MPVPlaybackLoadEventTracker {
     private(set) var hasActiveLoad = false
     private(set) var expectsReplacedEndFile = false
@@ -241,6 +299,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private var renderRequestGate = MPVRenderRequestGate()
     private var pendingExternalAudioURL: String?
     private var temporarySubtitleFiles: [URL] = []
+    private let displaySleepController: PlaybackDisplaySleepController
     private static let defaultLocalStreamStartupTimeout: TimeInterval = 60
     private static let loadFileReplyUserdata: UInt64 = 1
     private static let firstSubtitleReplyUserdata: UInt64 = 2
@@ -283,15 +342,18 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
     }
 
-    private init(
+    init(
         videoSurface: MPVVideoSurface,
-        stopResourcePolicy: MPVStopResourcePolicy = .configured()
+        stopResourcePolicy: MPVStopResourcePolicy = .configured(),
+        displaySleepController: PlaybackDisplaySleepController = PlaybackDisplaySleepController()
     ) {
         self.videoSurface = videoSurface
         self.stopResourcePolicy = stopResourcePolicy
+        self.displaySleepController = displaySleepController
     }
 
     deinit {
+        displaySleepController.setPlaybackActive(false)
         eventTask?.cancel()
         startupWatchdogTask?.cancel()
         Self.removeTemporarySubtitleFiles(temporarySubtitleFiles)
@@ -527,6 +589,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 return true
             }
             guard didMarkPlaying else { return }
+            updateDisplaySleepPrevention()
             startLocalStreamStartupWatchdog(for: spec)
             await MainActor.run {
                 guard self.withLock({
@@ -561,6 +624,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         cacheStallTask = nil
         lock.unlock()
 
+        updateDisplaySleepPrevention()
+
         if let activeContext {
             nv_mpv_set_property_flag(activeContext, "pause", 1)
         }
@@ -577,6 +642,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         pauseRequested = false
         status = .playing
         lock.unlock()
+
+        updateDisplaySleepPrevention()
 
         if let activeContext {
             nv_mpv_set_property_flag(activeContext, "pause", 0)
@@ -650,6 +717,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         startupWatchdogTask?.cancel()
         startupWatchdogTask = nil
         lock.unlock()
+
+        updateDisplaySleepPrevention()
 
         if let activeContext {
             nv_mpv_command1(activeContext, "stop")
@@ -1046,6 +1115,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                     status = .idle
                 }
                 playerState?.isPlaying = false
+                updateDisplaySleepPrevention()
                 clearPlaybackActivity()
                 if disposition == .natural {
                     playbackEndedHandler?(spec)
@@ -1190,6 +1260,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 return
             }
             playerState?.isPlaying = !isPaused
+            updateDisplaySleepPrevention()
         case "paused-for-cache":
             handleCachePause(isPausedForCache: event.flagValue != 0)
         case "demuxer-cache-time":
@@ -1277,6 +1348,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         startupWatchdogTask = nil
         status = .error(message)
         lock.unlock()
+        updateDisplaySleepPrevention()
         DiagnosticLog.write("[MPV_ERROR] \(message)")
         Task { @MainActor in
             let spec = self.playerState?.currentSpec
@@ -1299,6 +1371,17 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         playerState?.isBuffering = false
         playerState?.cacheSpeedBytesPerSecond = nil
         playerState?.cacheBufferingProgress = nil
+    }
+
+    private func updateDisplaySleepPrevention() {
+        let enabled = withLock {
+            if case .playing = status { return true }
+            return false
+        }
+        guard displaySleepController.setPlaybackActive(enabled) else { return }
+        DiagnosticLog.write(
+            "[MPV_DISPLAY_SLEEP] prevented=\(enabled) surface=\(videoSurface.rawValue)"
+        )
     }
 
     @MainActor

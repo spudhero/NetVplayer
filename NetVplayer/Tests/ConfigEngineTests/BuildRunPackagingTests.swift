@@ -17,8 +17,13 @@ struct BuildRunPackagingTests {
             contentsOf: packageRoot.appendingPathComponent("script/build_and_run.sh"), encoding: .utf8
         )
 
-        #expect(info["CFBundleShortVersionString"] as? String == "1.0.8")
-        #expect(info["CFBundleVersion"] as? String == "9")
+        #expect(info["CFBundleShortVersionString"] as? String == "1.0.9")
+        #expect(info["CFBundleVersion"] as? String == "10")
+        #expect(info["SUFeedURL"] as? String == "https://github.com/spudhero/NetVplayer/releases/latest/download/appcast.xml")
+        #expect(info["SURequireSignedFeed"] as? Bool == true)
+        #expect(info["SUVerifyUpdateBeforeExtraction"] as? Bool == true)
+        #expect(buildScript.contains("SPARKLE_FRAMEWORK_SOURCE"))
+        #expect(buildScript.contains("codesign --verify --deep --strict --verbose=2 \"$SPARKLE_FRAMEWORK\""))
         #expect(buildScript.contains("APP_VERSION=\"$(plutil -extract CFBundleShortVersionString"))
         #expect(buildScript.contains("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
         #expect(buildScript.contains("^[1-9][0-9]*$"))
