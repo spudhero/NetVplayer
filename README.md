@@ -162,7 +162,6 @@ bash NetVplayer/script/build_and_run.sh \
 | `provider-runners/` | Java、Node.js、QuickJS 和 Python Runner 合同 |
 | `script/` | 构建、签名、沙盒、边界审计与发行检查 |
 | `website/` | 项目官网及真实产品截图 |
-| `docs/marketing/xiaohongshu/` | 小红书发布文案、可重复渲染模板、脱敏素材与 14 张成品卡片 |
 
 ### 致谢
 
