@@ -17,8 +17,8 @@ struct BuildRunPackagingTests {
             contentsOf: packageRoot.appendingPathComponent("script/build_and_run.sh"), encoding: .utf8
         )
 
-        #expect(info["CFBundleShortVersionString"] as? String == "1.0.9")
-        #expect(info["CFBundleVersion"] as? String == "10")
+        #expect(info["CFBundleShortVersionString"] as? String == "1.0.10")
+        #expect(info["CFBundleVersion"] as? String == "11")
         #expect(info["SUFeedURL"] as? String == "https://github.com/spudhero/NetVplayer/releases/latest/download/appcast.xml")
         #expect(info["SURequireSignedFeed"] as? Bool == true)
         #expect(info["SUVerifyUpdateBeforeExtraction"] as? Bool == true)
@@ -28,7 +28,24 @@ struct BuildRunPackagingTests {
         #expect(buildScript.contains("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
         #expect(buildScript.contains("^[1-9][0-9]*$"))
         #expect(buildScript.contains("<string>$APP_VERSION</string>"))
+        #expect(buildScript.contains("if [[ -z \"$PROVIDER_MANIFEST_PUBLIC_KEY$PROVIDER_DISTRIBUTION_PUBLIC_KEY$PROVIDER_DISTRIBUTION_INDEX_URL\" ]]"))
+        #expect(buildScript.contains("RELEASE_TRUST_FILE=\"$REPOSITORY_ROOT/provider-sdk/release-trust.json\""))
         #expect(!buildScript.contains("<string>0.1.0</string>"))
+    }
+
+    @Test
+    func resourceValidationSupportsFlatAndXcodeBundleLayouts() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let buildScript = try String(
+            contentsOf: packageRoot.appendingPathComponent("script/build_and_run.sh"), encoding: .utf8
+        )
+
+        #expect(buildScript.contains("BUILD_RESOURCE_ROOT=\"$BUILD_RESOURCE_BUNDLE\""))
+        #expect(buildScript.contains("$BUILD_RESOURCE_BUNDLE/Contents/Resources"))
+        #expect(buildScript.contains("$BUILD_RESOURCE_ROOT/ThemeBackgrounds/monochrome-flow.png"))
     }
 
     @Test

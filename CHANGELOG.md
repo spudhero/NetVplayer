@@ -4,6 +4,26 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [1.0.10](https://github.com/spudhero/NetVplayer/releases/tag/1.0.10) - 2026-09-21
+
+- 修复普通本地构建遗漏扩展签名配置而误报“扩展暂时不可用”的问题；首次安装完成记录会结合已验签的本地包判断可用性，待升级版本单独保存，联网检查失败不再阻塞已有扩展的数据源恢复。
+- 已保存点播源的首页从首帧显示准备或加载状态；首次扩展安装失败会阻止数据源加载并提供重试，不再闪现“请先配置视频源”。
+- 修复直播停止或退出后再次进入只创建空播放器却不恢复频道的问题：每次打开直播窗口都会重新激活会话，并从已缓存列表恢复上次频道和线路；无频道时“打开频道指南”不再被透明视频手势层拦截。
+- 修复短视频的片头跳过时间超过片长时无法起播的问题：正常视频仍直接从目标位置加载，越界时自动从头恢复一次。
+- 扩展同步遇到网络错误时会明确显示需要重试；网盘业务失败不再被误报成“错误码 200”。
+- 配置 Sentry 的构建新增默认开启、可在设置关闭的自动诊断：发送脱敏崩溃堆栈、固定错误码和有限诊断步骤，起播耗时按 5% 采样；不发送凭据、媒体名称、播放地址或完整日志。
+- 配置、视频源、播放、直播、网盘授权、备份、扩展、更新、反馈和内嵌页面现在使用统一的错误提示：先说明发生了什么，再给出重试、切源、换线或重新授权等下一步，不再把 Android、`csp_`、Dex、FongMi、Provider、mpv、WebView、抓包或 relay 等内部术语直接显示给普通用户。
+- 视频源与外部资源兼容状态改为“已兼容 / 部分可用 / 正在适配 / 源站暂不可用 / 配置不完整 / 暂不支持”等产品文案；设置页同时展示原因和建议。重复的 Android 运行时诊断字段、统计捷径和两套状态标题映射已删除，内部兼容枚举与诊断事件继续保留。
+- 启动时先注册本机已安装的签名播放扩展，再恢复保存的数据源，避免偶发把已有 macOS 扩展支持的站点误判为 Android 专用源；联网更新仍在后台执行。
+- 已安装扩展可用时，设置页明确显示“后台检查更新”，不再把联网检查呈现为播放能力仍在准备。
+- 点播进入新剧集时会直接从片头或可验证的历史位置开始加载，并在目标画面到达前持续显示加载状态，避免先加载开头再二次跳转造成长时间黑屏；网盘转码/HLS 的后续跳转会使用关键帧定位，降低 `loading failed` 风险。
+- 播放中途缓冲只显示独立的缓冲状态层，不再自动拉起或阻止隐藏标题栏和控制栏；播放器栏仅响应鼠标、点击、键盘、暂停及面板操作。
+- 播放器控制栏自动收起时，仅在鼠标仍位于视频区域内隐藏指针，移到窗口其他区域后保持可见。
+- 手动跳转后，在目标画面恢复且缓存暂停结束前保留圆形加载状态，避免旧画面静止时没有任何缓冲提示。
+- 手动跳转期间清除上一个播放位置的缓存百分比和秒数；本地网盘流在圆形状态层显示本次跳转实际收到的数据量及平均接收速度。
+- 圆形状态层区分“正在跳转”和“播放中缓冲”，避免将目标位置读取与线路吞吐不足导致的中途卡顿混淆。
+- 修复并行 Range 拉流将部分缓存误判为完整命中时的空数据错误；夸克原文件在实测并发无吞吐增益后恢复原有拉流策略。
+
 ### [1.0.9](https://github.com/spudhero/NetVplayer/releases/tag/1.0.9) - 2026-09-20
 
 - 侧栏和设置页的版本号会提示新版本；确认更新后在后台下载、校验，并在应用正常退出后安装。
@@ -33,6 +53,26 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [1.0.10](https://github.com/spudhero/NetVplayer/releases/tag/1.0.10) - 2026-09-21
+
+- Fixed local builds omitting extension trust configuration and reporting extensions as unavailable. First-install completion is checked against verified local packages, pending upgrades are stored separately, and online update failures no longer block restoration of a saved source with valid extensions.
+- A saved VOD source now shows preparation or loading from the first home-screen frame. An incomplete first extension installation blocks source loading and offers retry instead of briefly showing the configure-source prompt.
+- Fixed live playback reopening into an empty player after stopping or exiting. Every live-window request now reactivates the session and restores the saved channel and route from the cached guide; the empty-state Open Channel Guide button is no longer blocked by the transparent video gesture layer.
+- Videos whose intro-skip position exceeds their actual length now recover from the beginning once; valid starts still load directly at the requested position.
+- Extension synchronization errors now reliably show retry guidance, and cloud-drive business failures are no longer mislabeled as error code 200.
+- Builds configured with Sentry now enable automatic diagnostics by default, with an off switch in Settings: redacted crash stacks, fixed error codes, bounded diagnostic steps, and 5% sampling of playback startup timing. Credentials, media titles, playback URLs, and full logs are excluded.
+- Configuration, source, playback, live, cloud authorization, backup, extension, update, feedback, and embedded-page failures now share one user-facing error map. Messages explain what happened and offer a next step without exposing internal Android, `csp_`, Dex, FongMi, Provider, mpv, WebView, capture, or relay terminology.
+- Source and external-resource compatibility now uses product labels such as Compatible, Partially Available, Being Adapted, Source Temporarily Unavailable, Incomplete Configuration, and Unsupported, with a reason and suggested action in Settings. Duplicate Android-runtime report fields, count shortcuts, and parallel status-title mappings were removed while internal compatibility enums and diagnostic events remain intact.
+- Installed signed playback extensions now register before the saved source is restored, preventing intermittent classification of supported macOS providers as Android-only while network updates continue in the background.
+- Settings now identifies catalog refreshes as background update checks when installed extensions are already usable.
+- VOD episodes now load directly at the intro-skip or validated history position and keep the loading state visible until the target frame arrives, avoiding the prolonged black screen caused by loading the beginning and then seeking again. Later seeks on cloud-drive transcode/HLS routes use keyframes to reduce `loading failed` errors.
+- Mid-play buffering now displays only its independent activity overlay and no longer opens or pins the title and control bars; player chrome responds only to pointer, click, keyboard, pause, and panel interactions.
+- Auto-hiding playback controls only hides the cursor while it remains over the video; the pointer stays visible in other window areas.
+- Manual seeks now keep the circular loading state until playback restarts near the target and cache pausing ends, so a frozen previous frame no longer appears idle.
+- During a manual seek, stale cache percentages and buffered-time values are cleared. Local cloud-drive streams show bytes actually delivered for this seek and their average transfer speed.
+- The circular activity state now distinguishes seeking from mid-play buffering, so reading a target position is not confused with later stalls caused by insufficient stream throughput.
+- Fixed an empty-data error when parallel Range streaming mistook a partial cache entry for a complete hit. Quark original-file playback keeps its prior streaming policy after parallel requests showed no throughput gain in the live test.
 
 ### [1.0.9](https://github.com/spudhero/NetVplayer/releases/tag/1.0.9) - 2026-09-20
 

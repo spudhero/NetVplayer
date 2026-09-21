@@ -390,6 +390,7 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
     #expect(ProxyServer.shared.remoteStreamPlaybackInfo(forLocalURL: originalRelay.url) != nil)
     appState.playerState.currentSpec = originalRelay
     appState.playerState.position = 48.5
+    appState.playerState.duration = 3_600
 
     var capturedSpec: PlaySpec?
     appState.playSpecHandler = { spec in capturedSpec = spec }
@@ -410,6 +411,7 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
     #expect(selected.headers["Referer"] == "https://pan.quark.cn")
     #expect(selected.headers["User-Agent"] == QuarkDriveClient.accountPlaybackUserAgent)
     #expect(selected.metadata[DrivePlaybackRoutePolicy.manualSelectionMetadataKey] == "true")
+    #expect(selected.initialStartPositionSeconds == 48.5)
     #expect(appState.selectedDrivePlaybackRouteID == "quark:original-download")
     #expect(appState.pendingDrivePlaybackRouteID == "quark:personal-transcode")
     #expect(appState.playbackDowngradeMessage == nil)

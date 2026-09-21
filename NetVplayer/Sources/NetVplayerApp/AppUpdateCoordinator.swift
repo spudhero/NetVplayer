@@ -133,7 +133,7 @@ final class AppUpdateCoordinator: NSObject, ObservableObject, SPUUpdaterDelegate
     func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem,
                  error: any Error) {
         approvedBuildVersion = nil
-        phase = .failed("下载失败：\(error.localizedDescription)")
+        phase = .failed(UserFacingErrorPresenter.message(for: error, context: .update))
     }
 
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
@@ -175,6 +175,6 @@ final class AppUpdateCoordinator: NSObject, ObservableObject, SPUUpdaterDelegate
                 break
             }
         }
-        return "更新未完成：\(error.localizedDescription)"
+        return UserFacingErrorPresenter.message(for: error, context: .update)
     }
 }

@@ -30,7 +30,7 @@ public enum ProviderCommandError: LocalizedError, Equatable, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .androidDexNeedsPort: return "Android Dex Provider requires a compatibility port"
+        case .androidDexNeedsPort: return "该扩展格式尚未适配当前版本"
         case .runtimeMissing: return "Provider runtime executable is missing"
         }
     }

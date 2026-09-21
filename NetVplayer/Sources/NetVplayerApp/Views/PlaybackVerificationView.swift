@@ -154,11 +154,11 @@ private struct PlaybackVerificationWebView: NSViewRepresentable {
         }
 
         func webView(_: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-            onFailure("验证页加载失败：\(error.localizedDescription)")
+            onFailure(UserFacingErrorPresenter.message(for: error, context: .webContent))
         }
 
         func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
-            onFailure("验证页加载失败：\(error.localizedDescription)")
+            onFailure(UserFacingErrorPresenter.message(for: error, context: .webContent))
         }
 
     }

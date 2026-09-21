@@ -51,6 +51,7 @@ int nv_mpv_command3(NVMPVContext *context, const char *arg0, const char *arg1, c
 int nv_mpv_command3_async(NVMPVContext *context, uint64_t reply_userdata, const char *arg0, const char *arg1, const char *arg2);
 int nv_mpv_command4(NVMPVContext *context, const char *arg0, const char *arg1, const char *arg2, const char *arg3);
 int nv_mpv_command4_async(NVMPVContext *context, uint64_t reply_userdata, const char *arg0, const char *arg1, const char *arg2, const char *arg3);
+int nv_mpv_command5_async(NVMPVContext *context, uint64_t reply_userdata, const char *arg0, const char *arg1, const char *arg2, const char *arg3, const char *arg4);
 
 int nv_mpv_clear_http_headers(NVMPVContext *context);
 int nv_mpv_append_http_header(NVMPVContext *context, const char *header);

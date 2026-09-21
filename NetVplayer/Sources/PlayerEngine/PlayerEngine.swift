@@ -287,7 +287,9 @@ struct PlaybackPostSeekEndGuard: Equatable, Sendable {
     static let maximumContinuousDeltaSeconds: Double = 5
 
     private(set) var targetSeconds: Double?
+    private var pendingFrameTargetSeconds: Double?
     private var didRestartPlayback = false
+    private var didReceivePlaybackRestart = false
     private var lastPositionSeconds: Double?
     private var continuousForwardProgressSeconds: Double = 0
 
@@ -299,14 +301,17 @@ struct PlaybackPostSeekEndGuard: Equatable, Sendable {
             return
         }
         self.targetSeconds = targetSeconds
+        pendingFrameTargetSeconds = targetSeconds
         didRestartPlayback = false
+        didReceivePlaybackRestart = false
         lastPositionSeconds = nil
         continuousForwardProgressSeconds = 0
     }
 
     mutating func markPlaybackRestarted() {
-        guard isProtecting else { return }
+        guard isProtecting || pendingFrameTargetSeconds != nil else { return }
         didRestartPlayback = true
+        didReceivePlaybackRestart = true
         lastPositionSeconds = nil
         continuousForwardProgressSeconds = 0
     }
@@ -331,8 +336,20 @@ struct PlaybackPostSeekEndGuard: Equatable, Sendable {
         }
         lastPositionSeconds = positionSeconds
         if continuousForwardProgressSeconds >= Self.requiredForwardProgressSeconds {
-            reset()
+            targetSeconds = nil
         }
+    }
+
+    func canPresentFrame(at positionSeconds: Double) -> Bool {
+        guard let targetSeconds = pendingFrameTargetSeconds else { return true }
+        guard didReceivePlaybackRestart, positionSeconds.isFinite else { return false }
+        let tolerance = max(2, min(10, targetSeconds * 0.2))
+        return abs(positionSeconds - targetSeconds) <= tolerance
+    }
+
+    mutating func markFramePresented() {
+        pendingFrameTargetSeconds = nil
+        didReceivePlaybackRestart = false
     }
 
     func isBoundarySeek(
@@ -350,7 +367,9 @@ struct PlaybackPostSeekEndGuard: Equatable, Sendable {
 
     mutating func reset() {
         targetSeconds = nil
+        pendingFrameTargetSeconds = nil
         didRestartPlayback = false
+        didReceivePlaybackRestart = false
         lastPositionSeconds = nil
         continuousForwardProgressSeconds = 0
     }

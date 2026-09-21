@@ -63,6 +63,20 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         for fragment in required:
             self.assertIn(fragment, self.workflow)
 
+    def test_debug_symbols_are_matched_retained_and_uploaded_separately(self) -> None:
+        for fragment in [
+            'xcrun dsymutil "$binary" -o "$symbols"',
+            '"$binary_uuid" == "$symbols_uuid"',
+            "NetVplayer-${{ github.ref_name }}-debug-symbols",
+            "secrets.SENTRY_AUTH_TOKEN",
+            "debug-files upload --org spudhero --project apple-macos-e7",
+            "2c26914636c47ab9bf9e710484ad7b44d371cbec8bd29cafb36b3cf877bf4285",
+        ]:
+            self.assertIn(fragment, self.workflow)
+        release_assets = self.workflow.split("release_assets=(", 1)[1].split(")", 1)[0]
+        self.assertNotIn("dSYM", release_assets)
+        self.assertNotIn("--include-sources", self.workflow)
+
     def test_release_publishes_the_complete_verified_asset_set(self) -> None:
         required = (
             "NetVplayer-${release_version}-macos-arm64.zip",
@@ -93,10 +107,10 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             info = plistlib.load(handle)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertEqual(info["CFBundleShortVersionString"], "1.0.9")
-        self.assertEqual(info["CFBundleVersion"], "10")
-        self.assertIn("NetVplayer 1.0.9", readme)
-        self.assertIn("current 1.0.9 release", readme)
+        self.assertEqual(info["CFBundleShortVersionString"], "1.0.10")
+        self.assertEqual(info["CFBundleVersion"], "11")
+        self.assertIn("NetVplayer 1.0.10", readme)
+        self.assertIn("current 1.0.10 release", readme)
 
 
 if __name__ == "__main__":

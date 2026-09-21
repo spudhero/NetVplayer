@@ -52,7 +52,7 @@ INFO_PLIST="$APP_CONTENTS/Info.plist"
 PROVIDER_MANIFEST_PUBLIC_KEY="${NETVPLAYER_PROVIDER_MANIFEST_PUBLIC_KEY_BASE64:-}"
 PROVIDER_DISTRIBUTION_PUBLIC_KEY="${NETVPLAYER_PROVIDER_DISTRIBUTION_PUBLIC_KEY_BASE64:-}"
 PROVIDER_DISTRIBUTION_INDEX_URL="${NETVPLAYER_PROVIDER_DISTRIBUTION_INDEX_URL:-}"
-if [[ "$PACKAGE_PUBLIC" == true && -z "$PROVIDER_MANIFEST_PUBLIC_KEY$PROVIDER_DISTRIBUTION_PUBLIC_KEY$PROVIDER_DISTRIBUTION_INDEX_URL" ]]; then
+if [[ -z "$PROVIDER_MANIFEST_PUBLIC_KEY$PROVIDER_DISTRIBUTION_PUBLIC_KEY$PROVIDER_DISTRIBUTION_INDEX_URL" ]]; then
   RELEASE_TRUST_FILE="$REPOSITORY_ROOT/provider-sdk/release-trust.json"
   PROVIDER_MANIFEST_PUBLIC_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["manifest_public_key"])' "$RELEASE_TRUST_FILE")"
   PROVIDER_DISTRIBUTION_PUBLIC_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["distribution_public_key"])' "$RELEASE_TRUST_FILE")"
@@ -137,7 +137,7 @@ APP_ICON_FILENAME="$APP_ICON_NAME-$APP_ICON_DIGEST.icns"
 
 swift_build() {
   if [[ "$PACKAGE_PUBLIC" == true ]]; then
-    swift build --disable-sandbox --configuration release "$@"
+    swift build --disable-sandbox --configuration release -Xswiftc -g "$@"
     return
   fi
   if [[ -n "${CODEX_SANDBOX:-}" ]]; then
@@ -393,7 +393,11 @@ if [[ "$BUILD_ARCHITECTURES" != "$NODE_RUNTIME_ARCHITECTURE" ]]; then
   exit 1
 fi
 
-if [[ ! -s "$BUILD_RESOURCE_BUNDLE/ThemeBackgrounds/monochrome-flow.png" ]]; then
+BUILD_RESOURCE_ROOT="$BUILD_RESOURCE_BUNDLE"
+if [[ -d "$BUILD_RESOURCE_BUNDLE/Contents/Resources" ]]; then
+  BUILD_RESOURCE_ROOT="$BUILD_RESOURCE_BUNDLE/Contents/Resources"
+fi
+if [[ ! -s "$BUILD_RESOURCE_ROOT/ThemeBackgrounds/monochrome-flow.png" ]]; then
   echo "error: theme background resource is missing from $BUILD_RESOURCE_BUNDLE" >&2
   exit 1
 fi
@@ -487,6 +491,8 @@ cp -R "$BUILD_RESOURCE_BUNDLE" "$APP_RESOURCES/$APP_RESOURCE_BUNDLE_NAME"
 /usr/bin/ditto "$SPARKLE_FRAMEWORK_SOURCE" "$APP_FRAMEWORKS/Sparkle.framework"
 mkdir -p "$APP_RESOURCES/ThirdPartyLicenses"
 cp "$SPARKLE_LICENSE_SOURCE" "$APP_RESOURCES/ThirdPartyLicenses/Sparkle.LICENSE"
+python3 "$REPOSITORY_ROOT/script/package_sentry_resources.py" \
+  --package-root "$ROOT_DIR" --app-bundle "$STAGING_APP_BUNDLE"
 cp -R "$PREPARED_QUICKJS_RUNTIME_ROOT" "$BUNDLED_QUICKJS_RUNTIME_ROOT"
 cp -R "$PREPARED_NODE_RUNTIME_ROOT" "$BUNDLED_NODE_RUNTIME_ROOT"
 mkdir -p "$TORRENT_BRIDGE_DESTINATION"

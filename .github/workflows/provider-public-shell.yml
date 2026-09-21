@@ -23,6 +23,8 @@ on:
       - "NetVplayer/script/build_and_run.sh"
       - "script/export_provider_public_shell.py"
       - "script/package_libmpv_runtime_licenses.py"
+      - "script/package_sentry_resources.py"
+      - "script/test_package_sentry_resources.py"
       - "script/prepare_embedded_quickjs_runtime.py"
       - "script/audit_torrent_bridge_licenses.py"
       - "script/apply_torrent_bridge_replacements.py"

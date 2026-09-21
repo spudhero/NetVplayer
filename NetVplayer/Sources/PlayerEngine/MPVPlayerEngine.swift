@@ -7,6 +7,7 @@ import DriveEngine
 import Foundation
 import Models
 import MPVShim
+import ProxyServer
 
 private let mpvRenderUpdateCallback: @convention(c) (UnsafeMutableRawPointer?) -> Void = { pointer in
     guard let pointer else { return }
@@ -159,6 +160,83 @@ enum MPVPlaybackActivityPolicy {
     }
 }
 
+enum MPVSeekModePolicy {
+    static let precise = "absolute+exact"
+    static let streaming = "absolute+keyframes"
+
+    static func commandMode(for spec: PlaySpec?) -> String {
+        guard let spec else { return precise }
+        if DrivePlaybackRoutePolicy.candidate(for: spec)?.transport == .hlsRelay {
+            return streaming
+        }
+        switch spec.metadata[DrivePlaybackMetadataKey.route] {
+        case DrivePlaybackRoute.personalTranscode, DrivePlaybackRoute.ucSmartPlay:
+            return streaming
+        default:
+            return precise
+        }
+    }
+
+    static func shouldShowLoading(pauseRequested: Bool) -> Bool {
+        !pauseRequested
+    }
+}
+
+public enum MPVInitialStartPolicy {
+    public static func supportsFileLocalStart(for spec: PlaySpec) -> Bool {
+        spec.metadata["playback.kind"] != "live"
+    }
+
+    public static func positionMilliseconds(
+        resumePosition: Int64?,
+        resumeDuration: Int64?,
+        openingSkipSeconds: Int
+    ) -> Int64? {
+        let normalizedResume = resumePosition.flatMap { $0 > 0 ? $0 : nil }
+        if let resumeDuration, resumeDuration > 0 {
+            return PlaybackStartPolicy.normalizedStartPositionMilliseconds(
+                resumePosition: normalizedResume,
+                openingSkipSeconds: openingSkipSeconds,
+                durationSeconds: Double(resumeDuration) / 1_000
+            )
+        }
+        guard normalizedResume == nil, openingSkipSeconds > 0 else { return nil }
+        let (milliseconds, overflow) = Int64(openingSkipSeconds).multipliedReportingOverflow(by: 1_000)
+        return overflow ? nil : milliseconds
+    }
+
+    static func loadFileOptions(for spec: PlaySpec) -> String? {
+        guard let start = spec.initialStartPositionSeconds,
+              start.isFinite,
+              start > 0 else { return nil }
+        return "start=\(start)"
+    }
+
+    static func recoverySpec(
+        for spec: PlaySpec,
+        durationSeconds: Double,
+        isCurrentFileLoaded: Bool,
+        playbackStarted: Bool,
+        reachedEOF: Bool
+    ) -> PlaySpec? {
+        guard supportsFileLocalStart(for: spec), !playbackStarted,
+              isCurrentFileLoaded || reachedEOF,
+              let start = spec.initialStartPositionSeconds,
+              start.isFinite, start > 0 else { return nil }
+        let startIsPastEnd = durationSeconds.isFinite && durationSeconds > 0
+            && (start >= Double(Int64.max) / 1_000
+                || PlaybackResumePolicy.normalizedRestorePositionMilliseconds(
+                    position: Int64(start * 1_000),
+                    durationSeconds: durationSeconds
+                ) == nil)
+        guard startIsPastEnd || reachedEOF else { return nil }
+        var recovered = spec
+        // Removing the file-local start bounds recovery to one load, even if the file is empty.
+        recovered.initialStartPositionSeconds = nil
+        return recovered
+    }
+}
+
 final class PlaybackDisplaySleepController: @unchecked Sendable {
     typealias ActivityToken = NSObjectProtocol
 
@@ -280,6 +358,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private var attachedViewID: Int64?
     private weak var renderView: MPVOpenGLVideoView?
     private var pendingSpec: PlaySpec?
+    private var activeSpec: PlaySpec?
     private var currentSpeed: Float = 1.0
     private var currentVolume: Float = 1.0
     private var currentVideoAspectMode: PlayerVideoAspectMode = .fit
@@ -296,6 +375,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private var cacheStallTask: Task<Void, Never>?
     private var cacheStallNotified = false
     private var startupWatchdogTask: Task<Void, Never>?
+    @MainActor private var seekTransferTask: Task<Void, Never>?
     private var renderRequestGate = MPVRenderRequestGate()
     private var pendingExternalAudioURL: String?
     private var temporarySubtitleFiles: [URL] = []
@@ -489,12 +569,14 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 )
             }) else { return false }
             playerState?.currentSpec = spec
+            cancelSeekTransferMetrics()
             playerState?.errorMessage = nil
             playerState?.isPlaying = false
             playerState?.position = 0
             playerState?.duration = 0
             playerState?.bufferedUntil = 0
             playerState?.isMediaLoading = true
+            playerState?.isSeeking = false
             playerState?.isBuffering = false
             playerState?.cacheSpeedBytesPerSecond = nil
             playerState?.cacheBufferingProgress = nil
@@ -519,12 +601,20 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 activeSurface: videoSurface,
                 requestedSurface: requestedSurface
             ) else { return false }
+            activeSpec = spec
+            lastPositionMs = 0
+            lastDurationMs = 0
             lastLoadDiagnostic = nil
             playbackStartedNotified = false
             currentFileLoaded = false
             pauseRequested = false
             isPausedForCache = false
             postSeekEndGuard.reset()
+            if let start = spec.initialStartPositionSeconds,
+               start.isFinite,
+               start > 0 {
+                postSeekEndGuard.begin(targetSeconds: start)
+            }
             startupWatchdogTask?.cancel()
             startupWatchdogTask = nil
             cacheStallStart = nil
@@ -657,6 +747,9 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         lock.lock()
         let activeContext = context
         let durationSeconds = lastDurationMs > 0 ? Double(lastDurationMs) / 1000 : 0
+        let seekMode = MPVSeekModePolicy.commandMode(for: activeSpec)
+        let shouldShowLoading = MPVSeekModePolicy.shouldShowLoading(pauseRequested: pauseRequested)
+        let seekURL = activeSpec?.url
         lock.unlock()
 
         guard let activeContext else { return }
@@ -670,15 +763,37 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         withLock {
             postSeekEndGuard.begin(targetSeconds: seconds)
         }
-        let result = nv_mpv_command3(activeContext, "seek", "\(seconds)", "absolute+exact")
+        if shouldShowLoading {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.playerState?.bufferedUntil = 0
+                self.playerState?.cacheSpeedBytesPerSecond = nil
+                self.playerState?.cacheBufferingProgress = nil
+                self.playerState?.isMediaLoading = true
+                self.playerState?.isSeeking = true
+                self.playerState?.isBuffering = false
+                self.startSeekTransferMetrics(for: seekURL)
+            }
+        } else {
+            Task { @MainActor [weak self] in
+                self?.playerState?.isSeeking = false
+                self?.cancelSeekTransferMetrics()
+            }
+        }
+        let result = nv_mpv_command3(activeContext, "seek", "\(seconds)", seekMode)
         guard result >= 0 else {
             withLock {
                 postSeekEndGuard.reset()
             }
+            Task { @MainActor [weak self] in
+                self?.playerState?.isMediaLoading = false
+                self?.playerState?.isSeeking = false
+                self?.cancelSeekTransferMetrics()
+            }
             DiagnosticLog.write("[MPV_SEEK_ERROR] targetSeconds=\(seconds) code=\(result)")
             return
         }
-        DiagnosticLog.write("[MPV_SEEK] targetSeconds=\(seconds)")
+        DiagnosticLog.write("[MPV_SEEK] targetSeconds=\(seconds) mode=\(seekMode)")
     }
 
     public func stop() {
@@ -700,6 +815,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         temporarySubtitleFiles = []
         pendingExternalAudioURL = nil
         pendingSpec = nil
+        activeSpec = nil
         status = .idle
         lastPositionMs = 0
         lastDurationMs = 0
@@ -733,6 +849,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
         Self.removeTemporarySubtitleFiles(subtitleFiles)
         Task { @MainActor in
+            self.cancelSeekTransferMetrics()
             self.playerState?.currentSpec = nil
             self.playerState?.errorMessage = nil
             self.playerState?.isPlaying = false
@@ -740,6 +857,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             self.playerState?.duration = 0
             self.playerState?.bufferedUntil = 0
             self.playerState?.isMediaLoading = false
+            self.playerState?.isSeeking = false
             self.playerState?.isBuffering = false
             self.playerState?.cacheSpeedBytesPerSecond = nil
             self.playerState?.cacheBufferingProgress = nil
@@ -995,11 +1113,28 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         withLock {
             pendingExternalAudioURL = spec.externalAudioURL.isEmpty ? nil : spec.externalAudioURL
         }
-        try check(
-            nv_mpv_command3_async(activeContext, Self.loadFileReplyUserdata, "loadfile", spec.url, "replace"),
-            context: activeContext,
-            action: "loadfile async"
-        )
+        if let options = MPVInitialStartPolicy.loadFileOptions(for: spec) {
+            DiagnosticLog.write("[MPV_LOAD_START] options=\(options)")
+            try check(
+                nv_mpv_command5_async(
+                    activeContext,
+                    Self.loadFileReplyUserdata,
+                    "loadfile",
+                    spec.url,
+                    "replace",
+                    "-1",
+                    options
+                ),
+                context: activeContext,
+                action: "loadfile async with file-local options"
+            )
+        } else {
+            try check(
+                nv_mpv_command3_async(activeContext, Self.loadFileReplyUserdata, "loadfile", spec.url, "replace"),
+                context: activeContext,
+                action: "loadfile async"
+            )
+        }
         for (index, sub) in spec.subs.enumerated() where !sub.url.isEmpty {
             let title = sub.name.isEmpty ? "外挂字幕 \(index + 1)" : sub.name
             guard let source = preparedSubtitleSource(for: sub, title: title) else { continue }
@@ -1066,6 +1201,10 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 DiagnosticLog.write(
                     "[MPV_END_FILE_IGNORED] reason=\(event.endFileReason) error=\(event.endFileError) status=\(currentStatus)"
                 )
+                return
+            }
+            if event.endFileReason == EndFileReason.eof.rawValue, event.endFileError >= 0,
+               recoverInvalidInitialStartIfNeeded(reachedEOF: true) {
                 return
             }
             let endState = withLock { () -> (
@@ -1222,6 +1361,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             let seconds = max(0, event.doubleValue)
             lock.lock()
             lastPositionMs = Int64(seconds * 1000)
+            let canPresentFrame = postSeekEndGuard.canPresentFrame(at: seconds)
+            let isWaitingForCache = isPausedForCache
             postSeekEndGuard.observePosition(seconds)
             lock.unlock()
             playerState?.position = seconds
@@ -1229,7 +1370,10 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             if MPVPlaybackActivityPolicy.shouldEndMediaLoading(
                 eventID: MPVPlaybackActivityPolicy.propertyChangeEventID,
                 positionSeconds: seconds
-            ) {
+            ), canPresentFrame, !isWaitingForCache {
+                withLock {
+                    postSeekEndGuard.markFramePresented()
+                }
                 cancelStartupWatchdog()
                 markPlaybackStartedIfNeeded()
                 markMediaReady()
@@ -1241,6 +1385,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             lastDurationMs = Int64(seconds * 1000)
             lock.unlock()
             playerState?.duration = seconds
+            if recoverInvalidInitialStartIfNeeded(durationSeconds: seconds) { return }
             if seconds > 0 {
                 cancelStartupWatchdog()
             }
@@ -1278,6 +1423,61 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         default:
             break
         }
+    }
+
+    @MainActor
+    private func recoverInvalidInitialStartIfNeeded(
+        durationSeconds: Double = 0,
+        reachedEOF: Bool = false
+    ) -> Bool {
+        let recovered = withLock { () -> PlaySpec? in
+            guard context != nil, Self.acceptsPlaybackStartEvent(status: status),
+                  let activeSpec,
+                  let recovered = MPVInitialStartPolicy.recoverySpec(
+                    for: activeSpec,
+                    durationSeconds: durationSeconds,
+                    isCurrentFileLoaded: currentFileLoaded,
+                    playbackStarted: playbackStartedNotified,
+                    reachedEOF: reachedEOF
+                  ) else { return nil }
+            self.activeSpec = recovered
+            currentFileLoaded = false
+            lastPositionMs = 0
+            lastDurationMs = 0
+            lastLoadDiagnostic = nil
+            postSeekEndGuard.reset()
+            isPausedForCache = false
+            cacheStallStart = nil
+            cacheStallTask?.cancel()
+            cacheStallTask = nil
+            cacheStallNotified = false
+            loadEventTracker.prepareForLoad()
+            return recovered
+        }
+        guard let recovered else { return false }
+        DiagnosticLog.write("[MPV_LOAD_START_RECOVERY] durationSeconds=\(durationSeconds) eof=\(reachedEOF)")
+        cancelSeekTransferMetrics()
+        playerState?.currentSpec = recovered
+        playerState?.position = 0
+        playerState?.duration = 0
+        playerState?.bufferedUntil = 0
+        playerState?.isMediaLoading = true
+        playerState?.isSeeking = false
+        playerState?.isBuffering = false
+        playerState?.cacheSpeedBytesPerSecond = nil
+        playerState?.cacheBufferingProgress = nil
+        do {
+            try load(spec: recovered)
+            withLock { loadEventTracker.markLoadIssued() }
+            if let pausedContext = withLock({ pauseRequested ? context : nil }) {
+                nv_mpv_set_property_flag(pausedContext, "pause", 1)
+            }
+            startLocalStreamStartupWatchdog(for: recovered)
+        } catch {
+            withLock { loadEventTracker.cancelPreparedLoad() }
+            setError("播放器重新加载失败: \(error.localizedDescription)")
+        }
+        return true
     }
 
     @MainActor
@@ -1361,16 +1561,56 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     @MainActor
     private func markMediaReady() {
+        cancelSeekTransferMetrics()
         playerState?.isMediaLoading = false
+        playerState?.isSeeking = false
     }
 
     @MainActor
     private func clearPlaybackActivity() {
+        cancelSeekTransferMetrics()
         playerState?.bufferedUntil = 0
         playerState?.isMediaLoading = false
+        playerState?.isSeeking = false
         playerState?.isBuffering = false
         playerState?.cacheSpeedBytesPerSecond = nil
         playerState?.cacheBufferingProgress = nil
+    }
+
+    @MainActor
+    private func startSeekTransferMetrics(for url: String?) {
+        cancelSeekTransferMetrics()
+        guard let url else { return }
+        seekTransferTask = Task { @MainActor [weak self] in
+            guard let self,
+                  let baseline = await ProxyServer.shared.remoteStreamBufferSnapshot(forLocalURL: url),
+                  !Task.isCancelled else { return }
+            playerState?.seekReceivedBytes = 0
+            let startedAt = Date()
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                } catch {
+                    return
+                }
+                guard let snapshot = await ProxyServer.shared.remoteStreamBufferSnapshot(forLocalURL: url),
+                      !Task.isCancelled else { return }
+                let receivedBytes = max(0, snapshot.deliveredBytes - baseline.deliveredBytes)
+                let elapsed = max(0.001, Date().timeIntervalSince(startedAt))
+                playerState?.seekReceivedBytes = receivedBytes
+                playerState?.seekTransferSpeedBytesPerSecond = receivedBytes > 0
+                    ? Int64(Double(receivedBytes) / elapsed)
+                    : nil
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelSeekTransferMetrics() {
+        seekTransferTask?.cancel()
+        seekTransferTask = nil
+        playerState?.seekReceivedBytes = nil
+        playerState?.seekTransferSpeedBytesPerSecond = nil
     }
 
     private func updateDisplaySleepPrevention() {

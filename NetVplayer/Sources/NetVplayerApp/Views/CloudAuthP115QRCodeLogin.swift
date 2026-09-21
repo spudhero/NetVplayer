@@ -18,7 +18,7 @@ enum CloudAuthP115QRCodePollResult {
     case credential(CloudCredential)
 }
 
-enum CloudAuthP115QRCodeLoginError: LocalizedError, Equatable {
+enum CloudAuthP115QRCodeLoginError: LocalizedError, Equatable, UserFacingDescribedError {
     case invalidResponse
     case missingQRCode
     case expired
@@ -38,6 +38,13 @@ enum CloudAuthP115QRCodeLoginError: LocalizedError, Equatable {
         case .rejected(let message):
             return message.isEmpty ? "115 扫码登录失败，请刷新后重试。" : message
         }
+    }
+
+    var userFacingDescription: String {
+        if case .rejected = self {
+            return "115 未能完成扫码登录，请刷新二维码后重试。"
+        }
+        return errorDescription ?? "115 扫码登录失败，请刷新后重试。"
     }
 }
 

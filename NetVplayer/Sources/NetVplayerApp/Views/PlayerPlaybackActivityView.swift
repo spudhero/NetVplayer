@@ -31,6 +31,7 @@ enum PlayerPlaybackActivityPolicy {
         isSourceLoading: Bool,
         sourceLoadingMessage: String,
         isMediaLoading: Bool,
+        isSeeking: Bool = false,
         isBuffering: Bool,
         hasBlockingUI: Bool
     ) -> PlayerPlaybackActivityPhase {
@@ -39,9 +40,11 @@ enum PlayerPlaybackActivityPolicy {
             sourceLoadingTitle: "正在加载视频",
             sourceLoadingMessage: sourceLoadingMessage,
             isMediaLoading: isMediaLoading,
-            mediaLoadingTitle: "正在加载视频",
-            mediaLoadingMessage: "正在等待画面开始播放。",
+            mediaLoadingTitle: isSeeking ? "正在跳转" : "正在加载视频",
+            mediaLoadingMessage: isSeeking ? "正在读取目标位置的画面。" : "正在等待画面开始播放。",
             isBuffering: isBuffering,
+            bufferingTitle: "播放中缓冲",
+            bufferingMessage: "当前线路供给不足，正在补充播放缓存。",
             hasBlockingUI: hasBlockingUI
         )
     }
@@ -61,6 +64,8 @@ enum PlayerPlaybackActivityPolicy {
             mediaLoadingTitle: "正在连接直播",
             mediaLoadingMessage: "线路已就绪，正在等待直播画面。",
             isBuffering: isBuffering,
+            bufferingTitle: "正在缓冲",
+            bufferingMessage: "当前线路供给不足，正在补充播放缓存。",
             hasBlockingUI: hasBlockingUI
         )
     }
@@ -78,6 +83,17 @@ enum PlayerPlaybackActivityPolicy {
             return fixedDecimal(Double(bytesPerSecond) / 1_024) + " KB/s"
         }
         return "\(bytesPerSecond) B/s"
+    }
+
+    static func transferredText(bytes: Int64?) -> String? {
+        guard let bytes, bytes > 0 else { return nil }
+        if bytes >= 1_048_576 {
+            return "已接收 " + fixedDecimal(Double(bytes) / 1_048_576) + " MB"
+        }
+        if bytes >= 1_024 {
+            return "已接收 " + fixedDecimal(Double(bytes) / 1_024) + " KB"
+        }
+        return "已接收 \(bytes) B"
     }
 
     static func progressText(_ progress: Double?) -> String? {
@@ -102,6 +118,8 @@ enum PlayerPlaybackActivityPolicy {
         mediaLoadingTitle: String,
         mediaLoadingMessage: String,
         isBuffering: Bool,
+        bufferingTitle: String,
+        bufferingMessage: String,
         hasBlockingUI: Bool
     ) -> PlayerPlaybackActivityPhase {
         guard !hasBlockingUI else { return .hidden }
@@ -122,8 +140,8 @@ enum PlayerPlaybackActivityPolicy {
         if isBuffering {
             return PlayerPlaybackActivityPhase(
                 kind: .buffering,
-                title: "正在缓冲",
-                message: "网络速度较慢，正在补充播放缓存。"
+                title: bufferingTitle,
+                message: bufferingMessage
             )
         }
         return .hidden
@@ -162,6 +180,7 @@ struct PlayerPlaybackActivityView: View {
     let progress: Double?
     let speedBytesPerSecond: Int64?
     let bufferedAheadDuration: Double
+    let transferredBytes: Int64?
     let showsImmediately: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -171,12 +190,14 @@ struct PlayerPlaybackActivityView: View {
         progress: Double?,
         speedBytesPerSecond: Int64?,
         bufferedAheadDuration: Double,
+        transferredBytes: Int64? = nil,
         showsImmediately: Bool = false
     ) {
         self.phase = phase
         self.progress = progress
         self.speedBytesPerSecond = speedBytesPerSecond
         self.bufferedAheadDuration = bufferedAheadDuration
+        self.transferredBytes = transferredBytes
         self.showsImmediately = showsImmediately
     }
 
@@ -290,7 +311,14 @@ struct PlayerPlaybackActivityView: View {
     }
 
     private var metricTexts: [String] {
-        [
+        if transferredBytes != nil {
+            return [
+                PlayerPlaybackActivityPolicy.transferredText(bytes: transferredBytes),
+                PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: speedBytesPerSecond)
+                    .map { "平均 \($0)" },
+            ].compactMap { $0 }
+        }
+        return [
             PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: speedBytesPerSecond),
             PlayerPlaybackActivityPolicy.bufferedAheadText(bufferedAheadDuration),
         ].compactMap { $0 }

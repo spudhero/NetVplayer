@@ -56,9 +56,12 @@ public final class PlayerState: ObservableObject {
     @Published public var duration: Double = 0
     @Published public var bufferedUntil: Double = 0
     @Published public var isMediaLoading: Bool = false
+    @Published public var isSeeking: Bool = false
     @Published public var isBuffering: Bool = false
     @Published public var cacheSpeedBytesPerSecond: Int64?
     @Published public var cacheBufferingProgress: Double?
+    @Published public var seekReceivedBytes: Int64?
+    @Published public var seekTransferSpeedBytesPerSecond: Int64?
     @Published public var speed: Float = 1.0
     @Published public var volume: Float = 1.0
     @Published public var videoAspectMode: PlayerVideoAspectMode = .fit

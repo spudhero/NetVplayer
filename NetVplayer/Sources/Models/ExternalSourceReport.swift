@@ -17,6 +17,39 @@ public enum ExternalSourceSupportStatus: String, Codable, Sendable, Equatable, H
     public var isNativeReplacement: Bool {
         self == .native || self == .nativePartial
     }
+
+    public var userFacingTitle: String {
+        switch self {
+        case .native: return "已兼容"
+        case .nativePartial: return "部分可用"
+        case .js: return "脚本型来源"
+        case .cms: return "标准内容接口"
+        case .pendingGuardCapture: return "正在适配"
+        case .upstreamUnavailable: return "源站暂不可用"
+        case .invalidConfiguration: return "配置不完整"
+        case .unsupportedAndroidCsp: return "暂不支持"
+        case .unsupportedBinary: return "需要额外组件"
+        }
+    }
+
+    public var userFacingDetail: String {
+        switch self {
+        case .native:
+            return "已提供当前系统可用的兼容实现，实际可用性仍取决于源站和网络。"
+        case .nativePartial:
+            return "该来源只有部分功能可用，详情请查看兼容状态。"
+        case .js, .cms:
+            return "该来源可直接尝试加载。"
+        case .pendingGuardCapture:
+            return "该来源仍在适配中，请先选择其他视频源。"
+        case .upstreamUnavailable:
+            return "源站当前无法返回内容，请稍后重试或选择其他视频源。"
+        case .invalidConfiguration:
+            return "该来源缺少必要配置，暂时无法加载。"
+        case .unsupportedAndroidCsp, .unsupportedBinary:
+            return "该来源使用的格式或组件当前无法加载，请选择其他视频源。"
+        }
+    }
 }
 
 public struct ExternalSourceReport: Codable, Sendable, Equatable, Identifiable {
@@ -32,7 +65,6 @@ public struct ExternalSourceReport: Codable, Sendable, Equatable, Identifiable {
     public var normalizationEvents: [ConfigNormalizationEvent]
     public var deduplicationReason: String
     public var cleanupReason: String
-    public var androidRuntimeDiagnostic: String
     public var credentialRequirements: [ConfigCredentialRequirement]
     public var hygieneDecision: SourceHygieneDecision?
     public var credentialRisk: CredentialRiskAssessment?
@@ -55,7 +87,6 @@ public struct ExternalSourceReport: Codable, Sendable, Equatable, Identifiable {
         normalizationEvents: [ConfigNormalizationEvent] = [],
         deduplicationReason: String = "",
         cleanupReason: String = "",
-        androidRuntimeDiagnostic: String = "",
         credentialRequirements: [ConfigCredentialRequirement] = [],
         hygieneDecision: SourceHygieneDecision? = nil,
         credentialRisk: CredentialRiskAssessment? = nil,
@@ -73,7 +104,6 @@ public struct ExternalSourceReport: Codable, Sendable, Equatable, Identifiable {
         self.normalizationEvents = normalizationEvents
         self.deduplicationReason = deduplicationReason
         self.cleanupReason = cleanupReason
-        self.androidRuntimeDiagnostic = androidRuntimeDiagnostic
         self.credentialRequirements = credentialRequirements
         self.hygieneDecision = hygieneDecision
         self.credentialRisk = credentialRisk
@@ -83,7 +113,7 @@ public struct ExternalSourceReport: Codable, Sendable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case configLocation, siteKey, siteName, api, status, reason, suggestion
         case sourceURL, origin, normalizationEvents, deduplicationReason, cleanupReason
-        case androidRuntimeDiagnostic, credentialRequirements, hygieneDecision, credentialRisk
+        case credentialRequirements, hygieneDecision, credentialRisk
         case resourceDiagnostics
     }
 
@@ -101,7 +131,6 @@ public struct ExternalSourceReport: Codable, Sendable, Equatable, Identifiable {
         self.normalizationEvents = try container.decodeIfPresent([ConfigNormalizationEvent].self, forKey: .normalizationEvents) ?? []
         self.deduplicationReason = try container.decodeIfPresent(String.self, forKey: .deduplicationReason) ?? ""
         self.cleanupReason = try container.decodeIfPresent(String.self, forKey: .cleanupReason) ?? ""
-        self.androidRuntimeDiagnostic = try container.decodeIfPresent(String.self, forKey: .androidRuntimeDiagnostic) ?? ""
         self.credentialRequirements = try container.decodeIfPresent([ConfigCredentialRequirement].self, forKey: .credentialRequirements) ?? []
         self.hygieneDecision = try container.decodeIfPresent(SourceHygieneDecision.self, forKey: .hygieneDecision)
         self.credentialRisk = try container.decodeIfPresent(CredentialRiskAssessment.self, forKey: .credentialRisk)
@@ -236,51 +265,51 @@ public enum ExternalSourceCompatibilityAuditor {
             if nativeCSPNames.contains(normalizedAPI) || nativeKeyedCSPNames.contains(keyedName) {
                 if homepageOnlyKeyedCSPNames.contains(keyedName) {
                     status = .nativePartial
-                    reason = "已注册 macOS Swift 首页/频道 provider，详情播放待继续抓包"
-                    suggestion = "当前可切源并加载首页/频道；详情和播放需后续按抓包补齐"
+                    reason = "首页和频道可用，详情与播放尚未适配"
+                    suggestion = "可先浏览首页和频道；播放时请选择完整可用的视频源"
                 } else if searchOnlyCSPNames.contains(normalizedAPI) {
                     status = .nativePartial
-                    reason = "已注册 macOS Swift 网盘搜索 provider；搜索结果可进入现有网盘展开链路"
+                    reason = "目前仅支持网盘搜索，搜索结果可继续展开"
                     switch normalizedAPI {
                     case "bpansoguard":
-                        suggestion = "百度分享暂未适配目录展开时明确不可播，不伪装媒体直链"
+                        suggestion = "百度分享目录暂未适配，无法播放时请更换来源"
                     default:
-                        suggestion = "夸克分享复用 DriveShareExpander 展开详情与播放"
+                        suggestion = "可在搜索页查找内容，并从结果中进入详情和播放"
                     }
                 } else {
                     status = .native
-                    reason = "已注册 macOS Swift SiteContentProvider 替代实现"
-                    suggestion = "通过 SpiderReplacementRegistry 注册 Swift provider"
+                    reason = "已提供当前系统可用的兼容实现"
+                    suggestion = "可直接使用；若加载失败，请检查网络或切换视频源"
                 }
             } else if invalidConfigurationCSPNames.contains(normalizedAPI) {
                 status = .invalidConfiguration
-                reason = "当前远端站点仅声明 csp_XPathGuard，未提供 ext/XPath 规则；连续两版顶层 JAR 均缺少 XPathGuard 类"
-                suggestion = "从远端配置移除该占位项，或同时补齐可加载实现与完整 XPath 规则后再评估原生迁移"
+                reason = "该来源缺少加载内容所需的规则"
+                suggestion = "请让配置维护者补充完整信息，或从配置中移除此来源"
             } else if upstreamUnavailableCSPNames.contains(normalizedAPI) {
                 status = .upstreamUnavailable
-                reason = "Fongmi 5.5.6 在两个 fresh process 中均由上游首页解析抛出相同异常，且没有缓存目录"
-                suggestion = "等待原站或 Guard 上游恢复；不运行 Android Jar/Dex/so，也不伪造可播放状态"
+                reason = "源站当前无法返回首页内容"
+                suggestion = "请稍后重试，或先切换其他视频源"
             } else if pendingGuardCaptureCSPNames.contains(normalizedAPI) {
                 status = .pendingGuardCapture
-                reason = "已确认 Android Guard 空壳委托 BaseSpiderGuard 和 Android .so，待动态抓包复刻"
-                suggestion = "需要 home/category/detail/search/player 输入输出和 HTTP trace fixture 后再接 Swift 原生 provider"
+                reason = "该来源尚未完成适配"
+                suggestion = "请先切换其他视频源，等待后续版本支持"
             } else if binaryOrAccountHeavyCSPNames.contains(normalizedAPI) {
                 status = .unsupportedBinary
-                reason = "依赖账号、Android Jar/so 或外部代理组件，第一阶段不打包"
-                suggestion = "后续按单个网盘/服务独立评估 Swift 原生实现"
+                reason = "该来源需要当前版本未包含的额外组件或账号能力"
+                suggestion = "请切换其他视频源，或使用已支持的网盘授权方式"
             } else {
                 status = .unsupportedAndroidCsp
-                reason = "Android csp_ Jar/Dex 爬虫源，macOS 不运行 DexClassLoader"
-                suggestion = "切换 JS/CMS 源，或为该 api 新增原生替代 provider"
+                reason = "该来源使用的格式当前无法加载"
+                suggestion = "请切换其他视频源"
             }
         } else if site.isSpider || api.lowercased().contains(".js") || api.lowercased().contains("drpy") {
             status = .js
-            reason = "JS/drpy 爬虫源，可由 JavaScriptCore 运行时尝试加载"
-            suggestion = "若失败，补齐 JS 宿主 API 或 drpy 模板兼容层"
+            reason = "脚本型视频源，将在本机受控环境中尝试加载"
+            suggestion = "若加载失败，请稍后重试或切换其他视频源"
         } else {
             status = .cms
-            reason = "CMS/XPath/HTTP API 源，可通过现有 SiteApi 直接请求"
-            suggestion = "按 ConfigEngine/SiteApi 现有合同解析"
+            reason = "标准内容接口，可直接尝试加载"
+            suggestion = "若加载失败，请检查网络或切换其他视频源"
         }
 
         let siteOrigin = snapshot?.origins.first {
@@ -303,14 +332,6 @@ public enum ExternalSourceCompatibilityAuditor {
         } ?? []
         let deduplicationReason = siteEvents.first(where: { $0.kind == .duplicateRemoved })?.reason ?? ""
         let cleanupReason = siteEvents.first(where: { $0.kind == .externalArrayFailed })?.reason ?? ""
-        let androidRuntimeDiagnostic = siteEvents.first(where: { $0.kind == .androidRuntimeUnsupported })?.reason
-            ?? (site.isAndroidCrawlerSource
-                && !status.isNativeReplacement
-                && status != .upstreamUnavailable
-                && status != .invalidConfiguration
-                ? "Android Jar/Dex/so 运行时不在 macOS 执行，仅保留兼容诊断"
-                : "")
-
         return ExternalSourceReport(
             configLocation: configLocation,
             siteKey: site.key,
@@ -324,7 +345,6 @@ public enum ExternalSourceCompatibilityAuditor {
             normalizationEvents: siteEvents,
             deduplicationReason: deduplicationReason,
             cleanupReason: cleanupReason,
-            androidRuntimeDiagnostic: androidRuntimeDiagnostic,
             credentialRequirements: credentialRequirements,
             hygieneDecision: hygieneDecision,
             credentialRisk: credentialRisk,

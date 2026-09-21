@@ -53,6 +53,25 @@ public final class UserPreferences: @unchecked Sendable {
         set { defaults.set(newValue, forKey: "currentVodConfigUrl") }
     }
 
+    public var providerRuntimeInitialInstallCompleted: Bool {
+        get { defaults.bool(forKey: "providerRuntimeInitialInstallCompleted") }
+        set { defaults.set(newValue, forKey: "providerRuntimeInitialInstallCompleted") }
+    }
+
+    public var providerRuntimeInitialInstallRecorded: Bool {
+        defaults.object(forKey: "providerRuntimeInitialInstallCompleted") != nil
+    }
+
+    public var providerRuntimePendingVersions: [String: String] {
+        get { defaults.dictionary(forKey: "providerRuntimePendingVersions") as? [String: String] ?? [:] }
+        set { defaults.set(newValue, forKey: "providerRuntimePendingVersions") }
+    }
+
+    public var providerRuntimeInstalledVersions: [String: String] {
+        get { defaults.dictionary(forKey: "providerRuntimeInstalledVersions") as? [String: String] ?? [:] }
+        set { defaults.set(newValue, forKey: "providerRuntimeInstalledVersions") }
+    }
+
     public var currentVodSiteKey: String {
         get { defaults.string(forKey: "currentVodSiteKey") ?? "" }
         set { defaults.set(newValue, forKey: "currentVodSiteKey") }

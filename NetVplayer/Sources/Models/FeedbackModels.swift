@@ -20,7 +20,7 @@ public enum FeedbackCategory: String, CaseIterable, Codable, Sendable, Identifia
         case .playback: return "播放"
         case .source: return "配置源"
         case .live: return "直播"
-        case .provider: return "Provider"
+        case .provider: return "播放扩展"
         case .userInterface: return "界面"
         case .crash: return "崩溃"
         case .other: return "其他"
@@ -158,7 +158,7 @@ public enum PublicSourceValidationError: Error, LocalizedError, Sendable, Equata
         case .invalidURL: return "复现源地址无效"
         case .requiresHTTPS: return "复现源必须使用 HTTPS"
         case .containsCredentials: return "复现源不能包含用户名或密码"
-        case .containsFragment: return "复现源不能包含 fragment"
+        case .containsFragment: return "复现源不能包含“#”后的页面定位内容"
         case .containsSensitiveQuery(let name): return "复现源包含敏感参数：\(name)"
         case .privateHost: return "复现源必须是可公开访问的主机"
         }

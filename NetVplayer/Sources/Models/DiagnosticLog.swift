@@ -343,6 +343,7 @@ public final class DiagnosticLogStore: @unchecked Sendable {
 
 public enum DiagnosticLog {
     private static let store = DiagnosticLogStore()
+    private static let remoteRelay = DiagnosticRecordRelay()
 
     public static var currentLogURL: URL { store.currentLogURL }
     public static var previousLogURL: URL { store.previousLogURL }
@@ -354,6 +355,18 @@ public enum DiagnosticLog {
 
     public static func write(_ message: String) {
         store.write(message)
+        remoteRelay.receive(message)
+    }
+
+    public static func setRemoteSink(_ sink: (@Sendable (RemoteDiagnosticRecord) -> Void)?) {
+        remoteRelay.setSink(sink)
+    }
+
+    public static func recordError(_ code: String, error: Error) {
+        let nsError = error as NSError
+        guard !(error is CancellationError),
+              !(nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled) else { return }
+        write("[\(code)] errorCode=\(nsError.code)")
     }
 
     public static func reportText(maximumCombinedBytes: Int = 2 * 1024 * 1024) -> String {

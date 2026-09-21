@@ -19,6 +19,15 @@ public enum ExternalResourceDiagnosticStatus: String, Codable, Sendable, CaseIte
     case blocked
     case androidRuntimeOnly
     case unsupportedType
+
+    public var userFacingTitle: String {
+        switch self {
+        case .recorded: return "可检查"
+        case .blocked: return "已拦截"
+        case .androidRuntimeOnly: return "格式不兼容"
+        case .unsupportedType: return "无法识别"
+        }
+    }
 }
 
 public struct ExternalResourceDiagnostic: Codable, Sendable, Equatable, Identifiable {
@@ -157,19 +166,19 @@ public enum ExternalResourceDiagnosticCollector {
         guard let parsed = URL(string: url),
               let scheme = parsed.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
-            return (.blocked, "仅允许诊断公网 http/https 资源")
+            return (.blocked, "资源地址格式不受支持")
         }
         guard let host = parsed.host, !host.isEmpty, !isBlockedHost(host) else {
-            return (.blocked, "目标地址被代理安全策略拒绝")
+            return (.blocked, "该地址未通过安全检查")
         }
 
         switch type {
         case .jar, .dex, .sharedObject:
-            return (.androidRuntimeOnly, "Android Jar/Dex/so 不在 macOS 执行；仅记录资源和后续抓包线索")
+            return (.androidRuntimeOnly, "该资源格式无法在当前系统使用，仅保留为配置诊断信息")
         case .js, .json, .txt:
-            return (.recorded, "资源地址通过安全校验，可用于可下载性诊断")
+            return (.recorded, "资源地址有效，可检查是否能够访问")
         case .unknown:
-            return (.unsupportedType, "未知资源类型，仅保留引用")
+            return (.unsupportedType, "无法识别资源类型，仅记录地址")
         }
     }
 

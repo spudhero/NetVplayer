@@ -131,6 +131,35 @@ private enum LivePlaybackAttemptResult: Equatable {
     case expiredAddress
 }
 
+enum SavedConfigStartupPhase: Equatable {
+    case unconfigured
+    case preparingExtension
+    case loading
+    case ready
+    case failed(String)
+}
+
+enum ProviderRuntimeUpdateState {
+    static func pendingVersions(catalog: [ProviderRelease], installedVersions: [String: String]) -> [String: String] {
+        var latestByID: [String: ProviderRelease] = [:]
+        for release in catalog {
+            if let current = latestByID[release.providerID],
+               ProviderManifestVerifier.compareVersions(current.version, release.version) >= 0 {
+                continue
+            }
+            latestByID[release.providerID] = release
+        }
+        var pending: [String: String] = [:]
+        for (id, release) in latestByID {
+            let installedVersion = installedVersions[id]
+            if installedVersion.map({ ProviderManifestVerifier.compareVersions($0, release.version) < 0 }) ?? true {
+                pending[id] = release.version
+            }
+        }
+        return pending
+    }
+}
+
 /// 全局应用状态
 @MainActor
 final class AppState: ObservableObject {
@@ -144,6 +173,7 @@ final class AppState: ObservableObject {
     var appearancePalette: AppThemePalette { AppThemeCatalog.palette(for: appearanceThemeID) }
     @Published var isConfigLoaded: Bool = false
     @Published var configError: String?
+    @Published private(set) var savedConfigStartupPhase: SavedConfigStartupPhase = .unconfigured
     @Published var currentSiteName: String = "未加载"
     @Published var vodError: String? = nil
     var savedConfigs: [Config] {
@@ -169,8 +199,11 @@ final class AppState: ObservableObject {
     @Published private(set) var providerRuntimeInstalled: [SignedProviderManifest] = []
     @Published private(set) var providerRuntimeStatus: String = "未配置"
     @Published private(set) var providerRuntimeBusy = false
+    @Published private(set) var providerRuntimeHasFailure = false
     @Published private(set) var providerRuntimeProgress: ProviderInstallProgress?
     @Published private(set) var providerRuntimeFailedRelease: ProviderVersionReference?
+    @Published private(set) var providerRuntimePendingVersions: [String: String] = [:]
+    @Published private(set) var providerRuntimeLocalPackageInvalid = false
     @Published var webHomeChromeTitle: String = "WebHome"
     @Published var lastWebHomeBridgeMethod: String?
     @Published var webHomeSessionDiagnostic = WebHomeSessionDiagnostic()
@@ -183,7 +216,21 @@ final class AppState: ObservableObject {
     private let configResolver: ConfigResolver
     private let userPreferences: UserPreferences
     private let providerRuntimeBootstrap: ProviderRuntimeBootstrap?
-    private var providerRuntimeStartupTask: Task<Void, Never>?
+    private let providerRuntimeStartupOverride: (@MainActor @Sendable () async -> Bool)?
+    private var providerRuntimeRegistrationTask: Task<Bool, Never>?
+    private(set) var providerRuntimeStartupTask: Task<Void, Never>?
+    private var providerRuntimeLocalReady = false
+    private var providerRuntimeRegistrationResolved = false
+    private var savedConfigBlockedByProviderRuntime = false
+    var providerRuntimeIsConfigured: Bool {
+        guard providerRuntimeBootstrap != nil,
+              let rawURL = Bundle.main.infoDictionary?["NetVplayerProviderDistributionIndexURL"] as? String,
+              let url = URL(string: rawURL) else { return false }
+        return url.scheme == "https" && url.host != nil
+    }
+    var providerRuntimeInitialInstallCompleted: Bool {
+        userPreferences.providerRuntimeInitialInstallCompleted && providerRuntimeLocalReady
+    }
     private var preferredVodHomeSiteKey: String?
 
     // 子状态
@@ -375,7 +422,8 @@ final class AppState: ObservableObject {
         storageManager: StorageManager = .shared,
         applicationLibraryPersistence: (any ApplicationLibraryPersistence)? = nil,
         userPreferences: UserPreferences = .shared,
-        providerRuntimeStartupOverride: (@MainActor @Sendable () async -> Void)? = nil
+        providerRuntimeRegistrationOverride: (@MainActor @Sendable () async -> Bool)? = nil,
+        providerRuntimeStartupOverride: (@MainActor @Sendable () async -> Bool)? = nil
     ) {
         let resolvedLibraryPersistence = applicationLibraryPersistence ?? storageManager
         self.driveShareExpander = driveShareExpander
@@ -386,6 +434,8 @@ final class AppState: ObservableObject {
         self.applicationLibraryPersistence = resolvedLibraryPersistence
         self.userPreferences = userPreferences
         self.providerRuntimeBootstrap = ProviderRuntimeBootstrap.makeDefault()
+        self.providerRuntimeStartupOverride = providerRuntimeStartupOverride
+        self.providerRuntimePendingVersions = userPreferences.providerRuntimePendingVersions
         let storedVodSiteKey = userPreferences.currentVodSiteKey.trimmingCharacters(in: .whitespacesAndNewlines)
         self.preferredVodHomeSiteKey = storedVodSiteKey.isEmpty ? nil : storedVodSiteKey
         let migratedPreferenceCount = UserPreferences.shared.migrateLegacyPreferenceDomainsIfNeeded()
@@ -436,18 +486,45 @@ final class AppState: ObservableObject {
         self.sourceHygieneRules = SourceHygieneStore.shared.loadRules()
         self.selectedSearchSiteKeys = UserPreferences.shared.defaultSearchSiteKeys
 
+        let savedURL = loadDefaultConfig
+            ? userPreferences.currentVodConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        if !savedURL.isEmpty {
+            savedConfigStartupPhase = .preparingExtension
+        }
+
+        let runtimeRegistrationTask: Task<Bool, Never>?
+        if let providerRuntimeRegistrationOverride {
+            runtimeRegistrationTask = Task { @MainActor in
+                await providerRuntimeRegistrationOverride()
+            }
+        } else if let providerRuntimeBootstrap {
+            runtimeRegistrationTask = Task { @MainActor [weak self] in
+                await providerRuntimeBootstrap.registerInstalledProviders()
+                let installed = await providerRuntimeBootstrap.installedManifests()
+                self?.providerRuntimeInstalled = installed
+                return !installed.isEmpty
+            }
+        } else {
+            runtimeRegistrationTask = nil
+            providerRuntimeHasFailure = providerRuntimeStartupOverride == nil
+            providerRuntimeStatus = "当前构建未配置扩展支持"
+        }
+        providerRuntimeRegistrationTask = runtimeRegistrationTask
         if let providerRuntimeStartupOverride {
             providerRuntimeBusy = true
-            providerRuntimeStatus = "正在检查 Provider 支持包"
+            providerRuntimeStatus = "正在检查播放扩展"
             providerRuntimeStartupTask = Task { @MainActor [weak self] in
-                await providerRuntimeStartupOverride()
-                self?.providerRuntimeBusy = false
+                guard let self else { return }
+                self.finishLocalProviderRegistration(await runtimeRegistrationTask?.value ?? false)
+                self.finishProviderRuntimeStartupOverride(await providerRuntimeStartupOverride())
             }
         } else if let providerRuntimeBootstrap {
             providerRuntimeBusy = true
-            providerRuntimeStatus = "正在检查 Provider 支持包"
+            providerRuntimeStatus = "正在检查播放扩展"
             let shouldDetectProviderProxy = startProxyServer
             providerRuntimeStartupTask = Task { @MainActor [weak self] in
+                self?.finishLocalProviderRegistration(await runtimeRegistrationTask?.value ?? false)
                 if shouldDetectProviderProxy {
                     let proxyPort = await ProxyDetector.shared.detectActiveProxy()
                     await providerRuntimeBootstrap.configureDistributionProxy(port: proxyPort)
@@ -457,22 +534,15 @@ final class AppState: ObservableObject {
         }
 
         // 仅恢复用户保存的配置；首次启动保持空壳，不内置或发现视频源。
-        if loadDefaultConfig {
-            let savedURL = userPreferences.currentVodConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !savedURL.isEmpty {
-                let startupTask = providerRuntimeStartupTask
-                initialConfigTask = Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    await self.loadConfig(url: savedURL, waitForProviderRuntime: false)
-                    if let startupTask {
-                        await startupTask.value
-                        if !self.isConfigLoaded {
-                            await self.loadConfig(url: savedURL, waitForProviderRuntime: false)
-                        } else if self.vodError != nil {
-                            await self.loadHomeContent()
-                        }
-                    }
+        if !savedURL.isEmpty {
+            initialConfigTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard await self.waitForProviderRuntimeReadiness() else {
+                    self.savedConfigBlockedByProviderRuntime = true
+                    self.savedConfigStartupPhase = .failed(self.providerRuntimeStatus)
+                    return
                 }
+                await self.loadConfig(url: savedURL, waitForProviderRuntime: false)
             }
         }
     }
@@ -483,21 +553,111 @@ final class AppState: ObservableObject {
         appearanceThemeID = id
     }
 
-    func refreshProviderRuntimeCatalog() {
-        guard let bootstrap = providerRuntimeBootstrap else {
-            providerRuntimeStatus = "当前构建未配置签名分发"
-            return
+    private func finishLocalProviderRegistration(_ hasVerifiedPackages: Bool) {
+        guard !providerRuntimeRegistrationResolved else { return }
+        providerRuntimeRegistrationResolved = true
+        providerRuntimeLocalReady = hasVerifiedPackages
+        let verifiedVersions = Dictionary(uniqueKeysWithValues: providerRuntimeInstalled.map {
+            ($0.manifest.providerID, $0.manifest.version)
+        })
+        let expectedIDs = Set(userPreferences.providerRuntimeInstalledVersions.keys)
+        let hasMissingPackage = !expectedIDs.isSubset(of: Set(verifiedVersions.keys))
+        if hasMissingPackage {
+            providerRuntimeLocalPackageInvalid = true
+            userPreferences.providerRuntimeInitialInstallCompleted = false
+        } else if hasVerifiedPackages && !userPreferences.providerRuntimeInitialInstallRecorded {
+            userPreferences.providerRuntimeInitialInstallCompleted = true
+            userPreferences.providerRuntimeInstalledVersions = verifiedVersions
+        } else if !hasVerifiedPackages {
+            providerRuntimeLocalPackageInvalid = userPreferences.providerRuntimeInitialInstallCompleted
+            userPreferences.providerRuntimeInitialInstallCompleted = false
         }
-        guard !providerRuntimeBusy else { return }
+    }
+
+    private func finishProviderRuntimeStartupOverride(_ succeeded: Bool) {
+        providerRuntimeBusy = false
+        providerRuntimeHasFailure = !succeeded
+        providerRuntimeLocalReady = succeeded || providerRuntimeLocalReady
+        if succeeded {
+            userPreferences.providerRuntimeInitialInstallCompleted = true
+            providerRuntimeLocalPackageInvalid = false
+            providerRuntimeStatus = "播放扩展已就绪"
+        } else {
+            providerRuntimeStatus = providerRuntimeLocalReady
+                ? "扩展更新检查未完成，继续使用已安装版本"
+                : "播放扩展安装未完成，请重试"
+        }
+    }
+
+    private func waitForProviderRuntimeReadiness() async -> Bool {
+        let hasVerifiedPackages = await providerRuntimeRegistrationTask?.value ?? false
+        finishLocalProviderRegistration(hasVerifiedPackages)
+        if userPreferences.providerRuntimeInitialInstallCompleted && providerRuntimeLocalReady {
+            return true
+        }
+        await providerRuntimeStartupTask?.value
+        return userPreferences.providerRuntimeInitialInstallCompleted && providerRuntimeLocalReady
+    }
+
+    @discardableResult
+    func refreshProviderRuntimeCatalog() -> Task<Void, Never>? {
+        if let providerRuntimeStartupOverride {
+            if providerRuntimeBusy { return providerRuntimeStartupTask }
+            providerRuntimeBusy = true
+            let task = Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.finishProviderRuntimeStartupOverride(await providerRuntimeStartupOverride())
+            }
+            providerRuntimeStartupTask = task
+            return task
+        }
+        guard providerRuntimeIsConfigured, let bootstrap = providerRuntimeBootstrap else {
+            providerRuntimeHasFailure = true
+            providerRuntimeStatus = "当前构建未配置扩展支持"
+            return nil
+        }
+        if providerRuntimeBusy { return providerRuntimeStartupTask }
         providerRuntimeBusy = true
-        Task { @MainActor [weak self] in
+        providerRuntimeHasFailure = false
+        let task = Task { @MainActor [weak self] in
             let proxyPort = await ProxyDetector.shared.detectActiveProxy()
             await bootstrap.configureDistributionProxy(port: proxyPort)
             await self?.synchronizeProviderRuntime(using: bootstrap)
         }
+        providerRuntimeStartupTask = task
+        return task
     }
 
-    private func synchronizeProviderRuntime(using bootstrap: ProviderRuntimeBootstrap) async {
+    func retrySavedConfigStartup() {
+        let savedURL = userPreferences.currentVodConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !savedURL.isEmpty else {
+            savedConfigStartupPhase = .unconfigured
+            return
+        }
+        savedConfigStartupPhase = .preparingExtension
+        if userPreferences.providerRuntimeInitialInstallCompleted && providerRuntimeLocalReady {
+            initialConfigTask = Task { @MainActor [weak self] in
+                await self?.loadConfig(url: savedURL, waitForProviderRuntime: false)
+            }
+            return
+        }
+        let task = refreshProviderRuntimeCatalog()
+        initialConfigTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await task?.value
+            guard self.userPreferences.providerRuntimeInitialInstallCompleted,
+                  self.providerRuntimeLocalReady else {
+                self.savedConfigBlockedByProviderRuntime = true
+                self.savedConfigStartupPhase = .failed(self.providerRuntimeStatus)
+                return
+            }
+            await self.loadConfig(url: savedURL, waitForProviderRuntime: false)
+        }
+    }
+
+    func synchronizeProviderRuntime(using bootstrap: ProviderRuntimeBootstrap) async {
+        providerRuntimeBusy = true
+        providerRuntimeHasFailure = false
         providerRuntimeFailedRelease = nil
         do {
             let result = try await bootstrap.synchronizeAvailableProviders { [weak self] progress in
@@ -505,34 +665,67 @@ final class AppState: ObservableObject {
             }
             providerRuntimeCatalog = result.catalog
             providerRuntimeInstalled = result.installed
+            providerRuntimeLocalReady = !result.installed.isEmpty
+            if !result.catalog.isEmpty, result.failures.isEmpty, providerRuntimeLocalReady {
+                userPreferences.providerRuntimeInitialInstallCompleted = true
+                providerRuntimeLocalPackageInvalid = false
+            }
+            let installedVersions = Dictionary(uniqueKeysWithValues: result.installed.map {
+                ($0.manifest.providerID, $0.manifest.version)
+            })
+            if userPreferences.providerRuntimeInitialInstallCompleted {
+                userPreferences.providerRuntimeInstalledVersions = installedVersions
+            }
+            let pending = ProviderRuntimeUpdateState.pendingVersions(
+                catalog: result.catalog,
+                installedVersions: installedVersions
+            )
+            providerRuntimePendingVersions = pending
+            userPreferences.providerRuntimePendingVersions = pending
             providerRuntimeFailedRelease = result.failures.last?.release
+            providerRuntimeHasFailure = !result.failures.isEmpty
             if !result.failures.isEmpty {
                 providerRuntimeStatus = result.installedOrUpdated.isEmpty
-                    ? "Provider 支持包同步失败 \(result.failures.count) 个"
+                    ? "有 \(result.failures.count) 个播放扩展未能更新"
                     : "已更新 \(result.installedOrUpdated.count) 个，失败 \(result.failures.count) 个"
             } else if result.catalog.isEmpty {
-                providerRuntimeStatus = "暂无可用的 Provider 支持包"
+                providerRuntimeStatus = "暂无可用的播放扩展"
             } else if result.installedOrUpdated.isEmpty {
-                providerRuntimeStatus = "Provider 支持包已是最新"
+                providerRuntimeStatus = "播放扩展已是最新"
             } else {
                 providerRuntimeStatus = "已自动安装或更新 \(result.installedOrUpdated.count) 个支持包"
             }
         } catch {
+            providerRuntimeHasFailure = true
             providerRuntimeInstalled = await bootstrap.installedManifests()
-            providerRuntimeStatus = providerRuntimeInstalled.isEmpty
-                ? "自动同步失败：\(error.localizedDescription)"
-                : "自动同步失败，继续使用已安装支持包"
+            providerRuntimeLocalReady = !providerRuntimeInstalled.isEmpty
+            providerRuntimeStatus = providerRuntimeLocalReady
+                ? "无法检查扩展更新，已安装版本仍可使用"
+                : providerRuntimeLocalPackageInvalid
+                    ? "本地扩展不可用，请重新安装"
+                    : UserFacingErrorPresenter.message(
+                    for: error,
+                    context: .extensionOperation(operation: "自动准备播放扩展")
+                )
         }
         providerRuntimeProgress = nil
         providerRuntimeBusy = false
+        if savedConfigBlockedByProviderRuntime,
+           userPreferences.providerRuntimeInitialInstallCompleted,
+           providerRuntimeLocalReady,
+           case .failed = savedConfigStartupPhase {
+            retrySavedConfigStartup()
+        }
     }
 
     func installProvider(providerID: String, version: String) {
         guard let bootstrap = providerRuntimeBootstrap else {
+            providerRuntimeHasFailure = true
             providerRuntimeStatus = "当前构建未配置签名分发"
             return
         }
         providerRuntimeBusy = true
+        providerRuntimeHasFailure = false
         providerRuntimeProgress = nil
         providerRuntimeFailedRelease = nil
         Task { @MainActor [weak self] in
@@ -542,12 +735,30 @@ final class AppState: ObservableObject {
                 }
                 self?.providerRuntimeInstalled = await bootstrap.installedManifests()
                 self?.providerRuntimeStatus = "已安装 \(providerID) \(version)"
+                self?.providerRuntimeLocalReady = !(self?.providerRuntimeInstalled.isEmpty ?? true)
+                if self?.userPreferences.providerRuntimeInitialInstallCompleted == true,
+                   let installed = self?.providerRuntimeInstalled {
+                    self?.userPreferences.providerRuntimeInstalledVersions = Dictionary(uniqueKeysWithValues: installed.map {
+                        ($0.manifest.providerID, $0.manifest.version)
+                    })
+                }
+                self?.providerRuntimePendingVersions.removeValue(forKey: providerID)
+                if let pending = self?.providerRuntimePendingVersions {
+                    self?.userPreferences.providerRuntimePendingVersions = pending
+                }
+                if self?.userPreferences.providerRuntimeInitialInstallCompleted == false {
+                    await self?.synchronizeProviderRuntime(using: bootstrap)
+                }
             } catch {
+                self?.providerRuntimeHasFailure = true
                 self?.providerRuntimeFailedRelease = ProviderVersionReference(
                     providerID: providerID,
                     version: version
                 )
-                self?.providerRuntimeStatus = "安装 \(providerID) \(version) 失败：\(error.localizedDescription)"
+                self?.providerRuntimeStatus = UserFacingErrorPresenter.message(
+                    for: error,
+                    context: .extensionOperation(operation: "安装播放扩展")
+                )
             }
             self?.providerRuntimeProgress = nil
             self?.providerRuntimeBusy = false
@@ -810,7 +1021,10 @@ final class AppState: ObservableObject {
             reloadSourceHygieneRules()
             sourceDiagnosticExportStatus = "已添加治理规则，重新加载配置后生效"
         } catch {
-            sourceDiagnosticExportStatus = "添加治理规则失败：\(error.localizedDescription)"
+            sourceDiagnosticExportStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: "保存视频源屏蔽规则")
+            )
         }
     }
 
@@ -820,7 +1034,10 @@ final class AppState: ObservableObject {
             reloadSourceHygieneRules()
             sourceDiagnosticExportStatus = "已清空源治理规则，重新加载配置后恢复"
         } catch {
-            sourceDiagnosticExportStatus = "清空治理规则失败：\(error.localizedDescription)"
+            sourceDiagnosticExportStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: "恢复视频源屏蔽规则")
+            )
         }
     }
 
@@ -846,7 +1063,10 @@ final class AppState: ObservableObject {
             try encoder.encode(export).write(to: url, options: .atomic)
             sourceDiagnosticExportStatus = "已导出诊断：\(url.path)"
         } catch {
-            sourceDiagnosticExportStatus = "导出诊断失败：\(error.localizedDescription)"
+            sourceDiagnosticExportStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: "导出诊断文件")
+            )
         }
     }
 
@@ -899,7 +1119,7 @@ final class AppState: ObservableObject {
 
     func probeCurrentLiveGroup() async {
         guard let group = selectedGroup ?? channelGroups.first else {
-            liveError = "Live: 当前没有可检测的频道分组"
+            liveError = "当前没有可检测的频道分组。请先加载或切换直播源。"
             return
         }
         let liveName = activeLive?.name ?? "live"
@@ -908,7 +1128,7 @@ final class AppState: ObservableObject {
             channel.urls.enumerated().map { (channel: channel, index: $0.offset, url: $0.element) }
         }
         guard !targets.isEmpty else {
-            liveError = "Live: \(group.name) 没有可检测线路"
+            liveError = "“\(group.name)”没有可检测的线路。请切换分组或直播源。"
             return
         }
 
@@ -961,8 +1181,16 @@ final class AppState: ObservableObject {
         waitForProviderRuntime: Bool = true
     ) async {
         if waitForProviderRuntime {
-            await providerRuntimeStartupTask?.value
+            savedConfigStartupPhase = .preparingExtension
+            guard await waitForProviderRuntimeReadiness() else {
+                configError = providerRuntimeStatus
+                savedConfigBlockedByProviderRuntime = true
+                savedConfigStartupPhase = .failed(providerRuntimeStatus)
+                return
+            }
         }
+        savedConfigBlockedByProviderRuntime = false
+        savedConfigStartupPhase = .loading
         log("[DEBUG_LOGGER] 开始加载配置: \(url)")
         do {
             self.availableDepots = []
@@ -1019,8 +1247,8 @@ final class AppState: ObservableObject {
                     }
                     var updated = report
                     updated.status = .native
-                    updated.reason = "已命中 SpiderReplacementRegistry Swift provider"
-                    updated.suggestion = "已接管该 csp_ 源；实际可用性以各功能运行结果为准"
+                    updated.reason = "已提供当前系统可用的兼容实现"
+                    updated.suggestion = "可直接使用；若加载失败，请检查网络或切换视频源"
                     return updated
                 }
                 .filter { $0.siteKey != SearchSitePlanner.builtInCMSKey }
@@ -1058,6 +1286,7 @@ final class AppState: ObservableObject {
             
             self.configError = nil
             self.isConfigLoaded = true
+            self.savedConfigStartupPhase = .ready
             
             // 异步自检测试：拉取前几个可加载的 JS 爬虫站点的首页内容，定位调试问题
             Task {
@@ -1108,11 +1337,14 @@ final class AppState: ObservableObject {
                 self.nativeReplacementSiteKeys = []
                 self.configError = "配置仓库需选择子配置"
                 self.isConfigLoaded = false
+                self.savedConfigStartupPhase = .failed(self.configError ?? "请选择子配置")
                 log("[DEBUG_LOGGER] 配置仓库包含 \(depots.count) 个子配置")
                 return
             }
             log("[DEBUG_LOGGER] loadConfig 遭遇总异常: \(error)")
-            self.configError = "\(error.localizedDescription) (\(error))"
+            DiagnosticLog.recordError("CONFIG_LOAD_FAILED", error: error)
+            self.configError = UserFacingErrorPresenter.message(for: error, context: .configuration)
+            self.savedConfigStartupPhase = .failed(self.configError ?? "数据源加载失败")
             self.externalSourceReports = []
             self.configAggregationSnapshot = ConfigAggregationSnapshot(rootURL: url)
             self.nativeReplacementSiteKeys = []
@@ -1480,9 +1712,9 @@ final class AppState: ObservableObject {
                 clearContent: true
             )
             if isCurrent {
-                self.vodError = site.androidCrawlerUnsupportedMessage
+                self.vodError = site.unsupportedSourceMessage
             }
-            log("[DEBUG_LOGGER] \(site.androidCrawlerUnsupportedMessage)")
+            log("[DEBUG_LOGGER] \(site.unsupportedSourceMessage)")
             return
         }
 
@@ -1496,13 +1728,17 @@ final class AppState: ObservableObject {
             log("[DEBUG_LOGGER] 首页加载成功! 分类数: \(result.types.count), 影片数: \(result.list.count)")
         } catch {
             log("[DEBUG_LOGGER] 加载首页推荐发生异常: \(error)")
+            DiagnosticLog.recordError("CATALOG_LOAD_FAILED", error: error)
             let isCurrent = contentCatalogState.generation == generation
             contentCatalogState = ContentCatalogCore.failHome(
                 contentCatalogState,
                 generation: generation
             )
             if isCurrent {
-                self.vodError = error.localizedDescription
+                self.vodError = UserFacingErrorPresenter.message(
+                    for: error,
+                    context: .content(sourceName: site.name)
+                )
             }
         }
     }
@@ -1619,7 +1855,7 @@ final class AppState: ObservableObject {
                 request: request
             )
             if isCurrent {
-                vodError = site.androidCrawlerUnsupportedMessage
+                vodError = site.unsupportedSourceMessage
             }
             return
         }
@@ -1646,7 +1882,10 @@ final class AppState: ObservableObject {
             )
             if isCurrent {
                 print("[AppState] 加载分类 \(transition.state.selectedCategory?.typeName ?? request.categoryID) 失败: \(error)")
-                vodError = error.localizedDescription
+                vodError = UserFacingErrorPresenter.message(
+                    for: error,
+                    context: .content(sourceName: site.name)
+                )
             }
         }
     }
@@ -2382,8 +2621,10 @@ final class AppState: ObservableObject {
             }
             
             let skipSettings = VodSkipSettingsStore.shared.settings(for: finalSpec.metadata)
-            setPendingPlaybackStart(
+            preparePlaybackStart(
+                spec: &finalSpec,
                 resumePosition: resumePosition,
+                resumeDuration: resumeDuration,
                 episodeURL: episode.url,
                 openingSkipSeconds: skipSettings.openingSeconds
             )
@@ -2413,7 +2654,7 @@ final class AppState: ObservableObject {
         let isSourceFailure = error is DriveEngineError || error is PlaybackInteractionRequiredError
         lastFeedbackFailureStage = isSourceFailure ? "Source.resolve" : "Player.prepare"
         lastFeedbackFailureCategory = isSourceFailure ? .source : .player
-        playbackErrorMessage = error.localizedDescription
+        playbackErrorMessage = UserFacingErrorPresenter.message(for: error, context: .playback)
         playbackErrorAuthProvider = nil
 
         if let interactionError = error as? PlaybackInteractionRequiredError {
@@ -2438,6 +2679,7 @@ final class AppState: ObservableObject {
             }
         }
 
+        DiagnosticLog.recordError("PLAYBACK_PREPARE_FAILED", error: error)
         isPlaybackErrorPresented = true
     }
 
@@ -2513,6 +2755,15 @@ final class AppState: ObservableObject {
     }
 
     func completeCloudAuth(credential: CloudCredential) async throws -> CloudAuthCompletion {
+        do {
+            return try await performCloudAuth(credential: credential)
+        } catch {
+            DiagnosticLog.recordError("CLOUD_AUTH_FAILED", error: error)
+            throw error
+        }
+    }
+
+    private func performCloudAuth(credential: CloudCredential) async throws -> CloudAuthCompletion {
         switch credential.provider {
         case .quark:
             switch credential.kind {
@@ -2644,7 +2895,7 @@ final class AppState: ObservableObject {
             UserPreferences.shared.ucFongMiPlaybackToken = token
             UserPreferences.shared.ucFongMiPlaybackExpiresAt = expiresAt
         case .none:
-            throw DriveEngineError.unsupported("UC FongMi 私有码凭证缺少用途标记。")
+            throw DriveEngineError.unsupported("UC 专用播放授权缺少用途信息。")
         }
 
         UserPreferences.shared.ucFongMiFixtureID = validated.metadata[UCFongMiCredentialMetadataKey.fixtureID] ?? ""
@@ -2659,10 +2910,10 @@ final class AppState: ObservableObject {
                 pendingAuthEpisode = nil
                 await playEpisode(episode)
             }
-            return .dismiss("UC FongMi 播放授权已保存，正在重试播放。")
+            return .dismiss("UC 专用播放授权已保存，正在重试播放。")
         }
 
-        return .stay("UC FongMi 私有码凭证已保存；公开分享播放仍优先使用 UC Cookie。")
+        return .stay("UC 专用播放授权已保存；普通分享播放仍优先使用网页授权。")
     }
 
     private func completeAliAuth(_ credential: CloudCredential) async -> CloudAuthCompletion {
@@ -3215,7 +3466,7 @@ final class AppState: ObservableObject {
             return
         }
 
-        let message = self.liveError ?? "Live: \(channel.name) 没有可用线路，请尝试切换直播源"
+        let message = self.liveError ?? "频道“\(channel.name)”没有可用线路。请切换直播源。"
         self.liveError = message
         self.livePlayerState.errorMessage = message
         self.log("[playChannel] \(message)")
@@ -3243,7 +3494,7 @@ final class AppState: ObservableObject {
             return
         }
 
-        let message = self.liveError ?? "Live: \(channel.name) 线路\(index + 1) 不可用，请尝试其它线路或直播源"
+        let message = self.liveError ?? "频道“\(channel.name)”的线路 \(index + 1) 不可用。请切换线路或直播源。"
         self.liveError = message
         self.livePlayerState.errorMessage = message
         self.log("[changeChannelUrlIndex] \(message)")
@@ -3263,9 +3514,10 @@ final class AppState: ObservableObject {
         }
         guard !Task.isCancelled else { return }
 
+        restoreCachedLiveSelectionIfNeeded()
         guard var channel = selectedChannel else { return }
         guard !channel.urls.isEmpty else {
-            let message = "Live: \(channel.name) 没有可用线路，请切换频道"
+            let message = "频道“\(channel.name)”没有可用线路。请切换频道。"
             liveError = message
             livePlayerState.errorMessage = message
             return
@@ -3283,6 +3535,27 @@ final class AppState: ObservableObject {
         log("[LIVE_RESUME_SELECTED] channel=\(channel.name) urlIndex=\(preferredIndex)")
         guard !Task.isCancelled else { return }
         await changeChannelUrlIndex(preferredIndex)
+    }
+
+    func restoreCachedLiveSelectionIfNeeded() {
+        guard selectedChannel == nil, !channelGroups.isEmpty else { return }
+        restoreLiveSelection(groups: channelGroups)
+    }
+
+    static func restoredLiveSelection(
+        groups: [ChannelGroup],
+        savedGroupName: String,
+        savedChannelName: String,
+        savedURLIndex: Int
+    ) -> (group: ChannelGroup?, channel: Channel?, urlIndex: Int) {
+        let group = groups.first { $0.name == savedGroupName } ?? groups.first
+        guard var channel = group?.channels.first(where: { $0.name == savedChannelName })
+            ?? group?.channels.first else {
+            return (group, nil, 0)
+        }
+
+        channel.currentUrlIndex = min(max(savedURLIndex, 0), max(channel.urls.count - 1, 0))
+        return (group, channel, channel.currentUrlIndex)
     }
 
     private func isActiveLivePlayback(channel: Channel, urlIndex: Int) -> Bool {
@@ -3372,7 +3645,7 @@ final class AppState: ObservableObject {
             currentSessionID: livePlaybackSessionID,
             isLivePlayerPresented: isLivePlayerPresented
         ) else { return false }
-        liveError = lastMessage ?? "Live: 没有可用线路，请尝试切换直播源"
+        liveError = lastMessage ?? "当前没有可用线路。请切换直播源。"
         return false
     }
 
@@ -3460,7 +3733,7 @@ final class AppState: ObservableObject {
             logLiveProbe(channel: channel, urlIndex: urlIndex, result: probe)
             recordLiveLineHealth(channel: channel, url: url, result: probe, durationMs: probeDurationMs)
             if LiveContentRefreshPolicy.shouldRefresh(after: probe) {
-                liveError = "Live: \(channel.name) 线路\(urlIndex + 1) 的签名/鉴权已失效，正在刷新频道列表"
+                liveError = "频道“\(channel.name)”的线路 \(urlIndex + 1) 已过期，正在刷新频道列表。"
                 self.log("[\(logContext)] 直播地址可能已过期，刷新频道列表后重试: channel=\(channel.name) status=\(probe.statusCode)")
                 return .expiredAddress
             }
@@ -3528,7 +3801,10 @@ final class AppState: ObservableObject {
                 currentSessionID: livePlaybackSessionID,
                 isLivePlayerPresented: isLivePlayerPresented
             ) else { return .failed }
-            liveError = "Live: \(channel.name) 线路\(urlIndex + 1) 预处理失败: \(error.localizedDescription)"
+            liveError = UserFacingErrorPresenter.message(
+                for: error,
+                context: .live(channelName: channel.name, lineNumber: urlIndex + 1)
+            )
             self.log("[\(logContext)] 直播播放预处理失败: \(error.localizedDescription)")
             return .failed
         }
@@ -3536,9 +3812,9 @@ final class AppState: ObservableObject {
 
     private func liveProbeFailureMessage(channel: String, urlIndex: Int, statusCode: Int, hasMoreAttempts: Bool) -> String {
         if hasMoreAttempts {
-            return "Live: \(channel) 线路\(urlIndex + 1) 上游返回 HTTP \(statusCode)，正在尝试下一线路"
+            return "频道“\(channel)”的线路 \(urlIndex + 1) 暂时不可用（错误码 \(statusCode)），正在尝试下一线路。"
         }
-        return "Live: \(channel) 线路\(urlIndex + 1) 上游返回 HTTP \(statusCode)，请尝试其它线路或直播源"
+        return "频道“\(channel)”的线路 \(urlIndex + 1) 暂时不可用（错误码 \(statusCode)）。请切换线路或直播源。"
     }
 
     private func driveProviderLabel(for spec: PlaySpec) -> String {
@@ -3550,6 +3826,9 @@ final class AppState: ObservableObject {
     func handleMPVPlaybackFailure(spec: PlaySpec?, message: String) {
         lastFeedbackFailureStage = "Player.mpv"
         lastFeedbackFailureCategory = spec?.metadata["playback.kind"] == "live" ? .live : .player
+        if spec?.metadata["playback.kind"] != "live" {
+            playerState.errorMessage = UserFacingErrorPresenter.playbackMessage(from: message)
+        }
         if let spec, spec.metadata["playback.kind"] != "live" {
             recordSiteHealth(
                 eventType: .play,
@@ -3990,12 +4269,17 @@ final class AppState: ObservableObject {
         playerState.drivePlaybackStatus = "正在切换 \(routeTitle)"
         log("[\(logContext)] \(reason)，切换到 \(routeTitle): \(redactedPlaybackURL(prepared.url))")
 
-        let playable = await proxiedPlaySpec(prepared, logContext: logContext)
+        var playable = await proxiedPlaySpec(prepared, logContext: logContext)
         let resumeMilliseconds = Int64(max(0, positionSeconds) * 1000)
+        let durationMilliseconds = playerState.duration.isFinite && playerState.duration > 0
+            ? Int64(playerState.duration * 1_000)
+            : nil
         let episodeURL = PlaybackResumePolicy.episodeURL(for: prepared)
         let skipSettings = VodSkipSettingsStore.shared.settings(for: prepared.metadata)
-        setPendingPlaybackStart(
+        preparePlaybackStart(
+            spec: &playable,
             resumePosition: resumeMilliseconds > 0 ? resumeMilliseconds : nil,
+            resumeDuration: durationMilliseconds,
             episodeURL: episodeURL,
             openingSkipSeconds: skipSettings.openingSeconds
         )
@@ -4222,6 +4506,32 @@ final class AppState: ObservableObject {
         log("[PLAYBACK_START_PENDING] episode=\(pending.logID) resumeMs=\(normalizedResume ?? 0) openingSeconds=\(normalizedOpening)")
     }
 
+    private func preparePlaybackStart(
+        spec: inout PlaySpec,
+        resumePosition: Int64?,
+        resumeDuration: Int64?,
+        episodeURL: String,
+        openingSkipSeconds: Int
+    ) {
+        spec.initialStartPositionSeconds = nil
+        if MPVInitialStartPolicy.supportsFileLocalStart(for: spec),
+           let position = MPVInitialStartPolicy.positionMilliseconds(
+                resumePosition: resumePosition,
+                resumeDuration: resumeDuration,
+                openingSkipSeconds: openingSkipSeconds
+           ) {
+            cancelPendingPlaybackStart()
+            spec.initialStartPositionSeconds = Double(position) / 1_000
+            log("[PLAYBACK_START_LOAD_OPTION] episode=\(episodeURL.hashValue) positionMs=\(position)")
+            return
+        }
+        setPendingPlaybackStart(
+            resumePosition: resumePosition,
+            episodeURL: episodeURL,
+            openingSkipSeconds: openingSkipSeconds
+        )
+    }
+
     private func cancelPendingPlaybackStart() {
         pendingPlaybackStartTask?.cancel()
         pendingPlaybackStartTask = nil
@@ -4298,21 +4608,21 @@ final class AppState: ObservableObject {
         let lower = message.lowercased()
         let transport = spec.metadata[LiveHLSRelayPolicy.transportMetadataKey] ?? ""
         if transport == LiveHLSRelayPolicy.localRelayTransport {
-            return "Live: \(channelName) 本地 HLS relay 失败：\(message)"
+            return "频道“\(channelName)”的播放线路处理失败。请重试或切换线路。"
         }
         if transport == LiveHLSRelayPolicy.localStreamRelayTransport {
-            return "Live: \(channelName) 本地 stream relay 失败：\(message)"
+            return "频道“\(channelName)”的播放线路处理失败。请重试或切换线路。"
         }
         if lower.contains("404") || lower.contains("not found") {
-            return "Live: \(channelName) 上游直播源不存在或已失效：\(message)"
+            return "频道“\(channelName)”的直播地址已失效。请刷新频道列表或切换线路。"
         }
         if lower.contains("403") || lower.contains("401") || lower.contains("expired") || lower.contains("signature") || lower.contains("鉴权") {
-            return "Live: \(channelName) 直播地址可能签名/鉴权失效：\(message)"
+            return "频道“\(channelName)”的直播地址已过期。请刷新频道列表或切换线路。"
         }
         if lower.contains("502") || lower.contains("tls") || lower.contains("proxy") || lower.contains("io error") || lower.contains("connection reset") {
-            return "Live: \(channelName) 播放器网络路径失败：\(message)。如启用了代理，请切换为直连或改用可用代理"
+            return "频道“\(channelName)”连接失败。请检查网络和代理设置后重试。"
         }
-        return "Live: \(channelName) 播放器加载失败：\(message)"
+        return "频道“\(channelName)”当前线路无法播放。请重试或切换线路。"
     }
 
     private func logLiveProbe(channel: Channel, urlIndex: Int, result: LiveProbeResult) {
@@ -4358,22 +4668,15 @@ final class AppState: ObservableObject {
     }
 
     private func restoreLiveSelection(groups: [ChannelGroup]) {
-        let savedGroupName = UserPreferences.shared.currentLiveGroupName
-        let savedChannelName = UserPreferences.shared.currentLiveChannelName
-        let savedIndex = UserPreferences.shared.currentLiveChannelUrlIndex
-
-        let group = groups.first { $0.name == savedGroupName } ?? groups.first
-        let channel = group?.channels.first { $0.name == savedChannelName } ?? group?.channels.first
-
-        self.selectedGroup = group
-        if var channel {
-            channel.currentUrlIndex = min(max(savedIndex, 0), max(channel.urls.count - 1, 0))
-            self.selectedChannel = channel
-            self.currentChannelUrlIndex = channel.currentUrlIndex
-        } else {
-            self.selectedChannel = nil
-            self.currentChannelUrlIndex = 0
-        }
+        let selection = Self.restoredLiveSelection(
+            groups: groups,
+            savedGroupName: UserPreferences.shared.currentLiveGroupName,
+            savedChannelName: UserPreferences.shared.currentLiveChannelName,
+            savedURLIndex: UserPreferences.shared.currentLiveChannelUrlIndex
+        )
+        selectedGroup = selection.group
+        selectedChannel = selection.channel
+        currentChannelUrlIndex = selection.urlIndex
     }
 
     private func persistLiveSelection(channel: Channel, urlIndex: Int) {
@@ -4814,7 +5117,7 @@ final class AppState: ObservableObject {
             in: channelGroups,
             liveName: activeLive?.name ?? ""
         ) else {
-            liveError = "Live: 收藏频道 \(item.vodName) 已不在当前直播源中"
+            liveError = "收藏频道“\(item.vodName)”已不在当前直播源中。请重新选择频道。"
             return
         }
         selectedGroup = match.group

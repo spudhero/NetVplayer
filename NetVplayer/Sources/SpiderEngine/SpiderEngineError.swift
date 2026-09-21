@@ -8,12 +8,12 @@ public enum SpiderEngineError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .unsupportedAndroidCrawler:
-            return "该视频源依赖 Android 组件，当前 macOS 版本无法加载。请切换其他视频源。"
+            return "该视频源使用的格式当前无法加载。请切换其他视频源。"
         case .emptyScript:
             return "视频源配置不完整，当前无法加载。请检查配置或切换其他视频源。"
         case .nativeReplacementUnsupported(_, let capability):
             if capability.contains("签名 Provider") {
-                return "该 JS 视频源必须通过签名 Provider 包运行，当前不会执行配置中的远程脚本。请安装受信任的 Provider 或切换其他视频源。"
+                return "该视频源需要受信任的播放扩展，当前未安装。请安装可用扩展或切换其他视频源。"
             }
             if let statusCode = Self.httpStatusCode(in: capability) {
                 return "源站返回 HTTP \(statusCode)，可能正在维护或网络不稳定。请稍后重试或切换其他视频源。"

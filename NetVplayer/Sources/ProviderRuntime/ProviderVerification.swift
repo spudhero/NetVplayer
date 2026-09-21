@@ -32,7 +32,7 @@ public enum ProviderVerificationError: LocalizedError, Equatable, Sendable {
         case .incompatibleArchitecture(let value): return "Provider does not support \(value)"
         case .revoked: return "Provider version has been revoked"
         case .blockedLicense: return "Provider has not passed its license gate"
-        case .androidDexNeedsPort: return "Android Dex providers must be ported to a supported helper runtime"
+        case .androidDexNeedsPort: return "该扩展格式尚未适配当前版本"
         case .invalidSourceBinding(let value): return "Provider source binding is invalid: \(value)"
         case .unsafePath(let value): return "Provider contains an unsafe path: \(value)"
         case .missingAsset(let value): return "Provider asset is missing: \(value)"

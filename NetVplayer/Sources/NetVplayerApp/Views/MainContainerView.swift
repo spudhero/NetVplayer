@@ -170,7 +170,7 @@ struct LivePlayerWindowView: View {
                 )
                 .frame(width: 0, height: 0)
             }
-            .task {
+            .task(id: appState.livePlayerOpenRequestSerial) {
                 await appState.activateLivePlayerWindow()
             }
             .onDisappear(perform: cleanupPlaybackIfNeeded)

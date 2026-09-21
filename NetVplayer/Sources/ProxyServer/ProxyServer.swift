@@ -725,6 +725,7 @@ public struct RemoteStreamBufferSnapshot: Sendable {
     public let chunkRanges: [RemoteStreamRange]
     public let inFlightRanges: [RemoteStreamRange]
     public let cachedBytes: Int64
+    public let deliveredBytes: Int64
 }
 
 public struct ProxyHealthSnapshot: Codable, Sendable {
@@ -800,6 +801,7 @@ actor RemoteStreamBuffer {
     private var chunks: [RemoteStreamChunk] = []
     private var inFlight: [RemoteStreamRange: RemoteStreamInFlight] = [:]
     private var cachedBytes: Int64 = 0
+    private var deliveredBytes: Int64 = 0
     private var activeStart: Int64 = 0
     private var generation = 0
     private var prefetchTargetEnd: Int64 = -1
@@ -814,8 +816,14 @@ actor RemoteStreamBuffer {
         RemoteStreamBufferSnapshot(
             chunkRanges: chunks.map(\.range).sorted { $0.start < $1.start },
             inFlightRanges: Array(inFlight.keys).sorted { $0.start < $1.start },
-            cachedBytes: cachedBytes
+            cachedBytes: cachedBytes,
+            deliveredBytes: deliveredBytes
         )
+    }
+
+    func recordDeliveredBytes(_ count: Int) {
+        guard count > 0 else { return }
+        deliveredBytes += Int64(count)
     }
 
     func cancelAll() {
@@ -874,7 +882,8 @@ actor RemoteStreamBuffer {
         for requestedRange: RemoteStreamRange,
         fetch: @escaping @Sendable (RemoteStreamRange) async throws -> RemoteStreamChunk
     ) async throws -> RemoteStreamChunk {
-        if let cached = assembledCachedChunk(containing: requestedRange) {
+        if let cached = assembledCachedChunk(containing: requestedRange),
+           cached.range.contains(requestedRange) {
             DiagnosticLog.write("[REMOTE_STREAM_CONTINUOUS_CACHE_HIT] id=\(id), range=\(requestedRange.headerValue)")
             return cached
         }
@@ -1854,7 +1863,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                 guard !cached.data.isEmpty else {
                     throw ProxyServerError.emptyUpstreamResponse(requestedRange.headerValue)
                 }
-                try await writeOpenEndedRemoteStreamBody(channel: channel, data: cached.data)
+                try await writeOpenEndedRemoteStreamBody(channel: channel, data: cached.data, stream: stream)
                 currentStart += Int64(cached.data.count)
                 continue
             }
@@ -1942,7 +1951,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                 responseTotalLength: chunk.totalLength,
                 responseState: responseState
             )
-            try await writeOpenEndedRemoteStreamBody(channel: channel, data: chunk.data)
+            try await writeOpenEndedRemoteStreamBody(channel: channel, data: chunk.data, stream: stream)
 
             nextWriteStart += Int64(chunk.data.count)
             deliveredBytes += Int64(chunk.data.count)
@@ -2042,7 +2051,11 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                     receive: { data in
                         let accepted = await accumulator.append(data)
                         if !accepted.isEmpty {
-                            try await self.writeOpenEndedRemoteStreamBody(channel: channel, data: accepted)
+                            try await self.writeOpenEndedRemoteStreamBody(
+                                channel: channel,
+                                data: accepted,
+                                stream: stream
+                            )
                         }
                     }
                 )
@@ -2783,7 +2796,8 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
 
     private func writeOpenEndedRemoteStreamBody(
         channel: SendableChannel,
-        data: Data
+        data: Data,
+        stream: RemoteStream? = nil
     ) async throws {
         guard channel.channel.isActive else {
             throw ChannelError.ioOnClosedChannel
@@ -2806,6 +2820,9 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                     promise: promise
                 )
             }
+        }
+        if let stream {
+            await stream.buffer.recordDeliveredBytes(data.count)
         }
     }
 

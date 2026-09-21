@@ -18,6 +18,7 @@ let package = Package(
         .library(name: "ProviderRuntime", targets: ["ProviderRuntime"]),
         .executable(name: "ProviderPackageTool", targets: ["ProviderPackageTool"]),
         .executable(name: "ProviderSandboxLauncher", targets: ["ProviderSandboxLauncher"]),
+        .executable(name: "DiagnosticsProbe", targets: ["DiagnosticsProbe"]),
     ],
     dependencies: [
         // 网络框架 — 用于本地 HTTP 代理服务器
@@ -27,6 +28,7 @@ let package = Package(
         // 阿里云盘网页 API 设备会话签名
         .package(url: "https://github.com/21-DOT-DEV/swift-secp256k1.git", exact: "0.23.2"),
         .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.0"),
+        .package(url: "https://github.com/getsentry/sentry-apple-binaries.git", exact: "9.29.0"),
     ],
     targets: [
         // ═══════════════════════════════════════════
@@ -39,6 +41,16 @@ let package = Package(
         .target(
             name: "Networking",
             path: "Sources/Networking"
+        ),
+        .target(
+            name: "Diagnostics",
+            dependencies: ["Models", .product(name: "Sentry-Static", package: "sentry-apple-binaries")],
+            path: "Sources/Diagnostics"
+        ),
+        .executableTarget(
+            name: "DiagnosticsProbe",
+            dependencies: ["Diagnostics"],
+            path: "Sources/DiagnosticsProbe"
         ),
         .target(
             name: "CurlTransportShim",
@@ -200,6 +212,7 @@ let package = Package(
             name: "NetVplayerApp",
             dependencies: [
                 "Models",
+                "Diagnostics",
                 "ApplicationCore",
                 "Networking",
                 "DriveEngine",
@@ -240,6 +253,11 @@ let package = Package(
             name: "ModelsTests",
             dependencies: ["Models"],
             path: "Tests/ModelsTests"
+        ),
+        .testTarget(
+            name: "DiagnosticsTests",
+            dependencies: ["Diagnostics", "Models", .product(name: "Sentry-Static", package: "sentry-apple-binaries")],
+            path: "Tests/DiagnosticsTests"
         ),
         .testTarget(
             name: "ApplicationCoreTests",

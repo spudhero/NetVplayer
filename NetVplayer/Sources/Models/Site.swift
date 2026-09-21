@@ -107,8 +107,10 @@ public struct Site: Codable, Identifiable, Hashable, Sendable {
     public var androidCrawlerName: String {
         api.hasPrefix("csp_") ? String(api.dropFirst(4)) : api
     }
-    public var androidCrawlerUnsupportedMessage: String {
-        "该视频源依赖 Android 组件，当前 macOS 版本无法加载：\(name.isEmpty ? androidCrawlerName : name)。请切换其他视频源。"
+    public var unsupportedSourceMessage: String {
+        name.isEmpty
+            ? "该视频源使用的格式当前无法加载。请切换其他视频源。"
+            : "视频源“\(name)”使用的格式当前无法加载。请切换其他视频源。"
     }
     public var isHidden: Bool { hide == 1 }
     public var isIndex: Bool { indexs == 1 }

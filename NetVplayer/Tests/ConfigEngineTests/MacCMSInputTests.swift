@@ -181,7 +181,7 @@ struct MacCMSInputTests {
             storageManager: storage
         )
         let sourceURL = "https://www.direct.example.test/direct?ac=list&token=keep"
-        await appState.loadConfig(url: sourceURL)
+        await appState.loadConfig(url: sourceURL, waitForProviderRuntime: false)
 
         #expect(appState.configError == nil)
         #expect(appState.vods.first?.vodName == "JSON 示例影片")
@@ -194,14 +194,14 @@ struct MacCMSInputTests {
         let savedBeforeFailure = storage.loadConfigs()
         let preferenceBeforeFailure = UserPreferences.shared.currentVodConfigUrl
         let vodsBeforeFailure = appState.vods.map(\.vodId)
-        await appState.loadConfig(url: "https://bad.example.test/invalid")
+        await appState.loadConfig(url: "https://bad.example.test/invalid", waitForProviderRuntime: false)
 
         #expect(appState.configError != nil)
         #expect(storage.loadConfigs().map(\.url) == savedBeforeFailure.map(\.url))
         #expect(UserPreferences.shared.currentVodConfigUrl == preferenceBeforeFailure)
         #expect(appState.vods.map(\.vodId) == vodsBeforeFailure)
 
-        await appState.loadConfig(url: "https://depot.example.test/depot", persistUserConfig: false)
+        await appState.loadConfig(url: "https://depot.example.test/depot", persistUserConfig: false, waitForProviderRuntime: false)
         #expect(appState.configError == "配置仓库需选择子配置")
         #expect(appState.availableDepots.map(\.name) == ["Primary", "Backup"])
         #expect(appState.currentVodInputKind == .configuration)

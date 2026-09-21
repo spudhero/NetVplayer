@@ -50,6 +50,8 @@ public struct PlaySpec: Sendable {
     public var artwork: String
     /// mpv 专用播放选项，用于处理网盘返回的特殊容器/伪头
     public var mpvOptions: [String: String]
+    /// 当前文件应直接开始加载的位置；只作为 mpv loadfile 的文件级选项使用
+    public var initialStartPositionSeconds: Double?
     /// 播放链路元数据，用于记录网盘 fid/cacheKey 等非播放器参数
     public var metadata: [String: String]
     /// Typed cloud-drive route plan. It remains in memory and must never be serialized into diagnostics metadata.
@@ -80,6 +82,7 @@ public struct PlaySpec: Sendable {
         format: String = "",
         artwork: String = "",
         mpvOptions: [String: String] = [:],
+        initialStartPositionSeconds: Double? = nil,
         metadata: [String: String] = [:],
         drivePlaybackPlan: DrivePlaybackPlan? = nil,
         drivePlaybackSessionGeneration: UInt64? = nil,
@@ -99,6 +102,7 @@ public struct PlaySpec: Sendable {
         self.format = format
         self.artwork = artwork
         self.mpvOptions = mpvOptions
+        self.initialStartPositionSeconds = initialStartPositionSeconds
         self.metadata = metadata
         self.drivePlaybackPlan = drivePlaybackPlan
         self.drivePlaybackSessionGeneration = drivePlaybackSessionGeneration
@@ -124,6 +128,9 @@ public struct PlaySpec: Sendable {
         if !override.format.isEmpty { spec.format = override.format }
         if !override.artwork.isEmpty { spec.artwork = override.artwork }
         if !override.mpvOptions.isEmpty { spec.mpvOptions.merge(override.mpvOptions) { _, new in new } }
+        if let startPosition = override.initialStartPositionSeconds {
+            spec.initialStartPositionSeconds = startPosition
+        }
         if !override.metadata.isEmpty { spec.metadata.merge(override.metadata) { _, new in new } }
         if let drivePlaybackPlan = override.drivePlaybackPlan { spec.drivePlaybackPlan = drivePlaybackPlan }
         if let generation = override.drivePlaybackSessionGeneration {

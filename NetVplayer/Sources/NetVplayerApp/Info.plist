@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.9</string>
+    <string>1.0.10</string>
     <key>CFBundleVersion</key>
-    <string>10</string>
+    <string>11</string>
     <key>SUFeedURL</key>
     <string>https://github.com/spudhero/NetVplayer/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key>
@@ -24,6 +24,8 @@
     <integer>0</integer>
     <key>NetVplayerFeedbackRepositoryURL</key>
     <string>https://github.com/spudhero/NetVplayer</string>
+    <key>NetVplayerSentryDSN</key>
+    <string>https://8e55a34cfb8fc393ba4a4f06cd0a78b7@o4512116468940800.ingest.us.sentry.io/4512116924809216</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

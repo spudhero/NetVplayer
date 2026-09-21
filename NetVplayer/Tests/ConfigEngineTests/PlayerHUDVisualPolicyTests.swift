@@ -3,6 +3,7 @@ import Foundation
 import CoreGraphics
 import AppKit
 import DanmakuEngine
+import Models
 import PlayerEngine
 @testable import NetVplayerApp
 
@@ -618,6 +619,12 @@ struct PlayerHUDVisualPolicyTests {
 
     @Test
     func testLivePlayerLeavesEmptyStateControlsInteractive() {
+        #expect(!LivePlayerInteractionPolicy.allowsVideoHitTesting(hasSelectedChannel: false))
+        #expect(LivePlayerInteractionPolicy.allowsVideoHitTesting(hasSelectedChannel: true))
+        #expect(!LivePlayerInteractionPolicy.allowsVideoHitTesting(
+            hasSelectedChannel: true,
+            hasBlockingUI: true
+        ))
         #expect(LivePlayerInteractionPolicy.videoGestureMask(hasSelectedChannel: false) == .none)
         #expect(LivePlayerInteractionPolicy.videoGestureMask(hasSelectedChannel: true) == .all)
         #expect(LivePlayerInteractionPolicy.videoGestureMask(
@@ -742,38 +749,39 @@ struct PlayerHUDVisualPolicyTests {
     }
 
     @Test
-    func testCursorVisibilityRequiresActiveUnobstructedPlayback() {
+    func testCursorVisibilityDependsOnInteractionRatherThanPlaybackActivity() {
         #expect(PlayerCursorVisibilityPolicy.inactivityInterval == 5)
         #expect(PlayerCursorVisibilityPolicy.shouldHide(
             isPlaying: true,
-            isPointerInside: true,
-            hasBlockingUI: false,
-            isLoading: false
+            hasBlockingUI: false
         ))
         #expect(!PlayerCursorVisibilityPolicy.shouldHide(
             isPlaying: false,
-            isPointerInside: true,
-            hasBlockingUI: false,
-            isLoading: false
+            hasBlockingUI: false
         ))
         #expect(!PlayerCursorVisibilityPolicy.shouldHide(
             isPlaying: true,
-            isPointerInside: false,
-            hasBlockingUI: false,
-            isLoading: false
+            hasBlockingUI: true
         ))
-        #expect(!PlayerCursorVisibilityPolicy.shouldHide(
-            isPlaying: true,
-            isPointerInside: true,
-            hasBlockingUI: true,
-            isLoading: false
-        ))
-        #expect(!PlayerCursorVisibilityPolicy.shouldHide(
-            isPlaying: true,
-            isPointerInside: true,
-            hasBlockingUI: false,
-            isLoading: true
-        ))
+    }
+
+    @Test @MainActor
+    func testLivePlayerRestoresCachedSelectionAfterStopClearsMemoryState() {
+        let channel = Channel(
+            name: "浙江卫视4K",
+            urls: ["https://live.example.test/line-1.m3u8", "https://live.example.test/line-2.m3u8"]
+        )
+        let group = ChannelGroup(name: "4K8K频道", channels: [channel])
+        let selection = AppState.restoredLiveSelection(
+            groups: [group],
+            savedGroupName: group.name,
+            savedChannelName: channel.name,
+            savedURLIndex: 1
+        )
+
+        #expect(selection.group?.name == group.name)
+        #expect(selection.channel?.name == channel.name)
+        #expect(selection.urlIndex == 1)
     }
 
     @Test
@@ -799,6 +807,17 @@ struct PlayerHUDVisualPolicyTests {
         #expect(mediaLoading.kind == .loading)
         #expect(mediaLoading.title == "正在连接直播")
 
+        let seeking = PlayerPlaybackActivityPolicy.vodPhase(
+            isSourceLoading: false,
+            sourceLoadingMessage: "",
+            isMediaLoading: true,
+            isSeeking: true,
+            isBuffering: true,
+            hasBlockingUI: false
+        )
+        #expect(seeking.kind == .loading)
+        #expect(seeking.title == "正在跳转")
+
         let buffering = PlayerPlaybackActivityPolicy.vodPhase(
             isSourceLoading: false,
             sourceLoadingMessage: "",
@@ -807,7 +826,8 @@ struct PlayerHUDVisualPolicyTests {
             hasBlockingUI: false
         )
         #expect(buffering.kind == .buffering)
-        #expect(buffering.title == "正在缓冲")
+        #expect(buffering.title == "播放中缓冲")
+        #expect(buffering.message?.contains("线路供给不足") == true)
 
         let blocked = PlayerPlaybackActivityPolicy.vodPhase(
             isSourceLoading: true,
@@ -831,6 +851,9 @@ struct PlayerHUDVisualPolicyTests {
         #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: 512) == "512 B/s")
         #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: 1_536) == "1.5 KB/s")
         #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: 2_097_152) == "2.0 MB/s")
+        #expect(PlayerPlaybackActivityPolicy.transferredText(bytes: nil) == nil)
+        #expect(PlayerPlaybackActivityPolicy.transferredText(bytes: 0) == nil)
+        #expect(PlayerPlaybackActivityPolicy.transferredText(bytes: 1_572_864) == "已接收 1.5 MB")
         #expect(PlayerPlaybackActivityPolicy.progressText(nil) == nil)
         #expect(PlayerPlaybackActivityPolicy.progressText(0) == nil)
         #expect(PlayerPlaybackActivityPolicy.progressText(0.456) == "46%")

@@ -287,7 +287,8 @@ struct AppStateLiveRefreshTests {
         )
         try await Task.sleep(nanoseconds: 1_700_000_000)
 
-        #expect(appState.liveError?.contains("播放器加载失败") == true)
+        #expect(appState.liveError?.contains("当前线路无法播放") == true)
+        #expect(appState.liveError?.localizedCaseInsensitiveContains("mpv") == false)
     }
 }
 

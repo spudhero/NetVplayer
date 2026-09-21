@@ -143,6 +143,7 @@ def main() -> int:
             "script/test_apply_torrent_bridge_replacements.py",
             "script/test_macos_release_workflow.py",
             "script/test_app_update_release.py",
+            "script/test_package_sentry_resources.py",
         ],
     )
     sandbox_output = run_step(

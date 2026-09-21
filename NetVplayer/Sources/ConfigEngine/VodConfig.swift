@@ -620,10 +620,10 @@ public enum ConfigError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .invalidJSON: return "无效的配置 JSON"
+        case .invalidJSON: return "配置内容格式不正确"
         case .configMessage(let msg): return msg
-        case .isDepot: return "配置为仓库类型，需用户选择"
-        case .emptyConfig: return "配置为空"
+        case .isDepot: return "该地址包含多个子配置，请先选择一个"
+        case .emptyConfig: return "配置中没有可用内容"
         }
     }
 }

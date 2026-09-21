@@ -31,7 +31,7 @@
 
 ### 原生 macOS 媒体播放器
 
-NetVplayer 1.0.9 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+NetVplayer 1.0.10 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
 
 ### 项目背景
 
@@ -83,6 +83,7 @@ flowchart TB
     Runner[Sandboxed Runner<br>Java / Node.js / QuickJS / Python]
     Proxy[ProxyServer<br>受限本地路由]
     Player[PlayerEngine<br>PlaySpec + libmpv]
+    Diagnostics[Diagnostics<br>隐私过滤后的错误与性能诊断]
 
     User -->|用户主动配置| App
     App --> Core
@@ -94,9 +95,10 @@ flowchart TB
     Engines -->|统一 PlaySpec| Proxy
     Engines -->|可直连媒体| Player
     Proxy --> Player
+    App -->|固定错误码与有限步骤| Diagnostics
 ```
 
-`Models` 和 `ApplicationCore` 保存跨模块数据与纯决策；平台引擎负责配置、网络、Provider、网盘、解析和直播；所有播放入口最终归一化为 `PlaySpec`，再由 `PlayerEngine` 交给 libmpv。详细模块边界、Provider 数据流和代理路由见[架构说明](ARCHITECTURE.md)。
+`Models` 和 `ApplicationCore` 保存跨模块数据与纯决策；平台引擎负责配置、网络、Provider、网盘、解析和直播；所有播放入口最终归一化为 `PlaySpec`，再由 `PlayerEngine` 交给 libmpv。普通界面把内部失败转换为可理解的问题和建议动作，`Diagnostics` 只接收隐私门禁允许的固定错误码、阶段和有限步骤。详细模块边界、Provider 数据流和代理路由见[架构说明](ARCHITECTURE.md)。
 
 ### Provider SDK
 
@@ -152,8 +154,10 @@ bash NetVplayer/script/build_and_run.sh \
 - **配置地址从哪里获得？** 请使用你自己维护、购买或明确获得授权的内容服务。项目不提供、推荐或代找视频源地址。
 - **播放扩展需要手动安装吗？** 正常情况下不需要。首次准备或后续更新时，网络必须能连接 GitHub，否则下载与更新无法完成。已经安装并验证通过的组件在离线时仍可继续使用；状态异常时可在“设置 → 扩展支持”中选择“重新检查”。
 - **配置和授权凭据保存在哪里？** 配置与授权凭据只保存在本机；非敏感备份不会包含云盘 Token、Cookie 等授权信息。
+- **为什么错误提示不再显示 Android、Provider 或播放器内部名称？** 这些属于兼容和诊断实现，不是用户可执行的问题说明。普通界面会说明配置、来源、网络、授权或播放出了什么问题，并提示重试、切换来源/线路或重新授权；技术细节继续保留在脱敏诊断中。
 - **这是 FongMi、影视仓或 TVBox 的官方 Mac 版吗？** 不是。NetVplayer 是独立的 Swift/macOS 实现，与这些项目不存在隶属或官方合作关系。
 - **遇到问题如何反馈？** 使用应用内“问题反馈”生成脱敏信息并描述复现步骤。不要公开账号、Token、Cookie 或完整配置地址。
+- **支持自动错误上报吗？** 配置了 Sentry 的构建可自动发送崩溃堆栈、版本、错误码和有限操作步骤，并对起播耗时进行 5% 采样。可在“设置 → 问题反馈 → 自动诊断”关闭；账号凭据、媒体名称、播放地址和完整日志不随自动诊断发送。未配置 Sentry 的构建不发送自动诊断。
 
 ### 仓库结构
 
@@ -181,7 +185,7 @@ NetVplayer 与 FongMi/TV 没有隶属或官方合作关系。NetVplayer 使用�
 
 ### A native media player for macOS
 
-NetVplayer 1.0.9 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+NetVplayer 1.0.10 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
 
 ### Project background
 
@@ -220,7 +224,7 @@ The current public shell automatically installs only Providers that declare `use
 
 ### Architecture
 
-`Models` and `ApplicationCore` own cross-module data and pure decisions. Platform engines handle configuration, networking, Providers, cloud drives, parsing, and live playback. Every playback entry point is normalized into a `PlaySpec` before `PlayerEngine` sends it to libmpv. The diagram in the Chinese section shows the complete boundary; see the [architecture guide](ARCHITECTURE.md) for module responsibilities, Provider data flow, and local proxy routes.
+`Models` and `ApplicationCore` own cross-module data and pure decisions. Platform engines handle configuration, networking, Providers, cloud drives, parsing, and live playback. Every playback entry point is normalized into a `PlaySpec` before `PlayerEngine` sends it to libmpv. Ordinary UI maps internal failures to a plain-language problem and next action, while `Diagnostics` receives only fixed error codes, stages, and bounded interaction steps allowed by the privacy gate. The diagram in the Chinese section shows the complete boundary; see the [architecture guide](ARCHITECTURE.md) for module responsibilities, Provider data flow, and local proxy routes.
 
 ### Provider SDK
 
@@ -234,7 +238,7 @@ Start with the [Provider SDK development guide](provider-sdk/README.md), which r
 
 ### Download and build
 
-The current 1.0.9 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The current 1.0.10 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
 
 The app checks for application updates and marks the version in the sidebar and Settings when a new release is available. Open the version, review the update, and select Update to download and verify it in the background. Installation happens when the app normally quits. Version 1.0.8 and earlier need one manual installation of 1.0.9 or later to gain in-app updates. The current ad-hoc signature may still require macOS first-open or installation approval.
 
@@ -276,8 +280,10 @@ The command rejects a dirty public checkout and unexpected source or resource in
 - **Where do configuration URLs come from?** Use only services that you maintain, purchase, or are explicitly authorized to access. The project does not provide or recommend source URLs.
 - **Do I install Provider extensions manually?** Normally no. The initial preparation and later updates require network access to GitHub; without it, downloads and updates cannot complete. Components that are already installed and verified can continue to work offline. Use Settings → Verified Extensions → Check Again when the status reports a problem.
 - **Where are configurations and credentials stored?** Configurations and authorization credentials remain on the Mac. Non-sensitive backups exclude cloud-drive tokens and cookies.
+- **Why do errors no longer show Android, Provider, or player implementation names?** Those names describe compatibility internals rather than an action the user can take. Ordinary messages identify the configuration, source, network, authorization, or playback problem and suggest retrying, switching a source or route, or authorizing again. Technical details remain in redacted diagnostics.
 - **Is this an official Mac version of FongMi, OK影视, 影视仓, or TVBox?** No. NetVplayer is an independent Swift/macOS implementation with no affiliation or official partnership.
 - **How do I report a problem?** Use the in-app Problem Report flow to generate redacted diagnostics and describe the reproduction steps. Never publish accounts, tokens, cookies, or full configuration URLs.
+- **Does the app report errors automatically?** Builds configured with Sentry can send crash stacks, app versions, error codes and a limited trail of diagnostic steps, with 5% sampling for playback startup timing. Disable this in Settings → Problem Report → Automatic Diagnostics. Credentials, media titles, playback URLs and full logs are excluded. Builds without a Sentry configuration do not send automatic diagnostics.
 
 ### Repository layout
 

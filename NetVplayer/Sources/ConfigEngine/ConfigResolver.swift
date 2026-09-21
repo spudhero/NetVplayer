@@ -54,7 +54,7 @@ public enum VodInputError: Error, LocalizedError, Sendable {
         case .invalidURL:
             return "点播源地址无效"
         case .unrecognizedContent:
-            return "返回内容不是可识别的配置或 MacCMS JSON/XML 接口"
+            return "返回内容不是可识别的点播配置或内容接口"
         }
     }
 }

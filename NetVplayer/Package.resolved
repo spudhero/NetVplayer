@@ -1,6 +1,15 @@
 {
-  "originHash" : "77a0052e7f17971cebe47e95589553ac0cfbc9ffcd9d803cf48d795a17bc19c0",
+  "originHash" : "6947031d1d6840b6709630df95d3e31e8825f010fa72481d858703e973cc76dc",
   "pins" : [
+    {
+      "identity" : "sentry-apple-binaries",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/getsentry/sentry-apple-binaries.git",
+      "state" : {
+        "revision" : "582107296a73137b369868cff9422563c9408185",
+        "version" : "9.29.0"
+      }
+    },
     {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",

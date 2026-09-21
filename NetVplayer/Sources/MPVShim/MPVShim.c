@@ -284,6 +284,14 @@ int nv_mpv_command4_async(NVMPVContext *context, uint64_t reply_userdata, const 
     return code;
 }
 
+int nv_mpv_command5_async(NVMPVContext *context, uint64_t reply_userdata, const char *arg0, const char *arg1, const char *arg2, const char *arg3, const char *arg4) {
+    if (!context || !context->handle || !p_mpv_command_async) { return -1; }
+    const char *args[] = { arg0, arg1, arg2, arg3, arg4, NULL };
+    int code = p_mpv_command_async(context->handle, reply_userdata, args);
+    if (code < 0) { set_mpv_error(context, code); }
+    return code;
+}
+
 int nv_mpv_command4(NVMPVContext *context, const char *arg0, const char *arg1, const char *arg2, const char *arg3) {
     const char *args[] = { arg0, arg1, arg2, arg3, NULL };
     return run_command(context, args);

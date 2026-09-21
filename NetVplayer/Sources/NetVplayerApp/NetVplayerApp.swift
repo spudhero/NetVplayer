@@ -3,6 +3,7 @@
 
 import SwiftUI
 import Models
+import Diagnostics
 import ConfigEngine
 import PlayerEngine
 import NodeBundleRuntime
@@ -91,6 +92,7 @@ final class NetVplayerAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        SentryDiagnostics.shared.stop()
         Task { await NodeBundleRuntimeRegistry.shared.shutdown() }
     }
 
@@ -136,6 +138,7 @@ struct NetVplayerApp: App {
         self.visualRegressionConfiguration = visualRegressionConfiguration
         if visualRegressionConfiguration == nil {
             DiagnosticLog.beginSession()
+            SentryDiagnostics.shared.start()
             FeedbackReportFileStore.cleanupExpiredReports()
         }
         #if os(macOS)

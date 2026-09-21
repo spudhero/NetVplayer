@@ -131,8 +131,8 @@ struct LiveStreamView: View {
                     showHUDTemporarily()
                 case .ended:
                     isPointerInsidePlayer = false
-                    hudHideTask?.cancel()
                     restorePlayerCursor()
+                    showHUDTemporarily()
                 }
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isGuideVisible)
@@ -202,15 +202,6 @@ struct LiveStreamView: View {
                 isHUDVisible = true
             }
         }
-        .onChange(of: isPlaybackActivityActive) { _, isActive in
-            if isActive {
-                hudHideTask?.cancel()
-                restorePlayerCursor()
-                isHUDVisible = true
-            } else {
-                showHUDTemporarily()
-            }
-        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 showHUDTemporarily()
@@ -278,6 +269,10 @@ struct LiveStreamView: View {
                 hasBlockingUI: hasBlockingPlayerUI
             )
         )
+        .allowsHitTesting(LivePlayerInteractionPolicy.allowsVideoHitTesting(
+            hasSelectedChannel: appState.selectedChannel != nil,
+            hasBlockingUI: hasBlockingPlayerUI
+        ))
         .ignoresSafeArea()
     }
 
@@ -1388,7 +1383,7 @@ struct LiveStreamView: View {
             }
         }
 
-        appState.liveError = "Live: 未找到频道号 \(requested)"
+        appState.liveError = "没有找到频道号 \(requested)。请检查频道号后重试。"
         showHUDTemporarily()
     }
 
@@ -1401,7 +1396,7 @@ struct LiveStreamView: View {
             .filter { $0.isHidden && $0.password == password }
             .map(\.name)
         guard !unlocked.isEmpty else {
-            appState.liveError = "Live: 隐藏分组密码不匹配"
+            appState.liveError = "隐藏分组密码不正确。请重新输入。"
             return
         }
 
@@ -1430,7 +1425,11 @@ struct LiveStreamView: View {
             await MainActor.run {
                 if shouldAutoHidePlayerChrome {
                     isHUDVisible = false
-                    PlayerCursorController.hideUntilMouseMoves()
+                    if isPointerInsidePlayer {
+                        PlayerCursorController.hideUntilMouseMoves()
+                    } else {
+                        restorePlayerCursor()
+                    }
                 }
             }
         }
@@ -1464,9 +1463,7 @@ struct LiveStreamView: View {
     private var shouldAutoHidePlayerChrome: Bool {
         appState.selectedChannel != nil && PlayerCursorVisibilityPolicy.shouldHide(
             isPlaying: playerState.isPlaying,
-            isPointerInside: isPointerInsidePlayer,
-            hasBlockingUI: hasBlockingPlayerUI,
-            isLoading: appState.isLoadingLive || isPlaybackActivityActive
+            hasBlockingUI: hasBlockingPlayerUI
         )
     }
 
@@ -1619,6 +1616,10 @@ struct LiveStreamView: View {
 
 enum LivePlayerInteractionPolicy {
     static let topChromeHeight: CGFloat = 58
+
+    static func allowsVideoHitTesting(hasSelectedChannel: Bool, hasBlockingUI: Bool = false) -> Bool {
+        hasSelectedChannel && !hasBlockingUI
+    }
 
     static func videoGestureMask(hasSelectedChannel: Bool, hasBlockingUI: Bool = false) -> GestureMask {
         PlayerPointerShortcutPolicy.videoGestureMask(

@@ -24,11 +24,9 @@ enum PlayerCursorVisibilityPolicy {
 
     static func shouldHide(
         isPlaying: Bool,
-        isPointerInside: Bool,
-        hasBlockingUI: Bool,
-        isLoading: Bool
+        hasBlockingUI: Bool
     ) -> Bool {
-        isPlaying && isPointerInside && !hasBlockingUI && !isLoading
+        isPlaying && !hasBlockingUI
     }
 }
 
@@ -868,9 +866,10 @@ struct PlayerView: View {
 
                     PlayerPlaybackActivityView(
                         phase: playbackActivityPhase,
-                        progress: playerState.cacheBufferingProgress,
-                        speedBytesPerSecond: playerState.cacheSpeedBytesPerSecond,
+                        progress: playerState.isMediaLoading ? nil : playerState.cacheBufferingProgress,
+                        speedBytesPerSecond: playbackActivitySpeedBytesPerSecond,
                         bufferedAheadDuration: playbackActivityBufferedAheadDuration,
+                        transferredBytes: playerState.isMediaLoading ? playerState.seekReceivedBytes : nil,
                         showsImmediately: visualRegressionConfiguration?.state == .loading
                             || visualRegressionConfiguration?.state == .buffering
                     )
@@ -905,8 +904,8 @@ struct PlayerView: View {
                     showHUDTemporarily()
                 case .ended:
                     isPointerInsidePlayer = false
-                    hideHUDTimer?.invalidate()
                     restorePlayerCursor()
+                    resetHUDTimer()
                 }
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: showHUD)
@@ -988,17 +987,6 @@ struct PlayerView: View {
         }
         .onChange(of: isAudioPopoverPresented) { _, isPresented in
             updateTrackPopoverTimer(isPresented: isPresented)
-        }
-        .onChange(of: isPlaybackActivityActive) { _, isActive in
-            if isActive {
-                hideHUDTimer?.invalidate()
-                restorePlayerCursor()
-                withPlayerAnimation {
-                    showHUD = true
-                }
-            } else {
-                resetHUDTimer()
-            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -3364,12 +3352,14 @@ struct PlayerView: View {
             isSourceLoading: appState.isPlayerLoading,
             sourceLoadingMessage: appState.playerLoadingMessage,
             isMediaLoading: playerState.isMediaLoading,
+            isSeeking: playerState.isSeeking,
             isBuffering: playerState.isBuffering,
             hasBlockingUI: hasBlockingPlaybackActivityUI
         )
     }
 
     private var playbackActivityBufferedAheadDuration: Double {
+        if playerState.isMediaLoading { return 0 }
         switch visualRegressionConfiguration?.state {
         case .loading:
             return 0
@@ -3380,12 +3370,17 @@ struct PlayerView: View {
         }
     }
 
+    private var playbackActivitySpeedBytesPerSecond: Int64? {
+        if playerState.isMediaLoading, playerState.seekReceivedBytes != nil {
+            return playerState.seekTransferSpeedBytesPerSecond
+        }
+        return playerState.cacheSpeedBytesPerSecond
+    }
+
     private var shouldAutoHidePlayerChrome: Bool {
         PlayerCursorVisibilityPolicy.shouldHide(
             isPlaying: appState.playerState.isPlaying,
-            isPointerInside: isPointerInsidePlayer,
-            hasBlockingUI: hasBlockingPlayerUI,
-            isLoading: isPlaybackActivityActive
+            hasBlockingUI: hasBlockingPlayerUI
         )
     }
 
@@ -3394,7 +3389,11 @@ struct PlayerView: View {
             showHUD = false
             isVolumePopoverPresented = false
         }
-        PlayerCursorController.hideUntilMouseMoves()
+        if isPointerInsidePlayer {
+            PlayerCursorController.hideUntilMouseMoves()
+        } else {
+            restorePlayerCursor()
+        }
     }
 
     private func restorePlayerCursor() {

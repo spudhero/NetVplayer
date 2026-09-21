@@ -237,6 +237,185 @@ import DriveEngine
     #expect(!MPVPlaybackActivityPolicy.shouldEndMediaLoading(eventID: 22, positionSeconds: .nan))
 }
 
+@Test func testMPVSeekUsesKeyframesForDriveTranscodeStreams() {
+    let direct = PlaySpec(url: "https://media.example.test/video.mp4")
+    #expect(MPVSeekModePolicy.commandMode(for: direct) == MPVSeekModePolicy.precise)
+
+    var transcode = PlaySpec(url: "https://media.example.test/transcode.m3u8")
+    transcode.metadata[DrivePlaybackMetadataKey.route] = DrivePlaybackRoute.personalTranscode
+    #expect(MPVSeekModePolicy.commandMode(for: transcode) == MPVSeekModePolicy.streaming)
+
+    var ucSmart = PlaySpec(url: "https://media.example.test/uc-smart.m3u8")
+    ucSmart.metadata[DrivePlaybackMetadataKey.route] = DrivePlaybackRoute.ucSmartPlay
+    #expect(MPVSeekModePolicy.commandMode(for: ucSmart) == MPVSeekModePolicy.streaming)
+
+    var relayed = PlaySpec(url: "http://127.0.0.1:9978/proxy/quark.m3u8")
+    relayed.drivePlaybackPlan = DrivePlaybackPlan(
+        provider: .quark,
+        asset: DrivePlaybackAssetIdentity(provider: .quark, shareID: "share", sourceFileID: "file"),
+        candidates: [
+            DrivePlaybackCandidate(
+                id: "quark:relay",
+                providerRoute: DrivePlaybackRoute.streamVariant,
+                kind: .transcode,
+                transport: .hlsRelay,
+                url: relayed.url
+            )
+        ]
+    )
+    #expect(MPVSeekModePolicy.commandMode(for: relayed) == MPVSeekModePolicy.streaming)
+    #expect(MPVSeekModePolicy.shouldShowLoading(pauseRequested: false))
+    #expect(!MPVSeekModePolicy.shouldShowLoading(pauseRequested: true))
+}
+
+@Test func testMPVInitialStartLoadsVodAtTheTargetPosition() {
+    var direct = PlaySpec(url: "https://media.example.test/video.mp4")
+    direct.metadata[DrivePlaybackMetadataKey.route] = DrivePlaybackRoute.originalDownload
+    #expect(MPVInitialStartPolicy.supportsFileLocalStart(for: direct))
+
+    var live = direct
+    live.metadata["playback.kind"] = "live"
+    #expect(!MPVInitialStartPolicy.supportsFileLocalStart(for: live))
+
+    var transcode = PlaySpec(url: "https://media.example.test/transcode.m3u8")
+    transcode.metadata[DrivePlaybackMetadataKey.route] = DrivePlaybackRoute.personalTranscode
+    #expect(MPVInitialStartPolicy.supportsFileLocalStart(for: transcode))
+    #expect(MPVInitialStartPolicy.positionMilliseconds(
+        resumePosition: nil,
+        resumeDuration: nil,
+        openingSkipSeconds: 120
+    ) == 120_000)
+    #expect(MPVInitialStartPolicy.positionMilliseconds(
+        resumePosition: 95_000,
+        resumeDuration: 1_800_000,
+        openingSkipSeconds: 120
+    ) == 120_000)
+    #expect(MPVInitialStartPolicy.positionMilliseconds(
+        resumePosition: 240_000,
+        resumeDuration: 1_800_000,
+        openingSkipSeconds: 120
+    ) == 240_000)
+    #expect(MPVInitialStartPolicy.positionMilliseconds(
+        resumePosition: 95_000,
+        resumeDuration: nil,
+        openingSkipSeconds: 120
+    ) == nil)
+
+    transcode.initialStartPositionSeconds = 120
+    #expect(MPVInitialStartPolicy.loadFileOptions(for: transcode) == "start=120.0")
+    transcode.initialStartPositionSeconds = .nan
+    #expect(MPVInitialStartPolicy.loadFileOptions(for: transcode) == nil)
+}
+
+@Test func testPostSeekGuardKeepsLoadingUntilTheSeekedFrameArrives() {
+    var guardState = PlaybackPostSeekEndGuard()
+    #expect(guardState.canPresentFrame(at: 0.1))
+
+    guardState.begin(targetSeconds: 120)
+    #expect(!guardState.canPresentFrame(at: 0.2))
+    guardState.observePosition(0.2)
+    #expect(!guardState.canPresentFrame(at: 0.3))
+    guardState.observePosition(120)
+    #expect(!guardState.canPresentFrame(at: 120))
+    guardState.markPlaybackRestarted()
+    #expect(!guardState.canPresentFrame(at: 80))
+    #expect(guardState.canPresentFrame(at: 110))
+
+    guardState.begin(targetSeconds: 5)
+    guardState.observePosition(120)
+    #expect(!guardState.canPresentFrame(at: 120))
+    guardState.markPlaybackRestarted()
+    #expect(guardState.canPresentFrame(at: 4))
+}
+
+@Test func testMPVInitialStartRecoversOnceWhenTheActualFileIsShorterThanTheSkip() throws {
+    let spec = PlaySpec(
+        url: "https://media.example.test/short.mp4",
+        headers: ["Referer": "https://media.example.test"],
+        initialStartPositionSeconds: 120,
+        metadata: ["vod.episodeURL": "short-episode"]
+    )
+    let recovered = try #require(MPVInitialStartPolicy.recoverySpec(
+        for: spec, durationSeconds: 60, isCurrentFileLoaded: true,
+        playbackStarted: false, reachedEOF: false
+    ))
+    #expect(recovered.initialStartPositionSeconds == nil)
+    #expect(recovered.url == spec.url)
+    #expect(recovered.headers == spec.headers)
+    #expect(recovered.metadata == spec.metadata)
+    #expect(MPVInitialStartPolicy.loadFileOptions(for: recovered) == nil)
+    #expect(MPVInitialStartPolicy.recoverySpec(
+        for: recovered, durationSeconds: 60, isCurrentFileLoaded: true,
+        playbackStarted: false, reachedEOF: true
+    ) == nil)
+}
+
+@Test func testMPVInitialStartKeepsValidStartsAndIgnoresStaleDurationNotifications() {
+    var spec = PlaySpec(url: "https://media.example.test/video.mp4", initialStartPositionSeconds: 120)
+    #expect(MPVInitialStartPolicy.recoverySpec(
+        for: spec, durationSeconds: 1_800, isCurrentFileLoaded: true,
+        playbackStarted: false, reachedEOF: false
+    ) == nil)
+    #expect(MPVInitialStartPolicy.recoverySpec(
+        for: spec, durationSeconds: 0, isCurrentFileLoaded: true,
+        playbackStarted: false, reachedEOF: false
+    ) == nil)
+    #expect(MPVInitialStartPolicy.recoverySpec(
+        for: spec, durationSeconds: 60, isCurrentFileLoaded: false,
+        playbackStarted: false, reachedEOF: false
+    ) == nil)
+    #expect(MPVInitialStartPolicy.recoverySpec(
+        for: spec, durationSeconds: 60, isCurrentFileLoaded: true,
+        playbackStarted: true, reachedEOF: true
+    ) == nil)
+    spec.metadata["playback.kind"] = "live"
+    #expect(MPVInitialStartPolicy.recoverySpec(
+        for: spec, durationSeconds: 60, isCurrentFileLoaded: true,
+        playbackStarted: false, reachedEOF: true
+    ) == nil)
+}
+
+@Test func testMPVInitialStartCanRecoverWhenEOFArrivesWithoutDuration() throws {
+    let spec = PlaySpec(url: "https://media.example.test/short.mp4", initialStartPositionSeconds: 120)
+    let recovered = try #require(MPVInitialStartPolicy.recoverySpec(
+        for: spec, durationSeconds: 0, isCurrentFileLoaded: false,
+        playbackStarted: false, reachedEOF: true
+    ))
+    #expect(recovered.initialStartPositionSeconds == nil)
+
+    var tracker = MPVPlaybackLoadEventTracker()
+    tracker.markLoadIssued()
+    tracker.markFileLoaded()
+    // A duration-triggered retry replaces an active load; its old EOF must be ignored.
+    tracker.prepareForLoad()
+    tracker.markLoadIssued()
+    let ignoredReplacement = tracker.consumeEndFile()
+    #expect(ignoredReplacement)
+    tracker.markFileLoaded()
+    let ignoredCurrent = tracker.consumeEndFile()
+    #expect(!ignoredCurrent)
+    // An EOF-triggered retry starts after the old load ended, with no replacement EOF to skip.
+    tracker.prepareForLoad()
+    tracker.markLoadIssued()
+    let ignoredRecovery = tracker.consumeEndFile()
+    #expect(!ignoredRecovery)
+}
+
+@Test func testPostSeekLoadingWaitsForRestartAfterPositionProgress() {
+    var guardState = PlaybackPostSeekEndGuard()
+    guardState.begin(targetSeconds: 40)
+    for position in [40.0, 41, 42, 43] {
+        guardState.observePosition(position)
+    }
+    #expect(!guardState.isProtecting)
+    #expect(!guardState.canPresentFrame(at: 43))
+
+    guardState.markPlaybackRestarted()
+    #expect(guardState.canPresentFrame(at: 40))
+    guardState.markFramePresented()
+    #expect(guardState.canPresentFrame(at: 40))
+}
+
 @Test func testMPVCacheMetricsRejectUnavailableValuesAndClampProgress() {
     #expect(MPVPlaybackActivityPolicy.normalizedCacheSpeed(1_024, hasValue: true) == 1_024)
     #expect(MPVPlaybackActivityPolicy.normalizedCacheSpeed(0, hasValue: true) == nil)

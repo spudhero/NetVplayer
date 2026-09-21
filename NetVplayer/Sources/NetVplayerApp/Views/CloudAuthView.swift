@@ -67,9 +67,9 @@ enum CloudAuthQRCodePayloadSignature {
 
 struct CloudAuthView: View {
     enum AuthMode: String, CaseIterable, Identifiable {
-        case qr = "扫码 Token"
+        case qr = "应用扫码"
         case web = "网页扫码"
-        case cookie = "粘贴 Cookie"
+        case cookie = "粘贴登录信息"
 
         var id: String { rawValue }
     }
@@ -511,9 +511,9 @@ struct CloudAuthView: View {
 
             if !CloudAuthQRCodeProviderPolicy.supportsLogin(request.provider) {
                 ContentUnavailableView(
-                    "暂不支持扫码 Token",
+                    "暂不支持这种扫码方式",
                     systemImage: "externaldrive.badge.xmark",
-                    description: Text("\(request.provider.displayName) 的扫码 token driver 尚未接入。")
+                    description: Text("请选择网页扫码或手动粘贴登录信息。")
                 )
             }
         }
@@ -876,7 +876,7 @@ struct CloudAuthView: View {
             } catch {
                 await MainActor.run {
                     isWorking = false
-                    statusMessage = error.localizedDescription
+                    statusMessage = authErrorMessage(error)
                     DiagnosticLog.write("[P115_AUTH] qrcode_session_failed")
                 }
             }
@@ -911,7 +911,7 @@ struct CloudAuthView: View {
                 } catch {
                     await MainActor.run {
                         isWorking = false
-                        statusMessage = error.localizedDescription
+                        statusMessage = authErrorMessage(error)
                         DiagnosticLog.write("[P115_AUTH] qrcode_poll_failed")
                     }
                     return
@@ -923,13 +923,13 @@ struct CloudAuthView: View {
     private var qrTokenDescription: String {
         switch request.provider {
         case .uc:
-            return "可选的 UCTV Token 只用于补充 OpenAPI 原码候选；UC 分享播放仍以 Cookie 为主，不要求第二次扫码。"
+            return "此扫码授权用于补充高清原片候选；普通分享播放仍以网页授权为主。"
         case .quark:
-            return "这会保存 QuarkTV 的 refresh/access token；Wogg 夸克分享直链仍需要 Cookie。"
+            return "此扫码授权用于补充电视端播放能力；普通分享播放仍需要网页授权。"
         case .baidu:
             return "扫码确认后保存百度网盘登录 Cookie，用于临时转存并获取原画直链。"
         default:
-            return "这会保存 \(request.provider.displayName) TV 的 refresh/access token；分享链接仍会优先使用 Cookie。"
+            return "此扫码授权用于补充播放能力；分享链接仍会优先使用网页授权。"
         }
     }
 
@@ -956,7 +956,7 @@ struct CloudAuthView: View {
             } catch {
                 await MainActor.run {
                     isWorking = false
-                    statusMessage = error.localizedDescription
+                    statusMessage = authErrorMessage(error)
                 }
             }
         }
@@ -987,14 +987,14 @@ struct CloudAuthView: View {
                             await MainActor.run {
                                 isWorking = false
                                 ucWebLoginServiceTicket = ticket
-                                statusMessage = "UC 票据直连验证失败，正在尝试网页登录：\(error.localizedDescription)"
+                                statusMessage = "UC 登录信息未能直接验证，正在尝试网页登录。"
                             }
                         }
                         return
                     }
                 } catch {
                     await MainActor.run {
-                        statusMessage = error.localizedDescription
+                        statusMessage = authErrorMessage(error)
                     }
                     return
                 }
@@ -1038,7 +1038,7 @@ struct CloudAuthView: View {
             } catch {
                 await MainActor.run {
                     isWorking = false
-                    statusMessage = error.localizedDescription
+                    statusMessage = authErrorMessage(error)
                 }
             }
         }
@@ -1061,7 +1061,7 @@ struct CloudAuthView: View {
                     }
                 } catch {
                     await MainActor.run {
-                        statusMessage = error.localizedDescription
+                        statusMessage = authErrorMessage(error)
                     }
                     return
                 }
@@ -1087,7 +1087,7 @@ struct CloudAuthView: View {
                     }
                 } catch {
                     await MainActor.run {
-                        statusMessage = error.localizedDescription
+                        statusMessage = authErrorMessage(error)
                     }
                 }
             }
@@ -1116,7 +1116,7 @@ struct CloudAuthView: View {
             } catch {
                 await MainActor.run {
                     isWorking = false
-                    statusMessage = "夸克登录二维码生成失败：\(error.localizedDescription)"
+                    statusMessage = authErrorMessage(error)
                 }
             }
         }
@@ -1152,7 +1152,7 @@ struct CloudAuthView: View {
                     }
                 } catch {
                     await MainActor.run {
-                        statusMessage = error.localizedDescription
+                        statusMessage = authErrorMessage(error)
                     }
                 }
             }
@@ -1275,7 +1275,7 @@ struct CloudAuthView: View {
                     if CloudAuthCookieValidationPolicy.isGuestLoginError(error.localizedDescription) {
                         statusMessage = "当前仍是 UC 访客状态，请扫描二维码并在手机上确认登录。"
                     } else {
-                        statusMessage = error.localizedDescription
+                        statusMessage = authErrorMessage(error)
                     }
                 }
             }
@@ -1359,7 +1359,7 @@ struct CloudAuthView: View {
         } catch {
             await MainActor.run {
                 isWorking = false
-                statusMessage = error.localizedDescription
+                statusMessage = authErrorMessage(error)
                 if request.provider == .quark {
                     if credential.kind != .cookie {
                         quarkStep = .tvToken
@@ -1372,6 +1372,13 @@ struct CloudAuthView: View {
                 }
             }
         }
+    }
+
+    private func authErrorMessage(_ error: Error) -> String {
+        UserFacingErrorPresenter.message(
+            for: error,
+            context: .authorization(providerName: request.provider.displayName)
+        )
     }
 }
 
@@ -1588,11 +1595,17 @@ private struct CloudCookieQRLoginView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            onError("\(provider.displayName) 登录页加载失败：\(error.localizedDescription)")
+            onError(UserFacingErrorPresenter.message(
+                for: error,
+                context: .authorization(providerName: provider.displayName)
+            ))
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            onError("\(provider.displayName) 登录页加载失败：\(error.localizedDescription)")
+            onError(UserFacingErrorPresenter.message(
+                for: error,
+                context: .authorization(providerName: provider.displayName)
+            ))
         }
 
         func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
@@ -1619,7 +1632,10 @@ private struct CloudCookieQRLoginView: NSViewRepresentable {
             webView.evaluateJavaScript(script) { [weak self] result, error in
                 if let error {
                     self?.deliveredServiceTicket = nil
-                    self?.onError("UC 登录确认失败：\(error.localizedDescription)")
+                    self?.onError(UserFacingErrorPresenter.message(
+                        for: error,
+                        context: .authorization(providerName: DriveProvider.uc.displayName)
+                    ))
                 } else if (result as? Bool) != true {
                     self?.deliveredServiceTicket = nil
                     self?.onError("UC 登录确认失败：登录页面尚未准备好，请刷新二维码重试。")
@@ -1675,7 +1691,10 @@ private struct CloudCookieQRLoginView: NSViewRepresentable {
                 if let string = result as? String {
                     self?.handleQRPayload(string)
                 } else if let error {
-                    self?.onError("暂未提取到登录二维码：\(error.localizedDescription)")
+                    self?.onError(UserFacingErrorPresenter.message(
+                        for: error,
+                        context: .authorization(providerName: self?.provider.displayName ?? "网盘")
+                    ))
                 }
             }
         }
@@ -2057,7 +2076,7 @@ struct CloudAuthQuarkWebLoginSession: Equatable, Sendable {
     let qrImageData: Data
 }
 
-enum CloudAuthQuarkWebLoginError: LocalizedError {
+enum CloudAuthQuarkWebLoginError: LocalizedError, UserFacingDescribedError {
     case invalidResponse
     case missingToken
     case missingQRCode
@@ -2070,6 +2089,14 @@ enum CloudAuthQuarkWebLoginError: LocalizedError {
             return "夸克网页登录接口未返回扫码 Token。"
         case .missingQRCode:
             return "无法生成夸克网页登录二维码。"
+        }
+    }
+    var userFacingDescription: String {
+        switch self {
+        case .invalidResponse:
+            return "夸克登录服务返回异常，请稍后重试。"
+        case .missingToken, .missingQRCode:
+            return "夸克登录二维码尚未准备好，请刷新后重试。"
         }
     }
 }
@@ -2196,7 +2223,7 @@ struct CloudAuthUCWebLoginSession: Equatable, Sendable {
     let qrImageData: Data
 }
 
-enum CloudAuthUCWebLoginError: LocalizedError {
+enum CloudAuthUCWebLoginError: LocalizedError, UserFacingDescribedError {
     case invalidResponse
     case missingToken
     case missingQRCode
@@ -2212,6 +2239,16 @@ enum CloudAuthUCWebLoginError: LocalizedError {
             return "无法生成 UC 网盘登录二维码。"
         case .missingCookie:
             return "UC 登录已确认，但接口未返回有效登录 Cookie。"
+        }
+    }
+    var userFacingDescription: String {
+        switch self {
+        case .invalidResponse:
+            return "UC 登录服务返回异常，请稍后重试。"
+        case .missingToken, .missingQRCode:
+            return "UC 登录二维码尚未准备好，请刷新后重试。"
+        case .missingCookie:
+            return "UC 扫码已确认，但登录信息尚未获取成功，请刷新二维码重试。"
         }
     }
 }

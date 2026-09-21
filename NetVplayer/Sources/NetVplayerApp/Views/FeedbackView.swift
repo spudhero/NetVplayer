@@ -1,5 +1,6 @@
 import SwiftUI
 import Models
+import Diagnostics
 
 struct FeedbackPreviewSnapshot: Equatable {
     let draft: FeedbackDraft
@@ -19,6 +20,7 @@ struct FeedbackView: View {
     @State private var isShowingPreview = false
     @State private var statusMessage: String?
     @State private var statusIsError = false
+    @AppStorage(DiagnosticReportingConfiguration.preferenceKey) private var automaticDiagnostics = true
 
     private var repositoryURL: URL? {
         FeedbackDestination.repositoryURL()
@@ -30,6 +32,27 @@ struct FeedbackView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            GroupBox(label: SettingsPanelLabel(
+                title: "自动诊断",
+                subtitle: "帮助定位闪退和播放错误。",
+                systemImage: "waveform.path.ecg"
+            )) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("自动发送错误诊断", isOn: $automaticDiagnostics)
+                        .disabled(!SentryDiagnostics.shared.isConfigured)
+                        .onChange(of: automaticDiagnostics) { _, enabled in
+                            SentryDiagnostics.shared.setEnabled(enabled)
+                        }
+                    Text(SentryDiagnostics.shared.isConfigured
+                         ? "通过 Sentry 发送崩溃堆栈、版本信息、错误码和操作步骤。不发送账号凭据、视频名称、播放地址或完整日志；少量会话用于统计起播耗时。"
+                         : "此构建尚未启用自动诊断，仍可在下方生成问题报告。")
+                        .font(.caption)
+                        .foregroundStyle(palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 6)
+            }
+
             GroupBox(label: SettingsPanelLabel(
                 title: "问题说明",
                 subtitle: "提交可复现的现象和操作路径。",
@@ -258,7 +281,10 @@ struct FeedbackView: View {
             )
             return nil
         } catch {
-            return error.localizedDescription
+            return UserFacingErrorPresenter.message(
+                for: error,
+                context: .feedback(operation: "校验公开复现地址")
+            )
         }
     }
 
@@ -280,7 +306,10 @@ struct FeedbackView: View {
                 isShowingPreview = showPreview
             } catch {
                 previewSnapshot = nil
-                statusMessage = error.localizedDescription
+                statusMessage = UserFacingErrorPresenter.message(
+                    for: error,
+                    context: .feedback(operation: "生成反馈预览")
+                )
                 statusIsError = true
                 isShowingPreview = false
             }
@@ -306,7 +335,10 @@ struct FeedbackView: View {
             }
             statusIsError = false
         } catch {
-            statusMessage = error.localizedDescription
+            statusMessage = UserFacingErrorPresenter.message(
+                for: error,
+                context: .feedback(operation: "打开反馈页面")
+            )
             statusIsError = true
         }
     }

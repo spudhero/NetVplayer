@@ -24,6 +24,7 @@ flowchart TB
         Runtime[ProviderRuntime<br>验证、安装、激活与回滚]
         Proxy[ProxyServer<br>受限 loopback 路由]
         Player[PlayerEngine<br>PlaySpec + libmpv]
+        Diagnostics[Diagnostics<br>隐私过滤后的崩溃与性能诊断]
     end
 
     subgraph Extension[独立签名 Provider 包]
@@ -46,6 +47,7 @@ flowchart TB
     Content -->|统一 PlaySpec| Player
     Content -->|需要受限中转| Proxy
     Proxy --> Player
+    UI -->|错误码、阶段与有限操作步骤| Diagnostics
 ```
 
 ### 模块职责
@@ -60,8 +62,9 @@ flowchart TB
 | 扩展执行 | `ProviderRuntime`, `QuickJSRuntime` | 验证签名包、管理安装/回滚、启动沙盒 Runner、提供受控 QuickJS host capability |
 | 本地数据面 | `ProxyServer` | 提供受限本地代理、流式 Range、解析页、注册文件、缓存和健康路由 |
 | 播放 | `PlayerEngine`, `MPVShim` | 将 `PlaySpec` 交给 libmpv，管理视频表面、播放状态、错误和会话生命周期 |
+| 诊断 | `Diagnostics` | 将允许的错误码、阶段、版本和有限操作步骤投影到 Sentry；拒绝凭据、内容名、媒体地址和完整日志 |
 | 辅助体验 | `DanmakuEngine`, `WebHomeEngine` | 提供默认关闭的弹幕与受限 WebHome 能力 |
-| 应用组合 | `NetVplayerApp` | SwiftUI 界面、AppState、窗口、设置、命令执行和所有用户可见入口 |
+| 应用组合 | `NetVplayerApp` | SwiftUI 界面、AppState、窗口、设置、命令执行、统一用户错误映射和所有用户可见入口 |
 
 Swift Package 的产品和 target 关系以 [`NetVplayer/Package.swift`](NetVplayer/Package.swift) 为准。
 
@@ -71,9 +74,13 @@ Swift Package 的产品和 target 关系以 [`NetVplayer/Package.swift`](NetVpla
 2. `ConfigEngine` 拉取并解析配置，保留站点、直播、解析器和请求策略等结构。
 3. `SpiderEngine` 根据站点类型和精确 binding 选择原生适配器、公开协议适配器或已验证 Provider。
 4. `SearchEngine`、`LiveEngine` 和内容提供器把结果转换为 `Models` 中的稳定类型。
-5. 未支持的平台依赖返回明确的兼容性错误，不伪装为可用能力。
+5. 未支持的平台依赖返回明确的兼容性错误，不伪装为可用能力；普通界面通过场景映射显示问题和建议动作，底层类型名只进入日志或高级诊断。
 
 公开应用不会自动插入默认站点、直播列表或隐藏内容入口。Provider 只有在用户配置与签名 manifest 的 `source_bindings` 精确匹配后才会参与处理。
+
+启动时先从 `active-version` 恢复并验签本机 Provider，再对照首次安装完成记录和当时的已安装组件清单。没有有效完成记录时，用户保存或新填写的点播源须等待签名目录同步与首次安装成功；失败进入重试状态。已有有效组件时，配置解析与首页加载只等待本地注册，在线检查和升级在后台进行。已识别但未完成的升级版本单独持久化，不覆盖仍可用的 active version；本地组件丢失或验签失败才触发修复门控。
+
+首页在构造 `AppState` 时同步读取保存的点播配置是否存在：没有配置才显示添加入口，已有配置从首帧显示准备或加载状态。扩展支持页分别呈现构建未配置、首次安装未完成、本地包失效、更新检查失败和待升级，不以在线检查结果推断本地播放能力。
 
 ### Provider 信任边界
 
@@ -166,6 +173,7 @@ Provider 的 player result 也可以返回受限的 `PlaybackInteraction`。当�
 - Provider 接收用户选择的站点上下文和不透明 `credential_ref`，不直接读取其它 Provider 状态或应用 Keychain 明文。
 - 播放历史保存稳定内容身份，不持久化短效媒体 URL、Cookie 或 Authorization。
 - 诊断输出会脱敏 URL 和敏感请求头；公开 issue 只应包含最小复现信息。
+- 普通错误提示不直接透传底层 `localizedDescription`。`UserFacingErrorPresenter` 负责配置、来源、播放、直播、授权、存储、扩展、更新、反馈和页面场景，内部错误继续供本地日志与隐私过滤后的远端诊断使用。
 - Provider 进程退出、超时或验证失败不会覆盖最后一个可用的已验证版本。
 
 ### 扩展开发
@@ -190,15 +198,20 @@ The diagram in the Chinese section defines the same boundary in full. The main l
 | Extension execution | `ProviderRuntime`, `QuickJSRuntime` | Verify, install, activate, roll back, and run sandboxed Providers |
 | Local data plane | `ProxyServer` | Restricted loopback proxy, Range streaming, parser page, registered files, cache, and health routes |
 | Playback | `PlayerEngine`, `MPVShim` | `PlaySpec`, libmpv integration, video surface, playback state, errors, and session lifecycle |
-| Application composition | `NetVplayerApp` | SwiftUI, AppState, windows, settings, command execution, and user-visible entry points |
+| Diagnostics | `Diagnostics` | Privacy-filtered crash and performance reporting with fixed error codes, stages, versions, and bounded interaction steps |
+| Application composition | `NetVplayerApp` | SwiftUI, AppState, windows, settings, command execution, user-facing error translation, and visible entry points |
 
 The package products and target dependencies are defined by [`NetVplayer/Package.swift`](NetVplayer/Package.swift).
 
 ### Configuration and content flow
 
-The user explicitly adds a compatible configuration, file service, or supported account. `ConfigEngine` parses it, and `SpiderEngine` selects an adapter or a verified Provider from the exact site identity. Search, live, and content modules convert results into stable `Models` types. Unsupported platform dependencies return an explicit compatibility error.
+The user explicitly adds a compatible configuration, file service, or supported account. `ConfigEngine` parses it, and `SpiderEngine` selects an adapter or a verified Provider from the exact site identity. Search, live, and content modules convert results into stable `Models` types. Unsupported platform dependencies return an explicit compatibility error, and the application maps that internal failure to a plain-language problem and next action before rendering it.
 
 The public application never inserts a default site, live list, or hidden content entry point. A Provider participates only when user configuration exactly matches its signed `source_bindings`.
+
+At startup, active local Provider versions are restored and verified before comparing them with the recorded initial-install completion and installed-package snapshot. Without a valid completion record, a saved or newly entered VOD source waits for the first signed-catalog installation; failure offers retry. With valid local packages, configuration and home loading wait only for local registration while online update checks continue independently. Pending upgrade versions are persisted separately from the active version; a missing or invalid local package triggers repair.
+
+`AppState` reads whether a VOD configuration was saved before the first home-screen render. Only a truly unconfigured install shows the add-source prompt; a saved source shows preparation or loading immediately. Extension Settings distinguishes an unconfigured build, incomplete first install, invalid local package, failed update check, and pending upgrade without treating online status as a playback-health test.
 
 ### Provider trust boundary
 
@@ -222,6 +235,7 @@ Direct HLS/MP4 bypasses the local proxy when no rewrite or mediation is required
 - Providers receive selected site context and opaque credential references, not another Provider's state or raw application Keychain values.
 - Playback history stores stable content identity instead of short-lived media URLs or sensitive headers.
 - Diagnostics redact URLs and sensitive headers.
+- Ordinary UI errors never expose raw Android compatibility names, Provider/runtime types, player internals, or unfiltered `localizedDescription`; those details remain in local or privacy-filtered diagnostics.
 - Failed verification, launch, or update leaves the last active verified Provider version available.
 
 ### Extension development

@@ -353,14 +353,14 @@ struct HomeVisualPolicyTests {
         let upstreamUnavailable = SitePickerMenuItem.statusPresentation(for: .upstreamUnavailable)
 
         #expect(native.text == nil)
-        #expect(upstreamUnavailable.text == "上游失效")
+        #expect(upstreamUnavailable.text == "源站暂不可用")
         #expect(
             SitePickerMenuItem.displayTitle(siteName: "厂长", statusText: native.text)
                 == "厂长"
         )
         #expect(
             SitePickerMenuItem.displayTitle(siteName: "失效源", statusText: upstreamUnavailable.text)
-                == "失效源 · 上游失效"
+                == "失效源 · 源站暂不可用"
         )
     }
 }

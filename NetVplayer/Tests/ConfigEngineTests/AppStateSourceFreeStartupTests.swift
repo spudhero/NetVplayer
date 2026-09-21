@@ -26,6 +26,7 @@ struct AppStateSourceFreeStartupTests {
         )
 
         #expect(state.initialConfigTask == nil)
+        #expect(state.savedConfigStartupPhase == .unconfigured)
         #expect(state.sites.isEmpty)
         #expect(state.savedConfigs.isEmpty)
         #expect(state.activeSite == nil)
@@ -55,15 +56,20 @@ struct AppStateSourceFreeStartupTests {
             startProxyServer: false,
             configResolver: ConfigResolver(httpClient: HTTPClient(session: URLSession(configuration: configuration))),
             storageManager: StorageManager(storageDirectory: directory),
-            userPreferences: preferences
+            userPreferences: preferences,
+            providerRuntimeRegistrationOverride: { true },
+            providerRuntimeStartupOverride: { false }
         )
         let task = try #require(state.initialConfigTask)
+        #expect(state.savedConfigStartupPhase == .preparingExtension)
         await task.value
 
         #expect(preferences.currentVodConfigUrl == url)
         #expect(state.savedConfigs.map(\.url) == [url])
         #expect(state.sites.map(\.key) == ["user-configured-fixture"])
         #expect(state.sites.map(\.api) == ["csp_UserConfiguredFixture"])
+        #expect(state.savedConfigStartupPhase == .ready)
+        #expect(preferences.providerRuntimeInitialInstallCompleted)
     }
 
     @MainActor
@@ -86,8 +92,10 @@ struct AppStateSourceFreeStartupTests {
             configResolver: ConfigResolver(httpClient: HTTPClient(session: URLSession(configuration: configuration))),
             storageManager: StorageManager(storageDirectory: directory),
             userPreferences: preferences,
+            providerRuntimeRegistrationOverride: { true },
             providerRuntimeStartupOverride: {
                 await providerStartup.wait()
+                return false
             }
         )
         let task = try #require(state.initialConfigTask)
@@ -105,21 +113,71 @@ struct AppStateSourceFreeStartupTests {
     }
 
     @MainActor
-    @Test func failedEarlyRestoreRetriesAfterProviderSynchronization() async throws {
+    @Test func savedConfigurationWaitsForInstalledProviderRegistrationButNotNetworkSynchronization() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "netvplayer-provider-registration-order-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let preferences = UserPreferences(defaults: defaults)
+        let url = "https://user-source.example.test/config.json"
+        preferences.currentVodConfigUrl = url
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SavedSourceURLProtocol.self]
+        let providerRegistration = ProviderStartupBarrier()
+        let providerSynchronization = ProviderStartupBarrier()
+        let state = AppState(
+            startProxyServer: false,
+            configResolver: ConfigResolver(httpClient: HTTPClient(session: URLSession(configuration: configuration))),
+            storageManager: StorageManager(storageDirectory: directory),
+            userPreferences: preferences,
+            providerRuntimeRegistrationOverride: {
+                await providerRegistration.wait()
+                return true
+            },
+            providerRuntimeStartupOverride: {
+                await providerSynchronization.wait()
+                return false
+            }
+        )
+        let task = try #require(state.initialConfigTask)
+
+        let registrationDeadline = ContinuousClock.now + .seconds(2)
+        while !(await providerRegistration.isWaiting), ContinuousClock.now < registrationDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await providerRegistration.isWaiting)
+        #expect(!state.isConfigLoaded)
+
+        await providerRegistration.release()
+        let restoreDeadline = ContinuousClock.now + .seconds(2)
+        while !state.isConfigLoaded, ContinuousClock.now < restoreDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(state.isConfigLoaded)
+        #expect(state.sites.map(\.key) == ["user-configured-fixture"])
+        #expect(await providerSynchronization.isWaiting)
+
+        await providerSynchronization.release()
+        await task.value
+    }
+
+    @MainActor
+    @Test func firstInstallWaitsForExtensionBeforeLoadingSavedSource() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "netvplayer-startup-retry-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer {
             defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(at: directory)
-            RetryingSavedSourceURLProtocol.reset()
         }
         let preferences = UserPreferences(defaults: defaults)
         let url = "https://user-source.example.test/config.json"
         preferences.currentVodConfigUrl = url
-        RetryingSavedSourceURLProtocol.reset()
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [RetryingSavedSourceURLProtocol.self]
+        configuration.protocolClasses = [SavedSourceURLProtocol.self]
         let providerStartup = ProviderStartupBarrier()
         let state = AppState(
             startProxyServer: false,
@@ -128,22 +186,145 @@ struct AppStateSourceFreeStartupTests {
             userPreferences: preferences,
             providerRuntimeStartupOverride: {
                 await providerStartup.wait()
+                return true
             }
         )
         let task = try #require(state.initialConfigTask)
+        #expect(state.savedConfigStartupPhase == .preparingExtension)
+        #expect(!state.isConfigLoaded)
+        #expect(state.sites.isEmpty)
 
         let deadline = ContinuousClock.now + .seconds(2)
-        while RetryingSavedSourceURLProtocol.attemptCount < 1, ContinuousClock.now < deadline {
+        while !(await providerStartup.isWaiting), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(RetryingSavedSourceURLProtocol.attemptCount == 1)
-        #expect(!state.isConfigLoaded)
+        #expect(await providerStartup.isWaiting)
 
         await providerStartup.release()
         await task.value
-        #expect(RetryingSavedSourceURLProtocol.attemptCount == 2)
         #expect(state.isConfigLoaded)
         #expect(state.sites.map(\.key) == ["user-configured-fixture"])
+        #expect(preferences.providerRuntimeInitialInstallCompleted)
+    }
+
+    @MainActor
+    @Test func firstInstallFailureDoesNotLoadSavedSource() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "netvplayer-first-install-failed-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let preferences = UserPreferences(defaults: defaults)
+        preferences.currentVodConfigUrl = "https://user-source.example.test/config.json"
+        let state = AppState(
+            startProxyServer: false,
+            storageManager: StorageManager(storageDirectory: directory),
+            userPreferences: preferences,
+            providerRuntimeStartupOverride: { false }
+        )
+        await state.initialConfigTask?.value
+        #expect(!state.isConfigLoaded)
+        #expect(state.sites.isEmpty)
+        #expect(!preferences.providerRuntimeInitialInstallCompleted)
+        guard case .failed = state.savedConfigStartupPhase else {
+            Issue.record("First install failure should be visible on the home screen")
+            return
+        }
+    }
+
+    @MainActor
+    @Test func invalidLocalInstallMarkerRequiresRepair() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "netvplayer-invalid-provider-marker-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let preferences = UserPreferences(defaults: defaults)
+        preferences.currentVodConfigUrl = "https://user-source.example.test/config.json"
+        preferences.providerRuntimeInitialInstallCompleted = true
+        preferences.providerRuntimeInstalledVersions = ["fixture.provider": "1.0.0"]
+        let state = AppState(
+            startProxyServer: false,
+            storageManager: StorageManager(storageDirectory: directory),
+            userPreferences: preferences,
+            providerRuntimeRegistrationOverride: { false },
+            providerRuntimeStartupOverride: { false }
+        )
+        await state.initialConfigTask?.value
+        #expect(state.providerRuntimeLocalPackageInvalid)
+        #expect(!preferences.providerRuntimeInitialInstallCompleted)
+        #expect(!state.isConfigLoaded)
+    }
+
+    @MainActor
+    @Test func missingOnePreviouslyInstalledPackageInvalidatesTheCompletionRecord() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "netvplayer-missing-provider-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let preferences = UserPreferences(defaults: defaults)
+        preferences.currentVodConfigUrl = "https://user-source.example.test/config.json"
+        preferences.providerRuntimeInitialInstallCompleted = true
+        preferences.providerRuntimeInstalledVersions = ["first.provider": "1.0.0", "second.provider": "1.0.0"]
+        let state = AppState(
+            startProxyServer: false,
+            storageManager: StorageManager(storageDirectory: directory),
+            userPreferences: preferences,
+            providerRuntimeRegistrationOverride: { true },
+            providerRuntimeStartupOverride: { false }
+        )
+        await state.initialConfigTask?.value
+        #expect(state.providerRuntimeLocalPackageInvalid)
+        #expect(!preferences.providerRuntimeInitialInstallCompleted)
+        #expect(!state.isConfigLoaded)
+    }
+
+    @MainActor
+    @Test func retryAfterFirstInstallFailureLoadsSavedSource() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "netvplayer-first-install-retry-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let preferences = UserPreferences(defaults: defaults)
+        preferences.currentVodConfigUrl = "https://user-source.example.test/config.json"
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SavedSourceURLProtocol.self]
+        let attempts = ProviderStartupAttempts()
+        let state = AppState(
+            startProxyServer: false,
+            configResolver: ConfigResolver(httpClient: HTTPClient(session: URLSession(configuration: configuration))),
+            storageManager: StorageManager(storageDirectory: directory),
+            userPreferences: preferences,
+            providerRuntimeStartupOverride: { await attempts.nextSucceeds() }
+        )
+        await state.initialConfigTask?.value
+        #expect(!state.isConfigLoaded)
+
+        state.retrySavedConfigStartup()
+        await state.initialConfigTask?.value
+        #expect(state.isConfigLoaded)
+        #expect(state.savedConfigStartupPhase == .ready)
+        #expect(preferences.providerRuntimeInitialInstallCompleted)
+        #expect(await attempts.count == 2)
+    }
+}
+
+private actor ProviderStartupAttempts {
+    private(set) var count = 0
+
+    func nextSucceeds() -> Bool {
+        count += 1
+        return count > 1
     }
 }
 

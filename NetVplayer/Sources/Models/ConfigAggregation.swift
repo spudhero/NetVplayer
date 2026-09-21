@@ -194,10 +194,6 @@ public struct ConfigAggregationSnapshot: Codable, Sendable, Equatable {
         normalizationEvents.filter { $0.kind == .urlNormalized }.count
     }
 
-    public var unsupportedAndroidRuntimeCount: Int {
-        normalizationEvents.filter { $0.kind == .androidRuntimeUnsupported }.count
-    }
-
     public var failedExternalSourceCount: Int {
         fetchedSources.filter { !$0.error.isEmpty || $0.status == "failed" }.count
     }

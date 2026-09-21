@@ -21,23 +21,23 @@ struct SitePickerMenuItem: Equatable, Identifiable {
     ) -> (text: String?, icon: String, detail: String) {
         switch status {
         case .native:
-            return (nil, "arrow.triangle.branch", "已注册 Swift 替代实现；不代表已通过当前网络播放验证")
+            return (nil, "checkmark.circle", status.userFacingDetail)
         case .nativePartial:
-            return ("部分接管", "circle.lefthalf.filled", "仅部分功能已有 Swift 实现，详情以兼容性报告为准")
+            return (status.userFacingTitle, "circle.lefthalf.filled", status.userFacingDetail)
         case .unsupportedBinary:
-            return ("二进制不可用", "xmark.octagon", "依赖未打包的二进制或外部组件")
+            return (status.userFacingTitle, "xmark.octagon", status.userFacingDetail)
         case .unsupportedAndroidCsp:
-            return ("Android 不可用", "exclamationmark.triangle", "Android csp_ 源无法在 macOS 运行")
+            return (status.userFacingTitle, "exclamationmark.triangle", status.userFacingDetail)
         case .pendingGuardCapture:
-            return ("待抓包", "rectangle.and.text.magnifyingglass", "需要补齐请求行为后再原生化")
+            return (status.userFacingTitle, "clock.arrow.circlepath", status.userFacingDetail)
         case .upstreamUnavailable:
-            return ("上游失效", "bolt.slash", "Fongmi 当前上游也无法返回目录")
+            return (status.userFacingTitle, "bolt.slash", status.userFacingDetail)
         case .invalidConfiguration:
-            return ("配置无效", "exclamationmark.octagon", "远端条目缺少可加载实现或必要规则，无法构造内容源")
+            return (status.userFacingTitle, "exclamationmark.octagon", status.userFacingDetail)
         case .js:
-            return ("JS", "curlybraces", "由 JavaScriptCore 运行时加载")
+            return (nil, "link", status.userFacingDetail)
         case .cms:
-            return ("CMS", "link", "直接请求 CMS 或 HTTP API")
+            return (nil, "link", status.userFacingDetail)
         }
     }
 }
@@ -193,7 +193,27 @@ struct VodHomeView: View {
                     categoryFilterStrip
                     libraryContent(posterLayout: posterLayout)
                 } else {
-                    configurationEmptyState
+                    switch appState.savedConfigStartupPhase {
+                    case .unconfigured:
+                        configurationEmptyState
+                    case .preparingExtension:
+                        savedConfigLoadingState(message: "正在准备播放扩展")
+                    case .loading, .ready:
+                        savedConfigLoadingState(message: "正在加载数据源")
+                    case .failed(let message):
+                        AppUnavailableState(
+                            title: "数据源暂未加载",
+                            message: message,
+                            systemImage: "exclamationmark.triangle",
+                            actionTitle: appState.availableDepots.isEmpty ? "重试" : "打开设置"
+                        ) {
+                            if appState.availableDepots.isEmpty {
+                                appState.retrySavedConfigStartup()
+                            } else {
+                                appState.selectedTab = .settings
+                            }
+                        }
+                    }
                 }
             }
             .padding(.horizontal, HomeVisualPolicy.contentHorizontalPadding)
@@ -656,6 +676,17 @@ struct VodHomeView: View {
         }
     }
 
+    private func savedConfigLoadingState(message: String) -> some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            Text(message)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(palette.muted)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var emptyVodState: (title: String, systemImage: String, description: String, showsSearchButton: Bool) {
         guard let site = appState.activeSite else {
             return ("该分类暂无视频", "film.stack", "当前没有可显示的点播内容。", false)
@@ -694,18 +725,18 @@ struct VodHomeView: View {
             return SitePickerMenuItem.statusPresentation(for: status)
         }
         if appState.nativeReplacementSiteKeys.contains(site.key) {
-            return (nil, "arrow.triangle.branch", "已注册 Swift 替代实现；尚无运行可用性结论")
+            return (nil, "checkmark.circle", "已提供当前系统可用的兼容实现，实际可用性取决于源站和网络。")
         }
         if site.isWoggCrawlerSource {
-            return (nil, "arrow.triangle.branch", "已注册 Swift WoGG 替代实现；尚无运行可用性结论")
+            return (nil, "checkmark.circle", "已提供当前系统可用的兼容实现，实际可用性取决于源站和网络。")
         }
         if site.isAndroidCrawlerSource {
-            return ("Android 不可用", "exclamationmark.triangle", "Android csp_ 源暂不支持")
+            return ("暂不支持", "exclamationmark.triangle", "该来源使用的格式当前无法加载，请选择其他视频源。")
         }
         if site.isSpider {
-            return ("JS", "curlybraces", "JS、drpy 或远程脚本源")
+            return (nil, "link", "该来源可直接尝试加载。")
         }
-        return ("CMS", "link", "CMS、XPath 或 HTTP API 源")
+        return (nil, "link", "该来源可直接尝试加载。")
     }
 }
 

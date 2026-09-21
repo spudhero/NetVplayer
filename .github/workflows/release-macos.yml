@@ -195,6 +195,47 @@ jobs:
           cp dist/sbom/NetVplayer.spdx.json "$asset_output/"
           echo "asset-output=$asset_output" >> "$GITHUB_OUTPUT"
 
+      - name: Generate matching Sentry debug symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/netvplayer-release/app/NetVplayer.app/Contents/MacOS/NetVplayerApp"
+          symbols="$RUNNER_TEMP/netvplayer-release/symbols/NetVplayerApp.dSYM"
+          mkdir -p "$(dirname "$symbols")"
+          xcrun dsymutil "$binary" -o "$symbols"
+          binary_uuid="$(xcrun dwarfdump --uuid "$binary" | awk '{print $2, $3}')"
+          symbols_uuid="$(xcrun dwarfdump --uuid "$symbols" | awk '{print $2, $3}')"
+          [[ -n "$binary_uuid" && "$binary_uuid" == "$symbols_uuid" ]]
+
+      - name: Retain Sentry debug symbols
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NetVplayer-${{ github.ref_name }}-debug-symbols
+          path: ${{ runner.temp }}/netvplayer-release/symbols
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Sentry symbols when a token is configured
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SENTRY_AUTH_TOKEN" ]]; then
+            echo "Sentry upload token is not configured; matching symbols are retained in the workflow artifact."
+            exit 0
+          fi
+          cli="$RUNNER_TEMP/sentry-cli"
+          curl --fail --location --silent --show-error \
+            https://github.com/getsentry/sentry-cli/releases/download/3.8.0/sentry-cli-Darwin-universal \
+            --output "$cli"
+          printf '%s  %s\n' \
+            2c26914636c47ab9bf9e710484ad7b44d371cbec8bd29cafb36b3cf877bf4285 "$cli" \
+            | shasum -a 256 --check
+          chmod +x "$cli"
+          "$cli" debug-files upload --org spudhero --project apple-macos-e7 \
+            --no-sources --wait "$RUNNER_TEMP/netvplayer-release/symbols"
+
       - name: Sign and validate the update feed
         shell: bash
         working-directory: ${{ steps.package.outputs.asset-output }}

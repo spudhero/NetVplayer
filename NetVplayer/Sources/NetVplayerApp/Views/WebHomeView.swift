@@ -35,8 +35,9 @@ struct WebHomeView: View {
                         }
                     }
                 case .failure(let error):
-                    unavailableView(title: "WebHome URL 不可用", message: error.localizedDescription)
-                        .onAppear { appState.updateWebHomeURLStatus("URL 拒绝：\(error.localizedDescription)") }
+                    let message = UserFacingErrorPresenter.message(for: error, context: .webContent)
+                    unavailableView(title: "页面地址不可用", message: message)
+                        .onAppear { appState.updateWebHomeURLStatus(message) }
                 }
             }
         }
@@ -122,7 +123,7 @@ private struct WebHomeDebugPanel: View {
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Text(invocation.error ?? "\(invocation.responseBytes) bytes")
+            Text(invocation.ok ? "已返回 \(invocation.responseBytes) 字节" : "操作未完成，请检查页面来源后重试。")
                 .font(.caption2)
                 .foregroundStyle(
                     invocation.ok

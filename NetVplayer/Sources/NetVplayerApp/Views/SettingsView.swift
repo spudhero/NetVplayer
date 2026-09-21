@@ -497,20 +497,29 @@ struct SettingsView: View {
                             Label("重新检查", systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.bordered)
-                        .disabled(appState.providerRuntimeBusy)
+                        .disabled(appState.providerRuntimeBusy || !appState.providerRuntimeIsConfigured)
                         .help("检查并自动更新播放扩展")
                     }
 
                     if let progress = appState.providerRuntimeProgress {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("正在安全准备播放扩展")
+                        if !appState.providerRuntimeInstalled.isEmpty,
+                           progress.phase == .fetchingCatalog {
+                            Label("播放扩展已可用，正在后台检查更新", systemImage: "checkmark.circle.fill")
                                 .font(.caption)
-                                .foregroundStyle(palette.muted)
-                            if let fraction = progress.fractionCompleted {
-                                ProgressView(value: fraction)
-                            } else {
-                                ProgressView()
-                                    .controlSize(.small)
+                                .foregroundStyle(palette.color(for: .success))
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(appState.providerRuntimeInstalled.isEmpty
+                                    ? "正在安全准备播放扩展"
+                                    : "正在后台更新播放扩展")
+                                    .font(.caption)
+                                    .foregroundStyle(palette.muted)
+                                if let fraction = progress.fractionCompleted {
+                                    ProgressView(value: fraction)
+                                } else {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
                             }
                         }
                     }
@@ -566,7 +575,9 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear {
-            if appState.providerRuntimeCatalog.isEmpty,
+            if appState.providerRuntimeIsConfigured,
+               !appState.providerRuntimeBusy,
+               appState.providerRuntimeCatalog.isEmpty,
                appState.providerRuntimeInstalled.isEmpty {
                 appState.refreshProviderRuntimeCatalog()
             }
@@ -574,29 +585,55 @@ struct SettingsView: View {
     }
 
     private var providerRuntimeSummaryStatus: String {
-        if appState.providerRuntimeBusy { return "正在准备" }
+        if !appState.providerRuntimeIsConfigured { return "未配置" }
+        if appState.providerRuntimeBusy {
+            return appState.providerRuntimeInstalled.isEmpty ? "正在准备" : "后台检查"
+        }
+        if appState.providerRuntimeLocalPackageInvalid { return "需要修复" }
+        if !appState.providerRuntimeInitialInstallCompleted { return "安装未完成" }
+        if !appState.providerRuntimePendingVersions.isEmpty { return "更新待处理" }
         if providerRuntimeHasFailure {
-            return appState.providerRuntimeInstalled.isEmpty ? "需要处理" : "可继续使用"
+            return appState.providerRuntimeInstalled.isEmpty ? "安装未完成" : "检查未完成"
         }
         return appState.providerRuntimeInstalled.isEmpty ? "尚未就绪" : "运行正常"
     }
 
     private var providerRuntimeSummaryTitle: String {
-        if appState.providerRuntimeBusy { return "正在准备扩展能力" }
+        if !appState.providerRuntimeIsConfigured { return "当前构建未启用扩展支持" }
+        if appState.providerRuntimeBusy {
+            return appState.providerRuntimeInstalled.isEmpty ? "正在准备扩展能力" : "扩展能力已就绪"
+        }
+        if appState.providerRuntimeLocalPackageInvalid { return "本地扩展需要重新安装" }
+        if !appState.providerRuntimeInitialInstallCompleted { return "首次扩展安装未完成" }
+        if !appState.providerRuntimePendingVersions.isEmpty { return "扩展更新待处理" }
         if providerRuntimeHasFailure {
-            return appState.providerRuntimeInstalled.isEmpty ? "扩展暂时不可用" : "扩展能力仍可使用"
+            return appState.providerRuntimeInstalled.isEmpty ? "扩展安装未完成" : "扩展更新检查未完成"
         }
         return appState.providerRuntimeInstalled.isEmpty ? "等待自动准备" : "扩展能力已就绪"
     }
 
     private var providerRuntimeSummaryDescription: String {
+        if !appState.providerRuntimeIsConfigured {
+            return "当前安装包缺少签名公钥或分发地址，请安装已配置扩展支持的版本。"
+        }
         if appState.providerRuntimeBusy {
-            return "NetVplayer 正在检查并自动更新所需组件。"
+            return appState.providerRuntimeInstalled.isEmpty
+                ? "NetVplayer 正在检查并自动更新所需组件。"
+                : "已启用 \(appState.providerRuntimeInstalled.count) 项兼容组件，正在后台检查更新。"
+        }
+        if appState.providerRuntimeLocalPackageInvalid {
+            return "此前安装的扩展未通过本地校验，正在等待重新安装。"
+        }
+        if !appState.providerRuntimeInitialInstallCompleted {
+            return "所需扩展尚未全部准备好，数据源会在安装完成后加载。"
+        }
+        if !appState.providerRuntimePendingVersions.isEmpty {
+            return "有 \(appState.providerRuntimePendingVersions.count) 项更新未完成，已安装版本仍可使用。"
         }
         if providerRuntimeHasFailure {
             return appState.providerRuntimeInstalled.isEmpty
-                ? "暂时无法准备播放扩展，请检查网络后重新检查。"
-                : "部分更新暂未完成，已安装组件仍可正常使用。"
+                ? "播放扩展安装未完成，请重新检查。"
+                : "暂时无法检查更新，已安装组件仍可正常使用。"
         }
         if appState.providerRuntimeInstalled.isEmpty {
             return "NetVplayer 会在需要时自动准备，无需选择版本或安装位置。"
@@ -605,21 +642,35 @@ struct SettingsView: View {
     }
 
     private var providerRuntimeSummaryIcon: String {
-        if appState.providerRuntimeBusy { return "arrow.triangle.2.circlepath" }
-        if providerRuntimeHasFailure { return "exclamationmark.triangle.fill" }
+        if !appState.providerRuntimeIsConfigured { return "puzzlepiece.extension" }
+        if appState.providerRuntimeBusy {
+            return appState.providerRuntimeInstalled.isEmpty
+                ? "arrow.triangle.2.circlepath"
+                : "checkmark.circle.fill"
+        }
+        if appState.providerRuntimeLocalPackageInvalid
+            || !appState.providerRuntimeInitialInstallCompleted
+            || !appState.providerRuntimePendingVersions.isEmpty
+            || providerRuntimeHasFailure { return "exclamationmark.triangle.fill" }
         return appState.providerRuntimeInstalled.isEmpty ? "clock.fill" : "checkmark.circle.fill"
     }
 
     private var providerRuntimeSummaryColor: Color {
-        if appState.providerRuntimeBusy { return palette.color(for: .loading) }
-        if providerRuntimeHasFailure { return palette.color(for: .warning) }
+        if !appState.providerRuntimeIsConfigured { return palette.muted }
+        if appState.providerRuntimeBusy {
+            return appState.providerRuntimeInstalled.isEmpty
+                ? palette.color(for: .loading)
+                : palette.color(for: .success)
+        }
+        if appState.providerRuntimeLocalPackageInvalid
+            || !appState.providerRuntimeInitialInstallCompleted
+            || !appState.providerRuntimePendingVersions.isEmpty
+            || providerRuntimeHasFailure { return palette.color(for: .warning) }
         return appState.providerRuntimeInstalled.isEmpty ? palette.muted : palette.color(for: .success)
     }
 
     private var providerRuntimeHasFailure: Bool {
-        appState.providerRuntimeFailedRelease != nil
-            || appState.providerRuntimeStatus.contains("失败")
-            || appState.providerRuntimeStatus.contains("未配置")
+        appState.providerRuntimeHasFailure
     }
 
     private var latestProviderRuntimeCatalog: [ProviderRelease] {
@@ -1032,7 +1083,7 @@ struct SettingsView: View {
                 ForEach(ExternalSourceSupportStatus.allCases, id: \.self) { status in
                     let count = appState.externalSourceReportCount(for: status)
                     if count > 0 {
-                        Label("\(compatibilityStatusTitle(status)) \(count)", systemImage: compatibilityStatusIcon(status))
+                        Label("\(status.userFacingTitle) \(count)", systemImage: compatibilityStatusIcon(status))
                             .font(.caption)
                             .foregroundColor(compatibilityStatusColor(status))
                     }
@@ -1042,7 +1093,7 @@ struct SettingsView: View {
             let visibleReports = appState.externalSourceReports
                 .filter { $0.status != .cms || !$0.reason.isEmpty }
                 .prefix(16)
-            ForEach(Array(visibleReports)) { report in
+            ForEach(visibleReports) { report in
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: compatibilityStatusIcon(report.status))
                         .foregroundColor(compatibilityStatusColor(report.status))
@@ -1051,10 +1102,19 @@ struct SettingsView: View {
                         Text(report.siteName.isEmpty ? report.siteKey : report.siteName)
                             .font(.caption)
                             .fontWeight(.medium)
-                        Text("\(compatibilityStatusTitle(report.status)) · \(report.reason)")
+                        Text(report.status.userFacingTitle)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(compatibilityStatusColor(report.status))
+                        Text(report.reason)
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .lineLimit(2)
+                        if !report.suggestion.isEmpty {
+                            Text("建议：\(report.suggestion)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                        }
                         if !report.sourceURL.isEmpty {
                             Text("来源：\(report.sourceURL)")
                                 .font(.caption2)
@@ -1066,12 +1126,6 @@ struct SettingsView: View {
                                 .font(.caption2)
                                 .foregroundColor(.orange)
                                 .lineLimit(1)
-                        }
-                        if !report.androidRuntimeDiagnostic.isEmpty {
-                            Text(report.androidRuntimeDiagnostic)
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .lineLimit(2)
                         }
                     }
                     Spacer()
@@ -1248,7 +1302,7 @@ struct SettingsView: View {
                     ForEach(ExternalResourceDiagnosticStatus.allCases, id: \.self) { status in
                         let count = diagnostics.filter { $0.status == status }.count
                         if count > 0 {
-                            Label("\(resourceStatusTitle(status)) \(count)", systemImage: resourceStatusIcon(status))
+                            Label("\(status.userFacingTitle) \(count)", systemImage: resourceStatusIcon(status))
                                 .foregroundColor(resourceStatusColor(status))
                         }
                     }
@@ -1447,15 +1501,6 @@ struct SettingsView: View {
         }
     }
 
-    private func resourceStatusTitle(_ status: ExternalResourceDiagnosticStatus) -> String {
-        switch status {
-        case .recorded: return "可诊断"
-        case .blocked: return "已拒绝"
-        case .androidRuntimeOnly: return "Android"
-        case .unsupportedType: return "未知"
-        }
-    }
-
     private func resourceStatusIcon(_ status: ExternalResourceDiagnosticStatus) -> String {
         switch status {
         case .recorded: return "checkmark.circle"
@@ -1471,20 +1516,6 @@ struct SettingsView: View {
         case .blocked: return .red
         case .androidRuntimeOnly: return .orange
         case .unsupportedType: return .secondary
-        }
-    }
-
-    private func compatibilityStatusTitle(_ status: ExternalSourceSupportStatus) -> String {
-        switch status {
-        case .native: return "已接管"
-        case .nativePartial: return "部分接管"
-        case .js: return "JS"
-        case .cms: return "CMS"
-        case .pendingGuardCapture: return "待抓包"
-        case .upstreamUnavailable: return "上游失效"
-        case .invalidConfiguration: return "配置无效"
-        case .unsupportedAndroidCsp: return "Android"
-        case .unsupportedBinary: return "二进制"
         }
     }
 
@@ -1790,7 +1821,7 @@ struct SettingsView: View {
                 systemImage: "play.circle"
             )) {
                 VStack(spacing: 0) {
-                    SettingsControlRow(title: "解码方式", caption: "自动模式沿用 mpv 默认策略") {
+                    SettingsControlRow(title: "解码方式", caption: "自动模式沿用播放器默认策略") {
                         Picker("解码方式", selection: $decodeMode) {
                             Text("自动").tag(0)
                             Text("硬件加速").tag(1)
@@ -2053,7 +2084,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
             GroupBox(label: SettingsPanelLabel(
                 title: "缓存管理",
-                subtitle: "清理爬虫脚本、WKWebView 网页数据与 Cookie。",
+                subtitle: "清理视频源脚本、网页缓存与登录信息。",
                 systemImage: "trash"
             )) {
                 SettingsControlRow(title: "临时嗅探与 JS 缓存", caption: "应用启动后异步计算") {
@@ -2171,7 +2202,7 @@ struct SettingsView: View {
                 systemImage: "gearshape"
             )) {
                 HStack {
-                    Label("原生 SwiftUI / mpv", systemImage: "macwindow")
+                    Label("原生 macOS 界面 / 内置播放器", systemImage: "macwindow")
                         .font(.caption)
                         .foregroundStyle(palette.muted)
                     Spacer(minLength: 0)
@@ -2239,7 +2270,7 @@ struct SettingsView: View {
             _ = try WebHomeDestination.resolve(trimmed)
             return "URL 校验通过；加载时仍会走白名单 bridge 和响应脱敏。"
         } catch {
-            return "URL 校验失败：\(error.localizedDescription)"
+            return UserFacingErrorPresenter.message(for: error, context: .webContent)
         }
     }
 
@@ -2276,7 +2307,10 @@ struct SettingsView: View {
             backupStatus = "备份已导出"
         } catch {
             backupStatusIsError = true
-            backupStatus = error.localizedDescription
+            backupStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: "导出备份")
+            )
         }
     }
 
@@ -2309,7 +2343,10 @@ struct SettingsView: View {
             subtitleOverrideSourceStyle = UserPreferences.shared.subtitleOverrideSourceStyle
         } catch {
             backupStatusIsError = true
-            backupStatus = error.localizedDescription
+            backupStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: "导入备份")
+            )
         }
     }
 
@@ -2326,7 +2363,10 @@ struct SettingsView: View {
             progressSyncStatus = "播放进度已导出"
         } catch {
             progressSyncStatusIsError = true
-            progressSyncStatus = error.localizedDescription
+            progressSyncStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: "导出播放进度")
+            )
         }
     }
 
@@ -2343,7 +2383,10 @@ struct SettingsView: View {
             progressSyncStatus = "已导入 \(progress.records.count) 条播放进度"
         } catch {
             progressSyncStatusIsError = true
-            progressSyncStatus = error.localizedDescription
+            progressSyncStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: "导入播放进度")
+            )
         }
     }
 
@@ -2415,7 +2458,10 @@ struct SettingsView: View {
             } catch {
                 await MainActor.run {
                     cloudCookieSaved = false
-                    cloudCookieStatus = error.localizedDescription
+                    cloudCookieStatus = UserFacingErrorPresenter.message(
+                        for: error,
+                        context: .authorization(providerName: provider.rawValue)
+                    )
                     isValidatingCloudCookie = false
                 }
             }
