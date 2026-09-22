@@ -140,17 +140,24 @@ private actor DeferredPerformanceResult {
     let repository = VodDetailRepository(maximumEntries: 2, ttl: 600)
     let key = VodDetailCacheKey(revision: 1, siteKey: "site", vodID: "vod")
     let counter = PerformanceCacheCounter()
+    let deferred = DeferredPerformanceResult()
 
-    async let first = repository.result(for: key) {
-        await counter.increment()
-        try await Task.sleep(for: .milliseconds(50))
-        return Result(list: [Vod(vodId: "vod", vodName: "Detail")])
+    let first = Task {
+        try await repository.result(for: key) {
+            await counter.increment()
+            return await deferred.load()
+        }
     }
-    async let second = repository.result(for: key) {
-        await counter.increment()
-        return .empty
+    await deferred.waitUntilStarted()
+    let second = Task {
+        try await repository.result(for: key) {
+            await counter.increment()
+            return .empty
+        }
     }
-    let values = try await [first, second]
+    await deferred.complete(Result(list: [Vod(vodId: "vod", vodName: "Detail")]))
+
+    let values = try await [first.value, second.value]
     #expect(values.allSatisfy { $0.list.first?.vodName == "Detail" })
     #expect(await counter.count() == 1)
 
