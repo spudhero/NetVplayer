@@ -4,6 +4,15 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [1.0.12](https://github.com/spudhero/NetVplayer/releases/tag/1.0.12) - 2026-09-22
+
+- 分类与推荐列表在 5 分钟内直接复用结果，5 至 30 分钟先显示缓存再后台刷新，并恢复同一筛选组合已经加载的连续分页；刷新按钮可主动获取最新内容。
+- 海报改用独立的 64 MiB 内存和 256 MiB / 7 天磁盘缓存，合并重复下载、限制并发，并在后台校验、预解码和按显示尺寸降采样。
+- 详情结果缓存 10 分钟并支持悬停预取。玩偶详情先显示海报、标题和简介，网盘目录在后台并发展开，完成后自动替换剧集，不再由最慢分享阻塞整个页面。
+- 多站搜索最多同时执行 6 个真实 Provider 操作，并使用不依赖 Provider 配合取消的硬截止；当前、稳定和响应更快的来源优先返回。
+- 设置页现在准确显示海报、网络、分类和详情缓存。“清理缓存”保留登录状态、配置、历史、收藏、反馈和 Provider；“清除网页会话”单独删除 Cookie 与网站数据。
+- 播放准备记录源站、网盘、解析、代理、mpv 提交和首帧阶段耗时，并在新播放规格准备完成前保留当前视频。
+
 ### [1.0.11](https://github.com/spudhero/NetVplayer/releases/tag/1.0.11) - 2026-09-22
 
 - 修复 macOS 27 切换或断开音频设备时可能触发的 CoreAudio 崩溃；内嵌 libmpv 现在使用稳定的交错浮点音频格式初始化。
@@ -60,6 +69,15 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [1.0.12](https://github.com/spudhero/NetVplayer/releases/tag/1.0.12) - 2026-09-22
+
+- Category and recommendation results are reused for five minutes, shown immediately with background refresh for up to thirty minutes, and restore consecutive pages for each filter combination. A refresh button retrieves current content on demand.
+- Posters now use a dedicated 64 MiB memory cache and 256 MiB seven-day disk cache with request coalescing, bounded downloads, validation, background decoding, and display-sized downsampling.
+- Details are cached for ten minutes and prefetched on hover. WoGG pages show artwork, metadata, and descriptions first, then replace pending cloud-drive routes as concurrent episode expansion completes.
+- Federated search runs at most six real Provider operations at once and enforces a hard deadline even when a Provider ignores cancellation. The active, healthier, and faster sources are searched first.
+- Settings now reports poster, network, catalog, and detail caches separately. Clear Cache preserves sign-ins, configurations, history, favorites, reports, and Providers; Clear Web Sessions separately removes cookies and website data.
+- Playback startup records source, cloud-drive, parsing, proxy, mpv submission, and first-frame timing while keeping the current video until the next playback specification is ready.
 
 ### [1.0.11](https://github.com/spudhero/NetVplayer/releases/tag/1.0.11) - 2026-09-22
 

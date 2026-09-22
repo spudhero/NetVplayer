@@ -31,7 +31,7 @@
 
 ### 原生 macOS 媒体播放器
 
-NetVplayer 1.0.11 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+NetVplayer 1.0.12 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
 
 ### 项目背景
 
@@ -42,6 +42,8 @@ NetVplayer 的目标不是照搬手机或电视端界面，而是把内容浏览
 [查看版本与修复历史](CHANGELOG.md#中文)。README 只保留当前产品能力、安装方法和稳定使用说明。
 
 你可以添加自己的兼容配置、WebDAV、AList/OpenList 或受支持的云盘账号。全新安装保持空白，直到用户主动添加内容入口；已保存的配置可以在后续启动时恢复。
+
+分类、详情和海报会使用可清理的性能缓存缩短往返等待；过期列表在刷新时保留当前内容，慢网盘详情先显示影片信息再后台补齐剧集。设置中的普通缓存清理保留网页登录、配置、历史、收藏和扩展，网页 Cookie 与网站数据只由独立的“清除网页会话”操作删除。
 
 ### 完整观看体验
 
@@ -185,7 +187,7 @@ NetVplayer 与 FongMi/TV 没有隶属或官方合作关系。NetVplayer 使用�
 
 ### A native media player for macOS
 
-NetVplayer 1.0.11 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+NetVplayer 1.0.12 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
 
 ### Project background
 
@@ -196,6 +198,8 @@ The goal is not to copy a phone or TV interface. NetVplayer reorganizes discover
 [Read the release and fix history](CHANGELOG.md#english). The README stays focused on current capabilities, installation, and stable usage guidance.
 
 You can add your own compatible configuration, WebDAV, AList/OpenList, or supported cloud-drive account. A fresh installation stays empty until the user adds an entry point. Saved configurations can be restored on later launches.
+
+Catalogs, details, and posters use clearable performance caches to make repeat navigation faster. Expired lists stay visible while refreshing, and slow cloud-drive details show movie metadata before episode expansion finishes in the background. Clearing performance caches preserves web sessions, configurations, history, favorites, and extensions; website cookies and data are removed only by the separate Clear Web Sessions action.
 
 ### The viewing experience
 
@@ -238,7 +242,7 @@ Start with the [Provider SDK development guide](provider-sdk/README.md), which r
 
 ### Download and build
 
-The current 1.0.11 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The current 1.0.12 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
 
 The app checks for application updates and marks the version in the sidebar and Settings when a new release is available. Open the version, review the update, and select Update to download and verify it in the background. Installation happens when the app normally quits. Version 1.0.8 and earlier need one manual installation of 1.0.9 or later to gain in-app updates. The current ad-hoc signature may still require macOS first-open or installation approval.
 

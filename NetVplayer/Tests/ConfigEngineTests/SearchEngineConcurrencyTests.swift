@@ -262,3 +262,33 @@ private struct ExpectedSearchFailure: Error {}
     #expect(elapsed >= .milliseconds(900))
     #expect(elapsed < .seconds(1.3))
 }
+
+@Test func searchEngineTimeoutDoesNotWaitForProviderThatIgnoresCancellation() async {
+    let engine = SearchEngine(maxConcurrentSites: 1) { _, _, _, _ in
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(1_500))
+        while ContinuousClock.now < deadline {
+            _ = 1 + 1
+        }
+        return Result(list: [Vod(vodId: "late", vodName: "Late")])
+    }
+    let site = Site(
+        key: "non-cooperative",
+        name: "Non Cooperative",
+        type: 1,
+        api: "https://slow.example.test/api",
+        timeout: 1,
+        searchable: 1
+    )
+
+    let startedAt = ContinuousClock.now
+    var received: SearchResult?
+    for await result in engine.search(keyword: "swift", sites: [site]) {
+        received = result
+    }
+    let elapsed = startedAt.duration(to: .now)
+
+    #expect(received?.vods.isEmpty == true)
+    #expect(received?.error != nil)
+    #expect(elapsed >= .milliseconds(900))
+    #expect(elapsed < .milliseconds(1_300))
+}

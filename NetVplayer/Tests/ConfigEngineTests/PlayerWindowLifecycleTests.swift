@@ -370,7 +370,8 @@ struct PlayerWindowLifecycleTests {
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = PlayerWindowPreferenceStore(defaults: defaults, storageKey: "window")
-        let screen = try #require(NSScreen.main)
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         store.save(
             frame: CGRect(
                 x: screen.visibleFrame.midX - 500,

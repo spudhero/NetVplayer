@@ -99,6 +99,13 @@ public final class SourceManager: @unchecked Sendable {
         if rawTrimmed.lowercased().hasPrefix("netvplayer-unavailable:") {
             return Self.unavailableSupport(for: rawTrimmed)
         }
+        if rawTrimmed.lowercased().hasPrefix("netvplayer-pending:") {
+            return SourceSupport(
+                kind: "pending",
+                status: .unsupported,
+                reason: "网盘目录正在后台展开，请稍候"
+            )
+        }
 
         let trimmed = Self.canonicalExternalDriveInput(rawTrimmed)
 

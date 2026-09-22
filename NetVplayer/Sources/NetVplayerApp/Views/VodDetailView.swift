@@ -183,7 +183,8 @@ struct VodDetailView: View {
                     WebImage(
                         urlString: detail.vodPic,
                         siteHeader: appState.activeSite?.header,
-                        fallbackText: detail.vodName
+                        fallbackText: detail.vodName,
+                        maxPixelSize: layout.posterWidth * 2
                     )
                         .aspectRatio(PosterMetrics.aspectRatio, contentMode: .fill)
                         .frame(width: layout.posterWidth, height: layout.posterHeight)

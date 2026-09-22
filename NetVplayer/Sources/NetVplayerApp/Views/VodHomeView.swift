@@ -242,6 +242,22 @@ struct VodHomeView: View {
             Spacer(minLength: 20)
 
             Button {
+                Task { await appState.refreshCurrentCatalog() }
+            } label: {
+                Group {
+                    if appState.isCatalogRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .disabled(appState.isCatalogRefreshing || appState.activeSite == nil)
+            .help("刷新当前列表")
+
+            Button {
                 appState.selectedTab = .search
             } label: {
                 HStack(spacing: 10) {
@@ -369,7 +385,6 @@ struct VodHomeView: View {
                             scrollTargetID = "recommend"
                             Task {
                                 await appState.loadHomeContent()
-                                appState.selectedCategory = nil
                             }
                         }
                     }
@@ -602,11 +617,7 @@ struct VodHomeView: View {
                 actionTitle: "重试"
             ) {
                 Task {
-                    if let category = appState.selectedCategory {
-                        await appState.selectCategory(category)
-                    } else {
-                        await appState.loadHomeContent()
-                    }
+                    await appState.refreshCurrentCatalog()
                 }
             }
         } else if appState.vods.isEmpty {
@@ -753,7 +764,8 @@ struct VodCard: View {
                 WebImage(
                     urlString: vod.vodPic,
                     siteHeader: appState.activeSite?.header,
-                    fallbackText: vod.vodName
+                    fallbackText: vod.vodName,
+                    maxPixelSize: posterWidth * 2
                 )
             }
             .overlay {
@@ -796,7 +808,10 @@ struct VodCard: View {
         .scaleEffect(isHovered ? 1.018 : 1)
         .animation(.easeOut(duration: 0.18), value: isHovered)
         .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
+        .onHover { hovering in
+            isHovered = hovering
+            appState.updateDetailPrefetch(vod: vod, site: appState.activeSite, hovering: hovering)
+        }
     }
 }
 

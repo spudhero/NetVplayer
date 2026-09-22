@@ -3,8 +3,11 @@
 
 import SwiftUI
 import Cocoa
+import CryptoKit
+import ImageIO
 import Models
 import Networking
+import Storage
 
 /// 自定义网络图片视图
 public struct WebImage: View {
@@ -15,6 +18,7 @@ public struct WebImage: View {
     let fallbackText: String?
     let fallbackSystemImage: String
     let fallbackIconFont: Font
+    let maxPixelSize: CGFloat
 
     @StateObject private var loader = ImageLoader()
 
@@ -25,7 +29,8 @@ public struct WebImage: View {
         timeout: TimeInterval = 15,
         fallbackText: String? = nil,
         fallbackSystemImage: String = "film",
-        fallbackIconFont: Font = .largeTitle
+        fallbackIconFont: Font = .largeTitle,
+        maxPixelSize: CGFloat = 1_200
     ) {
         self.urlString = urlString
         self.siteHeader = siteHeader
@@ -34,6 +39,7 @@ public struct WebImage: View {
         self.fallbackText = fallbackText
         self.fallbackSystemImage = fallbackSystemImage
         self.fallbackIconFont = fallbackIconFont
+        self.maxPixelSize = max(64, maxPixelSize)
     }
 
     public var body: some View {
@@ -53,13 +59,13 @@ public struct WebImage: View {
             }
         }
         .onAppear {
-            loader.load(from: urlString, headers: siteHeader, timeout: timeout)
+            loader.load(from: urlString, headers: siteHeader, timeout: timeout, maxPixelSize: maxPixelSize)
         }
         .onChange(of: urlString) { _, newValue in
-            loader.load(from: newValue, headers: siteHeader, timeout: timeout)
+            loader.load(from: newValue, headers: siteHeader, timeout: timeout, maxPixelSize: maxPixelSize)
         }
         .onChange(of: siteHeader ?? [:]) { _, newValue in
-            loader.load(from: urlString, headers: newValue, timeout: timeout)
+            loader.load(from: urlString, headers: newValue, timeout: timeout, maxPixelSize: maxPixelSize)
         }
     }
 
@@ -171,22 +177,290 @@ struct EmbeddedImageSource: Equatable {
     }
 }
 
+enum PosterImageError: Error {
+    case httpStatus(Int)
+    case invalidData(Int)
+    case placeholderImage(width: CGFloat, height: CGFloat, bytes: Int)
+}
+
+struct DecodedPosterImage: @unchecked Sendable {
+    let cgImage: CGImage
+    let byteCount: Int
+
+    var memoryCost: Int {
+        max(byteCount, cgImage.width * cgImage.height * 4)
+    }
+}
+
+private actor PosterDownloadLimiter {
+    private let limit: Int
+    private var active = 0
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+    }
+
+    func acquire() async throws {
+        while active >= limit {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        active += 1
+    }
+
+    func release() {
+        active = max(0, active - 1)
+    }
+}
+
+actor PosterImagePipeline {
+    static let shared = PosterImagePipeline()
+
+    private struct ImageInFlight: Sendable {
+        let generation: UInt64
+        let task: Task<DecodedPosterImage, Error>
+    }
+
+    private struct DataInFlight: Sendable {
+        let generation: UInt64
+        let task: Task<Data, Error>
+    }
+
+    private let session: URLSession
+    private let cacheDirectory: URL
+    private let fileManager: FileManager
+    private let maximumDiskBytes: Int64
+    private let ttl: TimeInterval
+    private let now: @Sendable () -> Date
+    private let limiter: PosterDownloadLimiter
+    private var inFlight: [String: ImageInFlight] = [:]
+    private var dataInFlight: [String: DataInFlight] = [:]
+    private var generation: UInt64 = 0
+
+    init(
+        session: URLSession? = nil,
+        cacheDirectory: URL? = nil,
+        fileManager: FileManager = .default,
+        maximumDiskBytes: Int64 = 256 * 1024 * 1024,
+        ttl: TimeInterval = 7 * 24 * 60 * 60,
+        maximumConcurrentDownloads: Int = 8,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            configuration.httpMaximumConnectionsPerHost = maximumConcurrentDownloads
+            self.session = URLSession(configuration: configuration)
+        }
+        self.cacheDirectory = cacheDirectory ?? CacheManager.shared.directory(for: .posters)
+        self.fileManager = fileManager
+        self.maximumDiskBytes = max(1, maximumDiskBytes)
+        self.ttl = max(0, ttl)
+        self.limiter = PosterDownloadLimiter(limit: maximumConcurrentDownloads)
+        self.now = now
+        try? fileManager.createDirectory(at: self.cacheDirectory, withIntermediateDirectories: true)
+    }
+
+    func image(
+        request: URLRequest,
+        key: String,
+        maxPixelSize: CGFloat
+    ) async throws -> DecodedPosterImage {
+        let sizedKey = "\(key)-\(Int(maxPixelSize.rounded()))"
+        if let existing = inFlight[sizedKey], existing.generation == generation {
+            return try await existing.task.value
+        }
+
+        let requestGeneration = generation
+        let dataTask: Task<Data, Error>
+        if let existing = dataInFlight[key], existing.generation == requestGeneration {
+            dataTask = existing.task
+        } else {
+            let created = Task { try await data(request: request, key: key, generation: requestGeneration) }
+            dataInFlight[key] = DataInFlight(generation: requestGeneration, task: created)
+            dataTask = created
+        }
+        let decodeTask = Task.detached(priority: .utility) {
+            let data = try await dataTask.value
+            return try Self.decode(data: data, maxPixelSize: maxPixelSize)
+        }
+        inFlight[sizedKey] = ImageInFlight(generation: requestGeneration, task: decodeTask)
+        do {
+            let image = try await decodeTask.value
+            guard requestGeneration == generation else { throw CancellationError() }
+            let data = try await dataTask.value
+            try persistIfNeeded(data, key: key, generation: requestGeneration)
+            if dataInFlight[key]?.generation == requestGeneration { dataInFlight[key] = nil }
+            if inFlight[sizedKey]?.generation == requestGeneration { inFlight[sizedKey] = nil }
+            return image
+        } catch {
+            if dataInFlight[key]?.generation == requestGeneration { dataInFlight[key] = nil }
+            if inFlight[sizedKey]?.generation == requestGeneration { inFlight[sizedKey] = nil }
+            if error is PosterImageError {
+                try? fileManager.removeItem(at: cacheFileURL(for: key))
+            }
+            throw error
+        }
+    }
+
+    func diskUsage() -> Int64 {
+        guard let enumerator = fileManager.enumerator(
+            at: cacheDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileAllocatedSizeKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(
+                forKeys: [.isRegularFileKey, .fileAllocatedSizeKey, .fileSizeKey]
+            ), values.isRegularFile == true else { continue }
+            total += Int64(values.fileAllocatedSize ?? values.fileSize ?? 0)
+        }
+        return total
+    }
+
+    func clearDiskCache() throws {
+        generation &+= 1
+        for request in inFlight.values { request.task.cancel() }
+        for request in dataInFlight.values { request.task.cancel() }
+        inFlight.removeAll()
+        dataInFlight.removeAll()
+        if fileManager.fileExists(atPath: cacheDirectory.path) {
+            try fileManager.removeItem(at: cacheDirectory)
+        }
+        try fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
+    }
+
+    private func data(request: URLRequest, key: String, generation requestGeneration: UInt64) async throws -> Data {
+        let fileURL = cacheFileURL(for: key)
+        if let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
+           let modifiedAt = values.contentModificationDate,
+           now().timeIntervalSince(modifiedAt) <= ttl,
+           let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]),
+           !data.isEmpty {
+            guard requestGeneration == generation else { throw CancellationError() }
+            try? fileManager.setAttributes([.modificationDate: now()], ofItemAtPath: fileURL.path)
+            return data
+        }
+        try? fileManager.removeItem(at: fileURL)
+
+        try await limiter.acquire()
+        let responseData: Data
+        let response: URLResponse
+        do {
+            var uncachedRequest = request
+            uncachedRequest.cachePolicy = .reloadIgnoringLocalCacheData
+            (responseData, response) = try await session.data(for: uncachedRequest)
+            await limiter.release()
+        } catch {
+            await limiter.release()
+            throw error
+        }
+        try Task.checkCancellation()
+        guard requestGeneration == generation else { throw CancellationError() }
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            throw PosterImageError.httpStatus(httpResponse.statusCode)
+        }
+        guard !responseData.isEmpty else { throw PosterImageError.invalidData(0) }
+        return responseData
+    }
+
+    private func persistIfNeeded(_ data: Data, key: String, generation requestGeneration: UInt64) throws {
+        guard requestGeneration == generation else { throw CancellationError() }
+        let fileURL = cacheFileURL(for: key)
+        guard !fileManager.fileExists(atPath: fileURL.path) else { return }
+        try data.write(to: fileURL, options: .atomic)
+        try trimIfNeeded()
+        NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
+    }
+
+    private func cacheFileURL(for key: String) -> URL {
+        cacheDirectory.appendingPathComponent(key).appendingPathExtension("img")
+    }
+
+    private func trimIfNeeded() throws {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileAllocatedSizeKey, .fileSizeKey, .contentModificationDateKey]
+        guard let urls = try? fileManager.contentsOfDirectory(
+            at: cacheDirectory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        var files: [(url: URL, bytes: Int64, date: Date)] = []
+        var total: Int64 = 0
+        for url in urls {
+            guard let values = try? url.resourceValues(forKeys: keys),
+                  values.isRegularFile == true else { continue }
+            let bytes = Int64(values.fileAllocatedSize ?? values.fileSize ?? 0)
+            total += bytes
+            files.append((url, bytes, values.contentModificationDate ?? .distantPast))
+        }
+        guard total > maximumDiskBytes else { return }
+        let target = Int64(Double(maximumDiskBytes) * 0.9)
+        for file in files.sorted(by: { $0.date < $1.date }) where total > target {
+            try? fileManager.removeItem(at: file.url)
+            total -= file.bytes
+        }
+    }
+
+    nonisolated private static func decode(data: Data, maxPixelSize: CGFloat) throws -> DecodedPosterImage {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+            throw PosterImageError.invalidData(data.count)
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(64, Int(maxPixelSize.rounded())),
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            throw PosterImageError.invalidData(data.count)
+        }
+        guard !ImageLoader.isPlaceholderImage(
+            width: CGFloat(image.width),
+            height: CGFloat(image.height),
+            dataCount: data.count
+        ) else {
+            throw PosterImageError.placeholderImage(
+                width: CGFloat(image.width),
+                height: CGFloat(image.height),
+                bytes: data.count
+            )
+        }
+        return DecodedPosterImage(cgImage: image, byteCount: data.count)
+    }
+}
+
 /// 线程安全的图片下载与缓存加载器
 @MainActor
 final class ImageLoader: ObservableObject {
     @Published var image: NSImage? = nil
     @Published var isLoading: Bool = false
 
-    private static let imageCache = NSCache<NSString, NSImage>()
+    typealias ImageLoadError = PosterImageError
+
+    private static let imageCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.totalCostLimit = 64 * 1024 * 1024
+        return cache
+    }()
     private static var failedAt: [String: Date] = [:]
-    private static var inFlight: [String: Task<Data, Error>] = [:]
     private static let failureTTL: TimeInterval = 60
     private static let woggFallbackPosterURL = "https://cos.ffnews.cn/feedback/20251217/6941c9f5c06e2.jpg"
 
     private var currentTask: Task<Void, Never>? = nil
     private var currentKey: String = ""
 
-    func load(from urlString: String, headers: [String: String]? = nil, timeout: TimeInterval = 15) {
+    func load(
+        from urlString: String,
+        headers: [String: String]? = nil,
+        timeout: TimeInterval = 15,
+        maxPixelSize: CGFloat = 1_200
+    ) {
         guard let source = EmbeddedImageSource.parse(urlString) else {
             currentTask?.cancel()
             currentKey = ""
@@ -197,20 +471,21 @@ final class ImageLoader: ObservableObject {
 
         let url = source.url
         let effectiveHeaders = Self.mergedHeaders(siteHeaders: headers, embeddedHeaders: source.headers)
-        let cacheKey = Self.cacheKey(url: url, headers: effectiveHeaders)
-        if currentKey == cacheKey, image != nil || isLoading {
+        let requestKey = Self.cacheKey(url: url, headers: effectiveHeaders)
+        let imageKey = "\(requestKey)-\(Int(maxPixelSize.rounded()))"
+        if currentKey == imageKey, image != nil || isLoading {
             return
         }
         currentTask?.cancel()
-        currentKey = cacheKey
+        currentKey = imageKey
 
-        if let cached = Self.imageCache.object(forKey: cacheKey as NSString) {
+        if let cached = Self.imageCache.object(forKey: imageKey as NSString) {
             self.image = cached
             self.isLoading = false
             return
         }
 
-        if Self.isRecentlyFailed(cacheKey) {
+        if Self.isRecentlyFailed(requestKey) {
             self.image = nil
             self.isLoading = false
             return
@@ -227,26 +502,27 @@ final class ImageLoader: ObservableObject {
         )
         currentTask = Task { [weak self] in
             do {
-                let imageData = try await Self.fetchImageData(request: request, key: cacheKey)
-                guard let nsImage = NSImage(data: imageData) else {
-                    throw ImageLoadError.invalidData(imageData.count)
-                }
-
-                Self.imageCache.setObject(nsImage, forKey: cacheKey as NSString)
-                await MainActor.run {
-                    guard let self, self.currentKey == cacheKey else { return }
-                    self.image = nsImage
-                    self.isLoading = false
-                }
+                let decoded = try await PosterImagePipeline.shared.image(
+                    request: request,
+                    key: requestKey,
+                    maxPixelSize: maxPixelSize
+                )
+                let nsImage = NSImage(
+                    cgImage: decoded.cgImage,
+                    size: NSSize(width: decoded.cgImage.width, height: decoded.cgImage.height)
+                )
+                Self.imageCache.setObject(nsImage, forKey: imageKey as NSString, cost: decoded.memoryCost)
+                guard let self, self.currentKey == imageKey else { return }
+                self.image = nsImage
+                self.isLoading = false
             } catch is CancellationError {
-                await MainActor.run {
-                    guard let self, self.currentKey == cacheKey else { return }
-                    self.isLoading = false
-                }
+                guard let self, self.currentKey == imageKey else { return }
+                self.isLoading = false
             } catch {
                 if let fallbackURL = Self.fallbackURL(for: url, headers: effectiveHeaders, error: error) {
-                    let fallbackKey = Self.cacheKey(url: fallbackURL, headers: effectiveHeaders)
-                    if !Self.isRecentlyFailed(fallbackKey) {
+                    let fallbackRequestKey = Self.cacheKey(url: fallbackURL, headers: effectiveHeaders)
+                    let fallbackImageKey = "\(fallbackRequestKey)-\(Int(maxPixelSize.rounded()))"
+                    if !Self.isRecentlyFailed(fallbackRequestKey) {
                         do {
                             let fallbackRequest = Self.makeRequest(
                                 url: fallbackURL,
@@ -254,69 +530,35 @@ final class ImageLoader: ObservableObject {
                                 embeddedHeaders: source.headers,
                                 timeout: timeout
                             )
-                            let fallbackData = try await Self.fetchImageData(request: fallbackRequest, key: fallbackKey)
-                            guard let fallbackImage = NSImage(data: fallbackData) else {
-                                throw ImageLoadError.invalidData(fallbackData.count)
-                            }
-                            Self.imageCache.setObject(fallbackImage, forKey: cacheKey as NSString)
-                            Self.imageCache.setObject(fallbackImage, forKey: fallbackKey as NSString)
+                            let decoded = try await PosterImagePipeline.shared.image(
+                                request: fallbackRequest,
+                                key: fallbackRequestKey,
+                                maxPixelSize: maxPixelSize
+                            )
+                            let fallbackImage = NSImage(
+                                cgImage: decoded.cgImage,
+                                size: NSSize(width: decoded.cgImage.width, height: decoded.cgImage.height)
+                            )
+                            Self.imageCache.setObject(fallbackImage, forKey: imageKey as NSString, cost: decoded.memoryCost)
+                            Self.imageCache.setObject(fallbackImage, forKey: fallbackImageKey as NSString, cost: decoded.memoryCost)
                             Self.logFallback(from: url, to: fallbackURL, reason: error)
-                            await MainActor.run {
-                                guard let self, self.currentKey == cacheKey else { return }
-                                self.image = fallbackImage
-                                self.isLoading = false
-                            }
+                            guard let self, self.currentKey == imageKey else { return }
+                            self.image = fallbackImage
+                            self.isLoading = false
                             return
                         } catch {
-                            Self.markFailed(fallbackKey)
+                            Self.markFailed(fallbackRequestKey)
                             Self.logFailure(error, url: fallbackURL, timeout: timeout)
                         }
                     }
                 }
-                Self.markFailed(cacheKey)
+                Self.markFailed(requestKey)
                 Self.logFailure(error, url: url, timeout: timeout)
-                await MainActor.run {
-                    guard let self, self.currentKey == cacheKey else { return }
-                    self.image = nil
-                    self.isLoading = false
-                }
+                guard let self, self.currentKey == imageKey else { return }
+                self.image = nil
+                self.isLoading = false
             }
         }
-    }
-
-    private static func fetchImageData(request: URLRequest, key: String) async throws -> Data {
-        if let existingTask = inFlight[key] {
-            return try await existingTask.value
-        }
-
-        let task = Task { try await fetchImageData(request: request) }
-        inFlight[key] = task
-        do {
-            let data = try await task.value
-            inFlight.removeValue(forKey: key)
-            return data
-        } catch {
-            inFlight.removeValue(forKey: key)
-            throw error
-        }
-    }
-
-    private static func fetchImageData(request: URLRequest) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        try Task.checkCancellation()
-
-        if let httpResponse = response as? HTTPURLResponse,
-           !(200..<300).contains(httpResponse.statusCode) {
-            throw ImageLoadError.httpStatus(httpResponse.statusCode)
-        }
-
-        guard let nsImage = NSImage(data: data) else {
-            throw ImageLoadError.invalidData(data.count)
-        }
-        guard !isPlaceholderImage(nsImage, dataCount: data.count) else {
-            throw ImageLoadError.placeholderImage(width: nsImage.size.width, height: nsImage.size.height, bytes: data.count)
-        }
-        return data
     }
 
     static func makeRequest(
@@ -375,19 +617,12 @@ final class ImageLoader: ObservableObject {
         return result
     }
 
-    private static func cacheKey(url: URL, headers: [String: String]?) -> String {
-        var hasher = Hasher()
+    nonisolated private static func cacheKey(url: URL, headers: [String: String]?) -> String {
+        var canonical = url.absoluteString
         for (key, value) in (headers ?? [:]).sorted(by: { $0.key.lowercased() < $1.key.lowercased() }) {
-            let normalizedKey = key.lowercased()
-            guard !sensitiveHeaderNames.contains(normalizedKey) else { continue }
-            hasher.combine(normalizedKey)
-            hasher.combine(value)
+            canonical += "\n\(key.lowercased()):\(value)"
         }
-        return "\(url.absoluteString)|\(hasher.finalize())"
-    }
-
-    private static var sensitiveHeaderNames: Set<String> {
-        ["authorization", "cookie", "set-cookie", "x-token", "x-auth-token"]
+        return SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func isRecentlyFailed(_ key: String) -> Bool {
@@ -487,9 +722,13 @@ final class ImageLoader: ObservableObject {
         return "error"
     }
 
-    static func isPlaceholderImage(_ image: NSImage, dataCount: Int) -> Bool {
-        let width = max(0, image.size.width)
-        let height = max(0, image.size.height)
+    nonisolated static func isPlaceholderImage(_ image: NSImage, dataCount: Int) -> Bool {
+        isPlaceholderImage(width: image.size.width, height: image.size.height, dataCount: dataCount)
+    }
+
+    nonisolated static func isPlaceholderImage(width: CGFloat, height: CGFloat, dataCount: Int) -> Bool {
+        let width = max(0, width)
+        let height = max(0, height)
         guard width > 0, height > 0 else { return true }
         if dataCount <= 256, width <= 16, height <= 16 {
             return true
@@ -498,6 +737,11 @@ final class ImageLoader: ObservableObject {
             return true
         }
         return false
+    }
+
+    static func clearMemoryCache() {
+        imageCache.removeAllObjects()
+        failedAt.removeAll()
     }
 
     private static func isTimeout(_ error: Error) -> Bool {
@@ -514,9 +758,4 @@ final class ImageLoader: ObservableObject {
         return components?.url?.absoluteString ?? "\(url.scheme ?? "")://\(url.host ?? "")\(url.path)"
     }
 
-    enum ImageLoadError: Error {
-        case httpStatus(Int)
-        case invalidData(Int)
-        case placeholderImage(width: CGFloat, height: CGFloat, bytes: Int)
-    }
 }

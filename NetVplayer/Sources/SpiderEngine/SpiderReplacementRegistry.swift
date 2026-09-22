@@ -129,6 +129,18 @@ public actor SpiderReplacementRegistry {
         replacement(for: site) != nil || nativeProvider(for: site) != nil
     }
 
+    public func clearContentCaches() async {
+        let providers = Array(publicUtilityProviders.values)
+            + Array(nativeProviders.values)
+            + Array(nativeKeyedProviders.values)
+            + Array(remoteProviders.values)
+        for provider in providers {
+            if let cache = provider as? any SiteContentCacheClearing {
+                await cache.clearContentCache()
+            }
+        }
+    }
+
     func registerRemoteProxyRoute(site: Site, providerID: String, manager: ProviderManager) {
         guard remoteProxyProviderIDs.contains(providerID),
               lookupKeys(for: site).contains(where: { remoteBindingOwners[$0] == providerID }) else {

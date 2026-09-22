@@ -111,6 +111,7 @@ public enum ContentCatalogCore {
     public static func beginHome(_ current: ContentCatalogState) -> ContentCatalogState {
         var state = resetFilters(current, clearDefinitions: true)
         state.generation &+= 1
+        state.selectedCategory = nil
         state.currentPage = 1
         state.pageCount = 1
         state.isLoading = true
@@ -132,6 +133,15 @@ public enum ContentCatalogCore {
         state.pageCount = max(payload.pageCount, 1)
         state.isLoading = false
         return state
+    }
+
+    public static func restoreHome(
+        _ current: ContentCatalogState,
+        payload: ContentCatalogPayload
+    ) -> ContentCatalogState {
+        var loading = beginHome(current)
+        loading.selectedCategory = nil
+        return receiveHome(loading, generation: loading.generation, payload: payload)
     }
 
     public static func failHome(
@@ -224,6 +234,28 @@ public enum ContentCatalogCore {
             state.pageCount = max(payload.pageCount, state.pageCount)
             state.isLoadingMore = false
         }
+        return state
+    }
+
+    public static func restoreCategory(
+        _ current: ContentCatalogState,
+        category: VodClass,
+        payloads: [ContentCatalogPayload]
+    ) -> ContentCatalogState {
+        let transition = beginCategory(current, category: category)
+        guard let firstRequest = transition.request else { return transition.state }
+        var state = transition.state
+        for (offset, payload) in payloads.enumerated() {
+            let request = ContentCatalogRequest(
+                generation: firstRequest.generation,
+                categoryID: firstRequest.categoryID,
+                page: offset + 1,
+                selection: firstRequest.selection
+            )
+            state = receiveCategory(state, request: request, payload: payload)
+        }
+        state.isLoading = false
+        state.isLoadingMore = false
         return state
     }
 

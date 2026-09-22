@@ -14,6 +14,10 @@ public protocol SiteContentProvider: Sendable {
     func action(site: Site, action: String, value: String) async throws
 }
 
+public protocol SiteContentCacheClearing: Sendable {
+    func clearContentCache() async
+}
+
 public extension SiteContentProvider {
     func homeVideoContent(site: Site) async throws -> Result? {
         nil

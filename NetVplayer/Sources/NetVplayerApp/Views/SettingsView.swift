@@ -157,7 +157,13 @@ struct SettingsView: View {
 
     // 缓存大小本地展示
     @State private var displayCacheSize: String = "正在计算..."
+    @State private var cacheSnapshot: CacheSnapshot?
+    @State private var cacheOperationStatus: String?
+    @State private var cacheOperationFailed = false
+    @State private var isClearingCache = false
+    @State private var cacheRefreshTask: Task<Void, Never>?
     @State private var isShowingCacheConfirmation: Bool = false
+    @State private var isShowingWebSessionConfirmation: Bool = false
 
     // 网络代理本地状态
     @State private var proxyMode: Int = 0
@@ -213,22 +219,35 @@ struct SettingsView: View {
             guard previousRequest != nil, request == nil else { return }
             loadCloudCredentialState()
         }
+        .onChange(of: selectedSection) { _, section in
+            if section == .system { refreshCacheSize() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .netVplayerCacheDidChange)) { _ in
+            if selectedSection == .system { refreshCacheSize(debounced: true) }
+        }
         .confirmationDialog(
             "清理所有缓存？",
             isPresented: $isShowingCacheConfirmation,
             titleVisibility: .visible
         ) {
             Button("确认清理", role: .destructive) {
-                do {
-                    try CacheManager.shared.clearCache()
-                    refreshCacheSize()
-                } catch {
-                    print("[SettingsView] 清理缓存出错: \(error)")
-                }
+                clearPerformanceCaches()
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将清空爬虫脚本缓存、网页数据与 Cookie。配置、历史和收藏不会被删除。")
+            Text("将清空海报、网络、分类与详情缓存。登录状态、Provider、配置、历史、收藏和反馈文件会保留。")
+        }
+        .confirmationDialog(
+            "清除网页会话？",
+            isPresented: $isShowingWebSessionConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("清除网页会话", role: .destructive) {
+                clearWebSessions()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将删除内置网页的 Cookie、LocalStorage 和网站数据，相关网页可能需要重新登录。原生网盘账号仍需在账号管理中单独移除。")
         }
         .confirmationDialog(
             "删除已保存配置？",
@@ -2084,21 +2103,49 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
             GroupBox(label: SettingsPanelLabel(
                 title: "缓存管理",
-                subtitle: "清理视频源脚本、网页缓存与登录信息。",
+                subtitle: "查看并清理可重新生成的数据。",
                 systemImage: "trash"
             )) {
-                SettingsControlRow(title: "临时嗅探与 JS 缓存", caption: "应用启动后异步计算") {
-                    HStack(spacing: 12) {
+                VStack(spacing: 0) {
+                    SettingsControlRow(
+                        title: "磁盘缓存",
+                        caption: cacheDiskBreakdownText
+                    ) {
                         Text(displayCacheSize)
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .foregroundStyle(palette.lavender)
+                    }
 
-                        Button(role: .destructive) {
-                            isShowingCacheConfirmation = true
-                        } label: {
-                            Label("清理所有缓存", systemImage: "trash")
+                    Divider()
+
+                    SettingsControlRow(
+                        title: "列表缓存",
+                        caption: cacheMemoryBreakdownText
+                    ) {
+                        HStack(spacing: 10) {
+                            Button(role: .destructive) {
+                                isShowingCacheConfirmation = true
+                            } label: {
+                                Label("清理缓存", systemImage: "trash")
+                            }
+                            .disabled(isClearingCache)
+
+                            Button(role: .destructive) {
+                                isShowingWebSessionConfirmation = true
+                            } label: {
+                                Label("清除网页会话", systemImage: "person.crop.circle.badge.xmark")
+                            }
+                            .disabled(isClearingCache)
                         }
                         .buttonStyle(.bordered)
+                    }
+
+                    if let cacheOperationStatus {
+                        Divider()
+                        SettingsControlRow(title: "最近操作", caption: cacheOperationStatus) {
+                            Image(systemName: cacheOperationFailed ? "exclamationmark.triangle" : "checkmark.circle")
+                                .foregroundStyle(cacheOperationFailed ? palette.color(for: .warning) : palette.color(for: .success))
+                        }
                     }
                 }
             }
@@ -2274,14 +2321,66 @@ struct SettingsView: View {
         }
     }
 
-    private func refreshCacheSize() {
-        let size = CacheManager.shared.cacheSize()
-        if size == 0 {
-            displayCacheSize = "0 KB"
-        } else if size < 1024 * 1024 {
-            displayCacheSize = String(format: "%.1f KB", Double(size) / 1024.0)
-        } else {
-            displayCacheSize = String(format: "%.1f MB", Double(size) / (1024.0 * 1024.0))
+    private var cacheDiskBreakdownText: String {
+        guard let cacheSnapshot else { return "正在统计海报与网络缓存" }
+        return "海报 \(formattedCacheBytes(cacheSnapshot.posterBytes)) · 网络 \(formattedCacheBytes(cacheSnapshot.networkBytes))"
+    }
+
+    private var cacheMemoryBreakdownText: String {
+        guard let cacheSnapshot else { return "正在统计分类与详情条目" }
+        return "分类 \(cacheSnapshot.catalogPages) 页 / \(cacheSnapshot.catalogVods) 部 · 详情 \(cacheSnapshot.detailEntries) 项"
+    }
+
+    private func formattedCacheBytes(_ size: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter.string(fromByteCount: max(0, size))
+    }
+
+    private func refreshCacheSize(debounced: Bool = false) {
+        cacheRefreshTask?.cancel()
+        cacheRefreshTask = Task { @MainActor in
+            if debounced {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+            }
+            let snapshot = await CacheCoordinator.shared.snapshot()
+            guard !Task.isCancelled else { return }
+            cacheSnapshot = snapshot
+            displayCacheSize = formattedCacheBytes(snapshot.totalDiskBytes)
+            cacheRefreshTask = nil
+        }
+    }
+
+    private func clearPerformanceCaches() {
+        isClearingCache = true
+        cacheOperationStatus = nil
+        Task { @MainActor in
+            let report = await CacheCoordinator.shared.clearPerformanceCaches()
+            appState.didClearPerformanceCaches()
+            isClearingCache = false
+            cacheOperationFailed = !report.succeeded
+            cacheOperationStatus = report.succeeded
+                ? "性能缓存已清理，登录状态和用户数据已保留。"
+                : report.failures.joined(separator: "；")
+            refreshCacheSize()
+        }
+    }
+
+    private func clearWebSessions() {
+        isClearingCache = true
+        cacheOperationStatus = nil
+        Task { @MainActor in
+            let report = await CacheCoordinator.shared.clearWebSessions()
+            isClearingCache = false
+            cacheOperationFailed = !report.succeeded
+            cacheOperationStatus = report.succeeded
+                ? "网页会话已清除；原生网盘账号保持不变。"
+                : report.failures.joined(separator: "；")
+            refreshCacheSize()
         }
     }
 

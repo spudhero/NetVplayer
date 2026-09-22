@@ -55,16 +55,16 @@ flowchart TB
 | 层 | 模块 | 职责 |
 | --- | --- | --- |
 | 模型与决策 | `Models`, `ApplicationCore` | 定义配置、目录、搜索、直播、播放、历史和错误模型；执行不依赖平台副作用的状态转换 |
-| 基础设施 | `Networking`, `Storage` | 受控 HTTP、URL 归一化、本地持久化、缓存、偏好和可移植备份 |
+| 基础设施 | `Networking`, `Storage` | 受控 HTTP、URL 归一化、本地持久化、命名空间磁盘缓存、偏好和可移植备份 |
 | 内容入口 | `ConfigEngine`, `SpiderEngine`, `DriveEngine` | 解释用户配置、选择内容适配器、处理受支持的文件与云盘入口 |
-| 聚合与解析 | `SearchEngine`, `LiveEngine`, `ParseEngine` | 渐进搜索、直播列表/节目单解析、播放候选解析和错误归因 |
+| 聚合与解析 | `SearchEngine`, `LiveEngine`, `ParseEngine` | 有界并发与硬截止的渐进搜索、直播列表/节目单解析、播放候选解析和错误归因 |
 | 扩展合同 | `ProviderSDK` | 定义 protocol v1、manifest、source binding、catalog、distribution 和诊断格式 |
 | 扩展执行 | `ProviderRuntime`, `QuickJSRuntime` | 验证签名包、管理安装/回滚、启动沙盒 Runner、提供受控 QuickJS host capability |
 | 本地数据面 | `ProxyServer` | 提供受限本地代理、流式 Range、解析页、注册文件、缓存和健康路由 |
 | 播放 | `PlayerEngine`, `MPVShim` | 将 `PlaySpec` 交给 libmpv，管理视频表面、播放状态、错误和会话生命周期 |
 | 诊断 | `Diagnostics` | 将允许的错误码、固定数字维度、版本和有限恢复步骤投影到 Sentry；可恢复故障保留为 breadcrumb，恢复耗尽后才创建 Issue；拒绝凭据、内容名、媒体地址、原始错误正文和完整日志 |
 | 辅助体验 | `DanmakuEngine`, `WebHomeEngine` | 提供默认关闭的弹幕与受限 WebHome 能力 |
-| 应用组合 | `NetVplayerApp` | SwiftUI 界面、AppState、窗口、设置、命令执行、统一用户错误映射和所有用户可见入口 |
+| 应用组合 | `NetVplayerApp` | SwiftUI 界面、AppState、目录/详情/海报缓存协调、窗口、设置、命令执行、统一用户错误映射和所有用户可见入口 |
 
 Swift Package 的产品和 target 关系以 [`NetVplayer/Package.swift`](NetVplayer/Package.swift) 为准。
 
@@ -81,6 +81,8 @@ Swift Package 的产品和 target 关系以 [`NetVplayer/Package.swift`](NetVpla
 启动时先从 `active-version` 恢复并验签本机 Provider，再对照首次安装完成记录和当时的已安装组件清单。没有有效完成记录时，用户保存或新填写的点播源须等待签名目录同步与首次安装成功；失败进入重试状态。已有有效组件时，配置解析与首页加载只等待本地注册，在线检查和升级在后台进行。已识别但未完成的升级版本单独持久化，不覆盖仍可用的 active version；本地组件丢失或验签失败才触发修复门控。
 
 首页在构造 `AppState` 时同步读取保存的点播配置是否存在：没有配置才显示添加入口，已有配置从首帧显示准备或加载状态。扩展支持页分别呈现构建未配置、首次安装未完成、本地包失效、更新检查失败和待升级，不以在线检查结果推断本地播放能力。
+
+目录缓存以配置 revision、站点、首页/分类、规范化筛选和页码为键，在会话内保存最多 64 页：5 分钟内直接命中，5 至 30 分钟保留当前列表并后台刷新，过期冷请求也不会先清空旧内容。详情缓存保留 10 分钟、最多 32 项，并与 250ms 悬停预取合并请求；玩偶详情先返回元数据和不可点击的 pending 线路，后台并发展开网盘目录后由 generation 校验更新同一页面。海报原始数据写入 `Caches/NetVplayer/Posters-v2`，按 256 MiB / 7 天裁剪，解码图使用 64 MiB 内存缓存。性能缓存清理只删除这些可重建数据与 WebKit 缓存；Cookie、LocalStorage、配置、历史、收藏、反馈和 Provider 保留，网页会话由独立操作删除。
 
 ### Provider 信任边界
 
@@ -191,15 +193,15 @@ The diagram in the Chinese section defines the same boundary in full. The main l
 | Layer | Modules | Responsibility |
 | --- | --- | --- |
 | Models and decisions | `Models`, `ApplicationCore` | Stable data contracts and state transitions without platform side effects |
-| Infrastructure | `Networking`, `Storage` | Controlled HTTP, URL normalization, local persistence, cache, preferences, and portable backup |
+| Infrastructure | `Networking`, `Storage` | Controlled HTTP, URL normalization, local persistence, namespaced disk caches, preferences, and portable backup |
 | Content entry | `ConfigEngine`, `SpiderEngine`, `DriveEngine` | Interpret user configuration and select supported content/file/cloud adapters |
-| Aggregation and parsing | `SearchEngine`, `LiveEngine`, `ParseEngine` | Progressive search, live/EPG parsing, playback resolution, and error attribution |
+| Aggregation and parsing | `SearchEngine`, `LiveEngine`, `ParseEngine` | Progressive search with bounded real operations and hard deadlines, live/EPG parsing, playback resolution, and error attribution |
 | Extension contract | `ProviderSDK` | Protocol v1, manifest, source binding, catalog, distribution, and diagnostics |
 | Extension execution | `ProviderRuntime`, `QuickJSRuntime` | Verify, install, activate, roll back, and run sandboxed Providers |
 | Local data plane | `ProxyServer` | Restricted loopback proxy, Range streaming, parser page, registered files, cache, and health routes |
 | Playback | `PlayerEngine`, `MPVShim` | `PlaySpec`, libmpv integration, video surface, playback state, errors, and session lifecycle |
 | Diagnostics | `Diagnostics` | Privacy-filtered crash and performance reporting with fixed error codes and numeric dimensions; recoverable failures remain breadcrumbs and only exhausted recovery creates issues |
-| Application composition | `NetVplayerApp` | SwiftUI, AppState, windows, settings, command execution, user-facing error translation, and visible entry points |
+| Application composition | `NetVplayerApp` | SwiftUI, AppState, catalog/detail/poster cache coordination, windows, settings, command execution, user-facing error translation, and visible entry points |
 
 The package products and target dependencies are defined by [`NetVplayer/Package.swift`](NetVplayer/Package.swift).
 
@@ -212,6 +214,8 @@ The public application never inserts a default site, live list, or hidden conten
 At startup, active local Provider versions are restored and verified before comparing them with the recorded initial-install completion and installed-package snapshot. Without a valid completion record, a saved or newly entered VOD source waits for the first signed-catalog installation; failure offers retry. With valid local packages, configuration and home loading wait only for local registration while online update checks continue independently. Pending upgrade versions are persisted separately from the active version; a missing or invalid local package triggers repair.
 
 `AppState` reads whether a VOD configuration was saved before the first home-screen render. Only a truly unconfigured install shows the add-source prompt; a saved source shows preparation or loading immediately. Extension Settings distinguishes an unconfigured build, incomplete first install, invalid local package, failed update check, and pending upgrade without treating online status as a playback-health test.
+
+Catalog cache keys include the configuration revision, site, home/category identity, normalized filters, and page. A session keeps at most 64 pages: entries are fresh for five minutes, remain visible with background refresh for thirty minutes, and preserve existing content during an expired reload. The ten-minute, 32-entry detail cache coalesces clicks with 250ms hover prefetch. WoGG returns metadata and disabled pending routes before concurrent cloud-drive expansion completes, then generation checks update the same detail view. Poster bytes live under `Caches/NetVplayer/Posters-v2` with a 256 MiB seven-day disk policy and a 64 MiB decoded-image memory cache. Performance cleanup removes only reproducible caches and WebKit cache data; cookies, LocalStorage, configurations, history, favorites, reports, and Providers remain until their dedicated controls remove them.
 
 ### Provider trust boundary
 

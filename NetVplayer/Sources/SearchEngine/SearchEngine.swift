@@ -18,6 +18,49 @@ struct SearchQueryPlan: Equatable, Sendable {
     }
 }
 
+private actor SearchOperationLimiter {
+    private let limit: Int
+    private var active = 0
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+    }
+
+    func acquire(before deadline: ContinuousClock.Instant) async throws -> Bool {
+        while active >= limit {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { return false }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard ContinuousClock.now < deadline else { return false }
+        active += 1
+        return true
+    }
+
+    func release() {
+        active = max(0, active - 1)
+    }
+}
+
+private actor SearchResultRace {
+    private var outcome: Swift.Result<Models.Result, Error>?
+    private var continuation: CheckedContinuation<Models.Result, Error>?
+
+    func wait() async throws -> Models.Result {
+        if let outcome { return try outcome.get() }
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func resolve(_ result: Swift.Result<Models.Result, Error>) {
+        guard outcome == nil else { return }
+        outcome = result
+        continuation?.resume(with: result)
+        continuation = nil
+    }
+}
+
 enum SearchTitleNormalizer {
     static func comparisonKey(_ value: String) -> String {
         transform(folded(value), replacingSeparatorsWithSpaces: false)
@@ -193,6 +236,11 @@ public enum SearchSitePlanner {
                     let lhsScore = healthSummaries[lhs.site.key]?.score ?? 0.5
                     let rhsScore = healthSummaries[rhs.site.key]?.score ?? 0.5
                     if lhsScore != rhsScore { return lhsScore > rhsScore }
+                    let lhsRecordedDuration = healthSummaries[lhs.site.key]?.averageDurationMs ?? 0
+                    let rhsRecordedDuration = healthSummaries[rhs.site.key]?.averageDurationMs ?? 0
+                    let lhsDuration = lhsRecordedDuration > 0 ? lhsRecordedDuration : Int.max
+                    let rhsDuration = rhsRecordedDuration > 0 ? rhsRecordedDuration : Int.max
+                    if lhsDuration != rhsDuration { return lhsDuration < rhsDuration }
                 }
                 return lhs.index < rhs.index
             }
@@ -219,9 +267,11 @@ public final class SearchEngine: @unchecked Sendable {
 
     public let maxConcurrentSites: Int
     private let searchContent: @Sendable (Site, String, Bool, String) async throws -> Result
+    private let operationLimiter: SearchOperationLimiter
 
     public init(siteApi: SiteApi = .shared, maxConcurrentSites: Int = 6) {
         self.maxConcurrentSites = max(1, maxConcurrentSites)
+        self.operationLimiter = SearchOperationLimiter(limit: self.maxConcurrentSites)
         self.searchContent = { site, keyword, quick, page in
             try await siteApi.searchContent(site: site, keyword: keyword, quick: quick, page: page)
         }
@@ -232,6 +282,7 @@ public final class SearchEngine: @unchecked Sendable {
         searchContent: @escaping @Sendable (Site, String, Bool, String) async throws -> Result
     ) {
         self.maxConcurrentSites = max(1, maxConcurrentSites)
+        self.operationLimiter = SearchOperationLimiter(limit: self.maxConcurrentSites)
         self.searchContent = searchContent
     }
 
@@ -245,12 +296,13 @@ public final class SearchEngine: @unchecked Sendable {
                     var nextSiteIndex = 0
                     let initialCount = min(maxConcurrentSites, searchableSites.count)
                     for site in searchableSites.prefix(initialCount) {
-                        group.addTask { [searchContent] in
+                        group.addTask { [searchContent, operationLimiter] in
                             await Self.searchSite(
                                 site,
                                 keyword: keyword,
                                 page: page,
                                 quick: quick,
+                                operationLimiter: operationLimiter,
                                 searchContent: searchContent
                             )
                         }
@@ -266,12 +318,13 @@ public final class SearchEngine: @unchecked Sendable {
                         if nextSiteIndex < searchableSites.count, !Task.isCancelled {
                             let site = searchableSites[nextSiteIndex]
                             nextSiteIndex += 1
-                            group.addTask { [searchContent] in
+                            group.addTask { [searchContent, operationLimiter] in
                                 await Self.searchSite(
                                     site,
                                     keyword: keyword,
                                     page: page,
                                     quick: quick,
+                                    operationLimiter: operationLimiter,
                                     searchContent: searchContent
                                 )
                             }
@@ -292,6 +345,7 @@ public final class SearchEngine: @unchecked Sendable {
         keyword: String,
         page: String,
         quick: Bool,
+        operationLimiter: SearchOperationLimiter,
         searchContent: @escaping @Sendable (Site, String, Bool, String) async throws -> Result
     ) async -> SearchResult {
         let startedAt = ContinuousClock.now
@@ -314,6 +368,7 @@ public final class SearchEngine: @unchecked Sendable {
                 page: page,
                 quick: quick,
                 timeout: timeout,
+                operationLimiter: operationLimiter,
                 searchContent: searchContent
             )
             var result = original
@@ -329,6 +384,7 @@ public final class SearchEngine: @unchecked Sendable {
                             page: page,
                             quick: quick,
                             timeout: remaining,
+                            operationLimiter: operationLimiter,
                             searchContent: searchContent
                         )
                         result = merged(original: original, fallback: fallbackResult, siteKey: site.key)
@@ -375,19 +431,42 @@ public final class SearchEngine: @unchecked Sendable {
         page: String,
         quick: Bool,
         timeout: TimeInterval,
+        operationLimiter: SearchOperationLimiter,
         searchContent: @escaping @Sendable (Site, String, Bool, String) async throws -> Result
     ) async throws -> Result {
-        try await withThrowingTaskGroup(of: Result.self) { inner in
-            inner.addTask {
-                try await Task.sleep(for: .seconds(max(0.001, timeout)))
-                throw SearchEngineError.timeout(site.name)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(max(0.001, timeout)))
+        guard try await operationLimiter.acquire(before: deadline) else {
+            throw SearchEngineError.timeout(site.name)
+        }
+
+        let race = SearchResultRace()
+        let operationTask = Task {
+            do {
+                let result = try await searchContent(site, keyword, quick, page)
+                await operationLimiter.release()
+                await race.resolve(.success(result))
+            } catch {
+                await operationLimiter.release()
+                await race.resolve(.failure(error))
             }
-            inner.addTask {
-                try await searchContent(site, keyword, quick, page)
+        }
+        let timeoutTask = Task {
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            if remaining > .zero {
+                try? await Task.sleep(for: remaining)
             }
-            guard let first = try await inner.next() else { throw CancellationError() }
-            inner.cancelAll()
-            return first
+            guard !Task.isCancelled else { return }
+            operationTask.cancel()
+            await race.resolve(.failure(SearchEngineError.timeout(site.name)))
+        }
+
+        return try await withTaskCancellationHandler {
+            defer { timeoutTask.cancel() }
+            return try await race.wait()
+        } onCancel: {
+            operationTask.cancel()
+            timeoutTask.cancel()
+            Task { await race.resolve(.failure(CancellationError())) }
         }
     }
 

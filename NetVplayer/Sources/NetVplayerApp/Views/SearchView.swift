@@ -842,12 +842,13 @@ struct SearchView: View {
         exact: Bool
     ) -> some View {
         ForEach(items) { item in
+            let site = appState.sites.first(where: { $0.key == item.result.siteKey })
             Button {
                 open(item)
             } label: {
                 SearchResultRow(
                     vod: item.vod,
-                    siteHeader: appState.sites.first(where: { $0.key == item.result.siteKey })?.header,
+                    siteHeader: site?.header,
                     badge: item.badge,
                     isDrive: item.isDrive,
                     isExactMatch: exact,
@@ -856,6 +857,9 @@ struct SearchView: View {
                 )
             }
             .buttonStyle(.plain)
+            .onHover { hovering in
+                appState.updateDetailPrefetch(vod: item.vod, site: site, hovering: hovering)
+            }
             .help(openingResultID == item.id ? "正在打开 \(item.vod.vodName)" : "打开 \(item.vod.vodName)")
         }
     }
@@ -893,7 +897,7 @@ struct SearchView: View {
     }
 
     private var canSubmitSearch: Bool {
-        !trimmedSearchText.isEmpty && !appState.isSearching
+        !trimmedSearchText.isEmpty
     }
 
     private var resultStatusText: String {
@@ -916,7 +920,7 @@ struct SearchView: View {
 
     private func triggerSearch(_ rawQuery: String) {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, !appState.isSearching else { return }
+        guard !query.isEmpty else { return }
 
         localSearchText = query
         isSearchFocused = false
@@ -1190,7 +1194,8 @@ private struct SearchResultRow: View {
                     siteHeader: siteHeader,
                     showsLoadingIndicator: false,
                     fallbackText: vod.vodName,
-                    fallbackIconFont: .title3
+                    fallbackIconFont: .title3,
+                    maxPixelSize: layout.posterWidth * 2
                 )
             }
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))

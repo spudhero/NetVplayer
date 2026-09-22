@@ -12,6 +12,7 @@ public final class SiteHealthStore: @unchecked Sendable {
     private let retention: TimeInterval = 90 * 24 * 60 * 60
     private var events: [SiteHealthEvent]
     private let lock = NSLock()
+    private let persistenceQueue = DispatchQueue(label: "com.netvplayer.site-health-persistence", qos: .utility)
 
     public init(storage: StorageManager = .shared) {
         self.storage = storage
@@ -25,7 +26,9 @@ public final class SiteHealthStore: @unchecked Sendable {
         pruneLocked(now: Date())
         let snapshot = events
         lock.unlock()
-        try? storage.save(snapshot, to: filename)
+        persistenceQueue.async { [storage, filename] in
+            try? storage.save(snapshot, to: filename)
+        }
     }
 
     public func allEvents() -> [SiteHealthEvent] {
@@ -45,7 +48,13 @@ public final class SiteHealthStore: @unchecked Sendable {
         lock.lock()
         events = []
         lock.unlock()
-        try? storage.save([SiteHealthEvent](), to: filename)
+        persistenceQueue.async { [storage, filename] in
+            try? storage.save([SiteHealthEvent](), to: filename)
+        }
+    }
+
+    public func flushPendingWrites() {
+        persistenceQueue.sync {}
     }
 
     public static func summaries(from events: [SiteHealthEvent], now: Date = Date()) -> [String: SiteHealthSummary] {

@@ -7,6 +7,7 @@ import Diagnostics
 import ConfigEngine
 import PlayerEngine
 import NodeBundleRuntime
+import Storage
 
 #if os(macOS)
 import AppKit
@@ -92,6 +93,7 @@ final class NetVplayerAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        SiteHealthStore.shared.flushPendingWrites()
         SentryDiagnostics.shared.stop()
         Task { await NodeBundleRuntimeRegistry.shared.shutdown() }
     }
@@ -162,8 +164,6 @@ struct NetVplayerApp: App {
             }
         }
         #endif
-        // 清理旧缓存以防之前防盗链返回的“DOUYU”灰色图片被强缓存影响显示
-        URLCache.shared.removeAllCachedResponses()
     }
 
     var body: some Scene {
