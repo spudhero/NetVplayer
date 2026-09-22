@@ -62,7 +62,7 @@ flowchart TB
 | 扩展执行 | `ProviderRuntime`, `QuickJSRuntime` | 验证签名包、管理安装/回滚、启动沙盒 Runner、提供受控 QuickJS host capability |
 | 本地数据面 | `ProxyServer` | 提供受限本地代理、流式 Range、解析页、注册文件、缓存和健康路由 |
 | 播放 | `PlayerEngine`, `MPVShim` | 将 `PlaySpec` 交给 libmpv，管理视频表面、播放状态、错误和会话生命周期 |
-| 诊断 | `Diagnostics` | 将允许的错误码、阶段、版本和有限操作步骤投影到 Sentry；拒绝凭据、内容名、媒体地址和完整日志 |
+| 诊断 | `Diagnostics` | 将允许的错误码、固定数字维度、版本和有限恢复步骤投影到 Sentry；可恢复故障保留为 breadcrumb，恢复耗尽后才创建 Issue；拒绝凭据、内容名、媒体地址、原始错误正文和完整日志 |
 | 辅助体验 | `DanmakuEngine`, `WebHomeEngine` | 提供默认关闭的弹幕与受限 WebHome 能力 |
 | 应用组合 | `NetVplayerApp` | SwiftUI 界面、AppState、窗口、设置、命令执行、统一用户错误映射和所有用户可见入口 |
 
@@ -173,7 +173,7 @@ Provider 的 player result 也可以返回受限的 `PlaybackInteraction`。当�
 - Provider 接收用户选择的站点上下文和不透明 `credential_ref`，不直接读取其它 Provider 状态或应用 Keychain 明文。
 - 播放历史保存稳定内容身份，不持久化短效媒体 URL、Cookie 或 Authorization。
 - 诊断输出会脱敏 URL 和敏感请求头；公开 issue 只应包含最小复现信息。
-- 普通错误提示不直接透传底层 `localizedDescription`。`UserFacingErrorPresenter` 负责配置、来源、播放、直播、授权、存储、扩展、更新、反馈和页面场景，内部错误继续供本地日志与隐私过滤后的远端诊断使用。
+- 普通错误提示不直接透传底层 `localizedDescription`。`UserFacingErrorPresenter` 负责配置、来源、播放、直播、授权、存储、扩展、更新、反馈和页面场景，内部错误继续供本地日志与隐私过滤后的远端诊断使用。远端流、播放器和直播列表的初始失败只形成 breadcrumb；线路刷新、候选降级和重试都耗尽后，应用才发送终局错误。诊断维度只允许固定整数，如阶段、重试次数、HTTP 状态、网络错误、网盘类型和播放线路。
 - Provider 进程退出、超时或验证失败不会覆盖最后一个可用的已验证版本。
 
 ### 扩展开发
@@ -198,7 +198,7 @@ The diagram in the Chinese section defines the same boundary in full. The main l
 | Extension execution | `ProviderRuntime`, `QuickJSRuntime` | Verify, install, activate, roll back, and run sandboxed Providers |
 | Local data plane | `ProxyServer` | Restricted loopback proxy, Range streaming, parser page, registered files, cache, and health routes |
 | Playback | `PlayerEngine`, `MPVShim` | `PlaySpec`, libmpv integration, video surface, playback state, errors, and session lifecycle |
-| Diagnostics | `Diagnostics` | Privacy-filtered crash and performance reporting with fixed error codes, stages, versions, and bounded interaction steps |
+| Diagnostics | `Diagnostics` | Privacy-filtered crash and performance reporting with fixed error codes and numeric dimensions; recoverable failures remain breadcrumbs and only exhausted recovery creates issues |
 | Application composition | `NetVplayerApp` | SwiftUI, AppState, windows, settings, command execution, user-facing error translation, and visible entry points |
 
 The package products and target dependencies are defined by [`NetVplayer/Package.swift`](NetVplayer/Package.swift).
@@ -234,7 +234,7 @@ Direct HLS/MP4 bypasses the local proxy when no rewrite or mediation is required
 - User configurations, accounts, and credentials are not release payloads.
 - Providers receive selected site context and opaque credential references, not another Provider's state or raw application Keychain values.
 - Playback history stores stable content identity instead of short-lived media URLs or sensitive headers.
-- Diagnostics redact URLs and sensitive headers.
+- Diagnostics reject URLs, sensitive headers, media titles, raw error text, and full logs. Only fixed numeric failure dimensions and bounded recovery steps cross the remote-reporting boundary.
 - Ordinary UI errors never expose raw Android compatibility names, Provider/runtime types, player internals, or unfiltered `localizedDescription`; those details remain in local or privacy-filtered diagnostics.
 - Failed verification, launch, or update leaves the last active verified Provider version available.
 

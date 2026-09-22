@@ -1695,7 +1695,11 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                     DiagnosticLog.write("[REMOTE_STREAM_CONTINUOUS_CANCEL] id=\(id), range=\(range ?? "-")")
                     return
                 }
-                let message = "[REMOTE_STREAM_ERROR] id=\(id), range=\(range ?? "-"), error=\(error.localizedDescription)"
+                let measurements = Self.remoteDiagnosticMeasurements(for: error)
+                let fields = measurements.keys.sorted().map {
+                    "\($0)=\(measurements[$0]!)"
+                }.joined(separator: " ")
+                let message = "[REMOTE_STREAM_ERROR] \(fields) id=\(id), range=\(range ?? "-"), error=\(error.localizedDescription)"
                 DiagnosticLog.write(message)
                 self.server.setRemoteStreamError(id: id, message: message)
                 if usesContinuousResponse {
@@ -1709,6 +1713,32 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                     self.sendErrorResponse(context: safeContext.context, version: version, status: .badGateway, message: "远端流转发失败: \(error.localizedDescription)")
                 }
             }
+        }
+    }
+
+    static func remoteDiagnosticMeasurements(for error: Error) -> [String: Int] {
+        switch error {
+        case ProxyServerError.upstreamHTTPStatus(let statusCode):
+            return ["errorKind": 1, "status": statusCode]
+        case ProxyServerError.upstreamRangeMismatch:
+            return ["errorKind": 2]
+        case ProxyServerError.emptyUpstreamResponse:
+            return ["errorKind": 3]
+        case ProxyServerError.noAvailablePort, ProxyServerError.serverNotRunning:
+            return ["errorKind": 6]
+        case let curlError as CurlRangeTransportError:
+            return ["code": Int(curlError.code), "errorKind": 5]
+        case let httpError as HTTPError:
+            if case .httpError(let statusCode, _) = httpError {
+                return ["errorKind": 1, "status": statusCode]
+            }
+            return ["errorKind": 6]
+        default:
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain {
+                return ["code": nsError.code, "errorKind": 4]
+            }
+            return ["errorKind": 0]
         }
     }
 

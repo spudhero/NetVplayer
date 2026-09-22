@@ -334,6 +334,21 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     public static let vod = MPVPlayerEngine(videoSurface: .vod)
     public static let live = MPVPlayerEngine(videoSurface: .live)
 
+    static let initializationOptions: [(name: String, value: String)] = [
+        ("terminal", "no"),
+        ("msg-level", "all=info"),
+        ("idle", "yes"),
+        ("keep-open", "no"),
+        ("osc", "no"),
+        ("ytdl", "no"),
+        ("input-default-bindings", "no"),
+        ("input-vo-keyboard", "no"),
+        ("hwdec", "videotoolbox-copy"),
+        ("vo", "libmpv"),
+        // mpv 0.41 can retain a CoreAudio hotplug callback when floatp initialization fails.
+        ("audio-format", "float"),
+    ]
+
     /// Compatibility alias for call sites that have not yet declared a playback kind.
     public static var shared: MPVPlayerEngine { vod }
 
@@ -995,16 +1010,13 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             throw MPVPlayerEngineError.initialization(message)
         }
 
-        try check(nv_mpv_set_option_string(created, "terminal", "no"), context: created, action: "set option terminal=no")
-        try check(nv_mpv_set_option_string(created, "msg-level", "all=info"), context: created, action: "set option msg-level=all=info")
-        try check(nv_mpv_set_option_string(created, "idle", "yes"), context: created, action: "set option idle=yes")
-        try check(nv_mpv_set_option_string(created, "keep-open", "no"), context: created, action: "set option keep-open=no")
-        try check(nv_mpv_set_option_string(created, "osc", "no"), context: created, action: "set option osc=no")
-        try check(nv_mpv_set_option_string(created, "ytdl", "no"), context: created, action: "set option ytdl=no")
-        try check(nv_mpv_set_option_string(created, "input-default-bindings", "no"), context: created, action: "set option input-default-bindings=no")
-        try check(nv_mpv_set_option_string(created, "input-vo-keyboard", "no"), context: created, action: "set option input-vo-keyboard=no")
-        try check(nv_mpv_set_option_string(created, "hwdec", "videotoolbox-copy"), context: created, action: "set option hwdec=videotoolbox-copy")
-        try check(nv_mpv_set_option_string(created, "vo", "libmpv"), context: created, action: "set option vo=libmpv")
+        for option in Self.initializationOptions {
+            try check(
+                nv_mpv_set_option_string(created, option.name, option.value),
+                context: created,
+                action: "set option \(option.name)=\(option.value)"
+            )
+        }
         try check(nv_mpv_request_log_messages(created, "info"), context: created, action: "request mpv logs")
         try check(nv_mpv_initialize(created), context: created, action: "initialize libmpv")
         try check(nv_mpv_observe_double(created, 1, "time-pos"), context: created, action: "observe time-pos")
@@ -1549,7 +1561,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         status = .error(message)
         lock.unlock()
         updateDisplaySleepPrevention()
-        DiagnosticLog.write("[MPV_ERROR] \(message)")
+        DiagnosticLog.write("[MPV_ERROR] errorKind=\(Self.diagnosticErrorKind(for: message)) \(message)")
         Task { @MainActor in
             let spec = self.playerState?.currentSpec
             self.playerState?.errorMessage = message
@@ -2063,6 +2075,40 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             return "代理拉流失败：本地代理没有成功打开上游地址。请切换线路或检查代理/网络设置。"
         }
         return nil
+    }
+
+    static func diagnosticErrorKind(for message: String) -> Int {
+        let normalized = message.lowercased()
+        if normalized.contains("初始化失败") || normalized.contains("initialization") {
+            return 1
+        }
+        if normalized.contains("本地视频流启动失败")
+            || normalized.contains("range")
+            || normalized.contains("failed to seek when reading header") {
+            return 2
+        }
+        if normalized.contains("代理拉流失败")
+            || normalized.contains("relay 拉流失败")
+            || normalized.contains("直连媒体加载失败")
+            || normalized.contains("http")
+            || normalized.contains("tls")
+            || normalized.contains("connection") {
+            return 3
+        }
+        if normalized.contains("外部音轨") {
+            return 4
+        }
+        if normalized.contains("decode")
+            || normalized.contains("demux")
+            || normalized.contains("format")
+            || normalized.contains("解码")
+            || normalized.contains("格式") {
+            return 5
+        }
+        if normalized.contains("事件错误") {
+            return 6
+        }
+        return 0
     }
 
     private static func loadFailureDiagnostic(for spec: PlaySpec?) -> String {

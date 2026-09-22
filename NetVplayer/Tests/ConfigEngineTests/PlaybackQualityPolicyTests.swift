@@ -4,12 +4,55 @@ import Models
 import DriveEngine
 @testable import ProxyServer
 @testable import PlayerEngine
+@testable import NetVplayerApp
 
 @Test func testMPVPlaybackKindsUseDedicatedEngineInstances() {
     #expect(MPVPlayerEngine.vod !== MPVPlayerEngine.live)
     #expect(MPVPlayerEngine.vod.videoSurface == .vod)
     #expect(MPVPlayerEngine.live.videoSurface == .live)
     #expect(MPVPlayerEngine.shared === MPVPlayerEngine.vod)
+}
+
+@Test func testMPVInitializationUsesInterleavedFloatForCoreAudioHotplugSafety() {
+    let options = Dictionary(uniqueKeysWithValues: MPVPlayerEngine.initializationOptions.map {
+        ($0.name, $0.value)
+    })
+    #expect(options["audio-format"] == "float")
+    #expect(options["vo"] == "libmpv")
+    #expect(options["hwdec"] == "videotoolbox-copy")
+}
+
+@Test func testMPVErrorsExposeStablePrivateDataFreeFailureKinds() {
+    #expect(MPVPlayerEngine.diagnosticErrorKind(for: "libmpv 初始化失败") == 1)
+    #expect(MPVPlayerEngine.diagnosticErrorKind(for: "本地视频流启动失败，Range 无法完成") == 2)
+    #expect(MPVPlayerEngine.diagnosticErrorKind(for: "本地 stream relay 拉流失败") == 3)
+    #expect(MPVPlayerEngine.diagnosticErrorKind(for: "mpv 外部音轨加载失败") == 4)
+    #expect(MPVPlayerEngine.diagnosticErrorKind(for: "demux format error") == 5)
+    #expect(MPVPlayerEngine.diagnosticErrorKind(for: "mpv 事件错误") == 6)
+    #expect(MPVPlayerEngine.diagnosticErrorKind(for: "unknown") == 0)
+}
+
+@Test @MainActor func testPlaybackPreparationRetriesOnlyOneTransientFailure() {
+    let retryable = DriveEngineError.api(
+        provider: .quark,
+        statusCode: 503,
+        code: 429,
+        message: "temporary"
+    )
+    let terminal = DriveEngineError.api(
+        provider: .quark,
+        statusCode: 401,
+        code: 401,
+        message: "expired"
+    )
+
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: retryable, attempt: 0) == 500_000_000)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: retryable, attempt: 1) == nil)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: terminal, attempt: 0) == nil)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(
+        for: URLError(.networkConnectionLost),
+        attempt: 0
+    ) == 500_000_000)
 }
 
 @Test func testPlaybackDisplaySleepControllerTracksPlaybackWithoutLeakingActivities() {

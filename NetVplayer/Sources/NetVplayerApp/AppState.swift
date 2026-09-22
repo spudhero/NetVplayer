@@ -1693,7 +1693,7 @@ final class AppState: ObservableObject {
     }
 
     /// 加载激活站点的首页分类与推荐
-    func loadHomeContent() async {
+    func loadHomeContent(retryAttempt: Int = 0) async {
         guard let site = activeSite else {
             log("[DEBUG_LOGGER] loadHomeContent 失败: activeSite 为 nil")
             return
@@ -1728,7 +1728,23 @@ final class AppState: ObservableObject {
             log("[DEBUG_LOGGER] 首页加载成功! 分类数: \(result.types.count), 影片数: \(result.list.count)")
         } catch {
             log("[DEBUG_LOGGER] 加载首页推荐发生异常: \(error)")
-            DiagnosticLog.recordError("CATALOG_LOAD_FAILED", error: error)
+            if let delay = Self.transientPreparationRetryDelayNanoseconds(
+                for: error,
+                attempt: retryAttempt
+            ) {
+                log("[CATALOG_LOAD_RETRY] attempt=\(retryAttempt + 1)")
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled,
+                      activeSite?.key == site.key,
+                      contentCatalogState.generation == generation else { return }
+                await loadHomeContent(retryAttempt: retryAttempt + 1)
+                return
+            }
+            recordRemoteDiagnosticError(
+                "CATALOG_LOAD_FAILED",
+                error: error,
+                attempt: retryAttempt
+            )
             let isCurrent = contentCatalogState.generation == generation
             contentCatalogState = ContentCatalogCore.failHome(
                 contentCatalogState,
@@ -2271,7 +2287,8 @@ final class AppState: ObservableObject {
         resumeDuration: Int64? = nil,
         automaticSelection: Bool = false,
         lineFallbackApplied: Bool = false,
-        verificationResult: PlaybackVerificationResult? = nil
+        verificationResult: PlaybackVerificationResult? = nil,
+        preparationRetryAttempt: Int = 0
     ) async {
         guard let site = activeSite else { return }
         resetDrivePlaybackRoutes()
@@ -2351,13 +2368,37 @@ final class AppState: ObservableObject {
             try await executePlaybackSessionCommand(transition.command)
         } catch {
             let isCurrent = playbackSessionState.generation == generation
+            if isCurrent,
+               let delay = Self.transientPreparationRetryDelayNanoseconds(
+                   for: error,
+                   attempt: preparationRetryAttempt
+               ) {
+                log("[PLAYBACK_PREPARE_RETRY] attempt=\(preparationRetryAttempt + 1)")
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled,
+                      playbackSessionState.generation == generation else { return }
+                await playEpisode(
+                    episode,
+                    resumePosition: resumePosition,
+                    resumeDuration: resumeDuration,
+                    automaticSelection: automaticSelection,
+                    lineFallbackApplied: lineFallbackApplied,
+                    verificationResult: verificationResult,
+                    preparationRetryAttempt: preparationRetryAttempt + 1
+                )
+                return
+            }
             playbackSessionState = PlaybackSessionCore.fail(
                 playbackSessionState,
                 generation: generation
             )
             if isCurrent {
                 self.log("[PLAY_EPISODE] 播放异常失败: \(error)")
-                handlePlaybackError(error, episode: episode)
+                handlePlaybackError(
+                    error,
+                    episode: episode,
+                    preparationRetryAttempt: preparationRetryAttempt
+                )
             }
         }
     }
@@ -2650,7 +2691,11 @@ final class AppState: ObservableObject {
         return lines.first?.flag
     }
 
-    func handlePlaybackError(_ error: Error, episode: Episode) {
+    func handlePlaybackError(
+        _ error: Error,
+        episode: Episode,
+        preparationRetryAttempt: Int = 0
+    ) {
         let isSourceFailure = error is DriveEngineError || error is PlaybackInteractionRequiredError
         lastFeedbackFailureStage = isSourceFailure ? "Source.resolve" : "Player.prepare"
         lastFeedbackFailureCategory = isSourceFailure ? .source : .player
@@ -2679,8 +2724,91 @@ final class AppState: ObservableObject {
             }
         }
 
-        DiagnosticLog.recordError("PLAYBACK_PREPARE_FAILED", error: error)
+        recordRemoteDiagnosticError(
+            "PLAYBACK_PREPARE_FAILED",
+            error: error,
+            attempt: preparationRetryAttempt
+        )
         isPlaybackErrorPresented = true
+    }
+
+    static func transientPreparationRetryDelayNanoseconds(for error: Error, attempt: Int) -> UInt64? {
+        guard attempt == 0 else { return nil }
+
+        if let driveError = error as? DriveEngineError,
+           case .api(_, let statusCode, _, _) = driveError {
+            if statusCode == 408 || statusCode == 425 || statusCode == 429 || (500...599).contains(statusCode) {
+                return 500_000_000
+            }
+        }
+        if let httpError = error as? HTTPError,
+           case .httpError(let statusCode, _) = httpError {
+            if statusCode == 408 || statusCode == 425 || statusCode == 429 || (500...599).contains(statusCode) {
+                return 500_000_000
+            }
+        }
+
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else { return nil }
+        let code = URLError.Code(rawValue: nsError.code)
+        let retryableCodes: Set<URLError.Code> = [
+            .timedOut, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+            .networkConnectionLost, .notConnectedToInternet, .resourceUnavailable,
+        ]
+        return retryableCodes.contains(code) ? 500_000_000 : nil
+    }
+
+    private func recordRemoteDiagnosticError(_ code: String, error: Error, attempt: Int) {
+        let nsError = error as NSError
+        guard !(error is CancellationError),
+              !(nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled) else { return }
+
+        var measurements = [
+            "attempt": attempt,
+            "errorCode": nsError.code,
+            "errorKind": 0,
+            "expected": 0,
+        ]
+        if error is SpiderEngineError {
+            measurements["errorKind"] = 1
+            measurements["expected"] = 1
+        } else if let driveError = error as? DriveEngineError {
+            measurements["errorKind"] = 2
+            switch driveError {
+            case .api(let provider, let statusCode, let providerCode, _):
+                measurements["provider"] = Self.driveProviderDiagnosticCode(provider)
+                measurements["status"] = statusCode
+                if let providerCode { measurements["code"] = providerCode }
+            default:
+                measurements["expected"] = 1
+            }
+        } else if error is HTTPError {
+            measurements["errorKind"] = 3
+        } else if nsError.domain == NSURLErrorDomain {
+            measurements["errorKind"] = 4
+        }
+
+        let fields = measurements.keys.sorted().map { "\($0)=\(measurements[$0]!)" }.joined(separator: " ")
+        DiagnosticLog.write("[\(code)] \(fields)")
+    }
+
+    private static func driveProviderDiagnosticCode(_ provider: DriveProvider) -> Int {
+        switch provider {
+        case .quark: return 1
+        case .uc: return 2
+        case .ali: return 3
+        case .p115: return 4
+        case .pikpak: return 5
+        case .baidu: return 6
+        case .cloud123: return 7
+        case .xunlei: return 8
+        case .mobile: return 9
+        case .tianyi: return 10
+        case .alist: return 11
+        case .webdav: return 12
+        case .bilibili: return 13
+        case .unknown: return 0
+        }
     }
 
     func completePlaybackVerification(_ result: PlaybackVerificationResult) {
@@ -3345,15 +3473,23 @@ final class AppState: ObservableObject {
         guard let live = activeLive, !isLoadingLive else { return false }
         self.isLoadingLive = true
         defer { self.isLoadingLive = false }
+        var attempt = 0
+        var responseStatus = 0
+        var responseBytes = 0
         
         do {
             let url = live.url
-            guard !url.isEmpty else { return false }
+            guard !url.isEmpty else {
+                log("[LIVE_CONTENT_REFRESH_FAILED] errorKind=1 attempt=0 bytes=0 status=0 source=\(live.name)")
+                return false
+            }
             
             var text: String
             if url.hasPrefix("http") {
                 let response = try await liveHTTPClient.get(url: url)
                 text = response.text
+                responseStatus = response.statusCode
+                responseBytes = response.data.count
                 if LiveParser.parse(text: text).isEmpty {
                     log(
                         "[LIVE_CONTENT_REFRESH_RETRY] source=\(live.name) "
@@ -3366,19 +3502,27 @@ final class AppState: ObservableObject {
                             "Pragma": "no-cache",
                         ]
                     )
+                    attempt = 1
                     text = retryResponse.text
+                    responseStatus = retryResponse.statusCode
+                    responseBytes = retryResponse.data.count
                 }
             } else {
                 if FileManager.default.fileExists(atPath: url) {
                     text = try String(contentsOfFile: url, encoding: .utf8)
+                    responseBytes = text.utf8.count
                 } else {
-                    text = ""
+                    log("[LIVE_CONTENT_REFRESH_FAILED] errorKind=2 attempt=0 bytes=0 status=0 source=\(live.name)")
+                    return false
                 }
             }
             
             let groups = LiveParser.parse(text: text).map { $0.applying(live: live) }
             guard !groups.isEmpty else {
-                log("[LIVE_CONTENT_REFRESH_FAILED] source=\(live.name) reason=empty channel list")
+                log(
+                    "[LIVE_CONTENT_REFRESH_FAILED] errorKind=3 attempt=\(attempt) "
+                        + "bytes=\(responseBytes) status=\(responseStatus) source=\(live.name)"
+                )
                 return false
             }
             self.channelGroups = groups
@@ -3387,7 +3531,11 @@ final class AppState: ObservableObject {
             log("[LIVE_CONTENT_REFRESHED] source=\(live.name) groups=\(groups.count)")
             return true
         } catch {
-            log("[LIVE_CONTENT_REFRESH_FAILED] source=\(live.name) error=\(error.localizedDescription)")
+            recordRemoteDiagnosticError(
+                "LIVE_CONTENT_REFRESH_FAILED",
+                error: error,
+                attempt: attempt
+            )
             return false
         }
     }
@@ -3853,6 +4001,11 @@ final class AppState: ObservableObject {
             return
         }
 
+        if let spec, spec.metadata["playback.kind"] != "live" {
+            recordPlaybackRecoveryFailure(for: spec)
+            return
+        }
+
         guard let spec,
               spec.metadata["playback.kind"] == "live",
               spec.metadata["live.sessionID"] == livePlaybackSessionID.uuidString else {
@@ -3946,8 +4099,36 @@ final class AppState: ObservableObject {
             log("[DRIVE_PLAYBACK_FAILURE_STALE] provider=\(provider.rawValue) message=\(message)")
         case .exhausted:
             if !switchToVodLineFallback(from: spec) {
+                recordPlaybackRecoveryFailure(for: spec)
                 presentDrivePlaybackTerminalError(for: spec)
             }
+        }
+    }
+
+    private func recordPlaybackRecoveryFailure(for spec: PlaySpec) {
+        let provider = spec.drivePlaybackPlan?.provider
+            ?? DriveProvider(rawValue: spec.metadata[DrivePlaybackMetadataKey.provider] ?? "")
+            ?? .unknown
+        let route = Self.driveRouteDiagnosticCode(
+            spec.metadata[DrivePlaybackMetadataKey.route]
+                ?? DrivePlaybackRoutePolicy.candidate(for: spec)?.providerRoute
+                ?? ""
+        )
+        DiagnosticLog.write(
+            "[PLAYBACK_RECOVERY_FAILED] errorKind=5 provider=\(Self.driveProviderDiagnosticCode(provider)) route=\(route)"
+        )
+    }
+
+    private static func driveRouteDiagnosticCode(_ route: String) -> Int {
+        switch route {
+        case DrivePlaybackRoute.ucOriginalProxy: return 1
+        case DrivePlaybackRoute.ucOpenAPIStreaming: return 2
+        case DrivePlaybackRoute.ucSmartPlay: return 3
+        case DrivePlaybackRoute.streamVariant: return 4
+        case DrivePlaybackRoute.personalTranscode: return 5
+        case DrivePlaybackRoute.originalDownload: return 6
+        case DrivePlaybackRoute.shareFallback: return 7
+        default: return 0
         }
     }
 

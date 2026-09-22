@@ -4,6 +4,13 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [1.0.11](https://github.com/spudhero/NetVplayer/releases/tag/1.0.11) - 2026-09-22
+
+- 修复 macOS 27 切换或断开音频设备时可能触发的 CoreAudio 崩溃；内嵌 libmpv 现在使用稳定的交错浮点音频格式初始化。
+- 播放准备和内容目录加载遇到超时、断网、HTTP 429 或服务器临时错误时会自动重试一次，再决定是否向用户报告失败。
+- 自动诊断现在把远端流、播放器和直播列表的可恢复故障保留为诊断步骤，只在所有播放恢复线路耗尽后创建问题，避免同一次故障拆成多个告警。
+- 诊断事件增加错误阶段、重试次数、HTTP 状态、网络错误、网盘类型和播放线路等固定数字维度，便于定位问题，同时继续排除账号、地址、媒体名称和完整错误正文。
+
 ### [1.0.10](https://github.com/spudhero/NetVplayer/releases/tag/1.0.10) - 2026-09-21
 
 - 修复普通本地构建遗漏扩展签名配置而误报“扩展暂时不可用”的问题；首次安装完成记录会结合已验签的本地包判断可用性，待升级版本单独保存，联网检查失败不再阻塞已有扩展的数据源恢复。
@@ -53,6 +60,13 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [1.0.11](https://github.com/spudhero/NetVplayer/releases/tag/1.0.11) - 2026-09-22
+
+- Fixed a CoreAudio crash that could occur on macOS 27 when an audio device was switched or disconnected. The embedded libmpv core now initializes with the stable interleaved-float audio format.
+- Playback preparation and catalog loading retry once for timeouts, offline transitions, HTTP 429 responses, and temporary server failures before presenting an error.
+- Automatic diagnostics now keep recoverable remote-stream, player, and live-catalog failures as diagnostic steps and create an issue only after all playback recovery routes are exhausted, preventing one incident from becoming several alerts.
+- Diagnostic events now include fixed numeric dimensions for failure stage, retry count, HTTP status, network error, cloud provider, and playback route while continuing to exclude accounts, URLs, media titles, and raw error text.
 
 ### [1.0.10](https://github.com/spudhero/NetVplayer/releases/tag/1.0.10) - 2026-09-21
 

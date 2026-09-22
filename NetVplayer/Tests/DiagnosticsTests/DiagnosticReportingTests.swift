@@ -15,6 +15,61 @@ import Sentry
         #expect(RemoteDiagnosticRecord(localMessage: "[MPV_PLAY_ERROR_IGNORED] code=1") == nil)
     }
 
+    @Test func recoverablePlaybackFailuresStayBreadcrumbsUntilRecoveryIsExhausted() throws {
+        let remoteStream = try #require(RemoteDiagnosticRecord(
+            localMessage: "[REMOTE_STREAM_ERROR] errorKind=1 status=503 url=https://private.example/token"
+        ))
+        let mpv = try #require(RemoteDiagnosticRecord(
+            localMessage: "[MPV_ERROR] errorKind=3 private media title"
+        ))
+        let terminal = try #require(RemoteDiagnosticRecord(
+            localMessage: "[PLAYBACK_RECOVERY_FAILED] errorKind=5 provider=1 route=6"
+        ))
+
+        #expect(!remoteStream.isError)
+        #expect(remoteStream.measurements == ["errorKind": 1, "status": 503])
+        #expect(!mpv.isError)
+        #expect(mpv.measurements == ["errorKind": 3])
+        #expect(terminal.isError)
+        #expect(terminal.measurements == ["errorKind": 5, "provider": 1, "route": 6])
+    }
+
+    @Test func expectedSourceErrorsDoNotCreateIssuesAndDriveAPIErrorsKeepSafeDimensions() throws {
+        let expected = try #require(RemoteDiagnosticRecord(
+            localMessage: "[CATALOG_LOAD_FAILED] errorCode=1 errorKind=1 expected=1"
+        ))
+        let driveAPI = try #require(RemoteDiagnosticRecord(
+            localMessage: "[PLAYBACK_PREPARE_FAILED] attempt=1 errorCode=6 errorKind=2 expected=0 provider=1 status=503 code=429"
+        ))
+
+        #expect(!expected.isError)
+        #expect(expected.measurements == ["errorCode": 1, "errorKind": 1, "expected": 1])
+        #expect(driveAPI.isError)
+        #expect(driveAPI.measurements == [
+            "errorCode": 6,
+            "errorKind": 2,
+            "expected": 0,
+            "provider": 1,
+            "status": 503,
+            "code": 429,
+            "attempt": 1,
+        ])
+    }
+
+    @Test func unavailableLiveCatalogStaysABreadcrumbWithEnoughSafeContext() throws {
+        let record = try #require(RemoteDiagnosticRecord(
+            localMessage: "[LIVE_CONTENT_REFRESH_FAILED] errorKind=3 attempt=1 bytes=561 status=200 source=Private Source"
+        ))
+
+        #expect(!record.isError)
+        #expect(record.measurements == [
+            "attempt": 1,
+            "bytes": 561,
+            "errorKind": 3,
+            "status": 200,
+        ])
+    }
+
     @Test func quotaSurvivesRestartAndResetsOnNextDay() throws {
         let name = "DiagnosticReportingTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: name))
