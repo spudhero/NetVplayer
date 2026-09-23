@@ -67,6 +67,9 @@ public struct WebImage: View {
         .onChange(of: siteHeader ?? [:]) { _, newValue in
             loader.load(from: urlString, headers: newValue, timeout: timeout, maxPixelSize: maxPixelSize)
         }
+        .onChange(of: maxPixelSize) { _, newValue in
+            loader.load(from: urlString, headers: siteHeader, timeout: timeout, maxPixelSize: newValue)
+        }
     }
 
     @ViewBuilder
@@ -217,6 +220,7 @@ actor PosterImagePipeline {
     static let shared = PosterImagePipeline()
 
     private struct ImageInFlight: Sendable {
+        let id: UUID
         let generation: UInt64
         let task: Task<DecodedPosterImage, Error>
     }
@@ -224,6 +228,7 @@ actor PosterImagePipeline {
     private struct DataInFlight: Sendable {
         let generation: UInt64
         let task: Task<Data, Error>
+        var consumers: Int
     }
 
     private let session: URLSession
@@ -269,40 +274,59 @@ actor PosterImagePipeline {
         maxPixelSize: CGFloat
     ) async throws -> DecodedPosterImage {
         let sizedKey = "\(key)-\(Int(maxPixelSize.rounded()))"
+        let requestGeneration = generation
         if let existing = inFlight[sizedKey], existing.generation == generation {
-            return try await existing.task.value
+            let image = try await existing.task.value
+            try Task.checkCancellation()
+            guard requestGeneration == generation else { throw CancellationError() }
+            return image
         }
 
-        let requestGeneration = generation
         let dataTask: Task<Data, Error>
-        if let existing = dataInFlight[key], existing.generation == requestGeneration {
+        if var existing = dataInFlight[key], existing.generation == requestGeneration {
+            existing.consumers += 1
+            dataInFlight[key] = existing
             dataTask = existing.task
         } else {
             let created = Task { try await data(request: request, key: key, generation: requestGeneration) }
-            dataInFlight[key] = DataInFlight(generation: requestGeneration, task: created)
+            dataInFlight[key] = DataInFlight(generation: requestGeneration, task: created, consumers: 1)
             dataTask = created
         }
-        let decodeTask = Task.detached(priority: .utility) {
-            let data = try await dataTask.value
-            return try Self.decode(data: data, maxPixelSize: maxPixelSize)
-        }
-        inFlight[sizedKey] = ImageInFlight(generation: requestGeneration, task: decodeTask)
-        do {
-            let image = try await decodeTask.value
-            guard requestGeneration == generation else { throw CancellationError() }
-            let data = try await dataTask.value
-            try persistIfNeeded(data, key: key, generation: requestGeneration)
-            if dataInFlight[key]?.generation == requestGeneration { dataInFlight[key] = nil }
-            if inFlight[sizedKey]?.generation == requestGeneration { inFlight[sizedKey] = nil }
-            return image
-        } catch {
-            if dataInFlight[key]?.generation == requestGeneration { dataInFlight[key] = nil }
-            if inFlight[sizedKey]?.generation == requestGeneration { inFlight[sizedKey] = nil }
-            if error is PosterImageError {
-                try? fileManager.removeItem(at: cacheFileURL(for: key))
+        let requestID = UUID()
+        let decodeTask = Task {
+            defer {
+                if var existing = dataInFlight[key], existing.generation == requestGeneration {
+                    existing.consumers -= 1
+                    dataInFlight[key] = existing.consumers == 0 ? nil : existing
+                }
+                if inFlight[sizedKey]?.id == requestID { inFlight[sizedKey] = nil }
             }
-            throw error
+            do {
+                let data = try await dataTask.value
+                let image = try await Task.detached(priority: .utility) {
+                    try Self.decode(data: data, maxPixelSize: maxPixelSize)
+                }.value
+                try Task.checkCancellation()
+                guard requestGeneration == generation else { throw CancellationError() }
+                // A full/read-only disk must not discard a successfully decoded poster.
+                do {
+                    try persistIfNeeded(data, key: key, generation: requestGeneration)
+                } catch {
+                    DiagnosticLog.write("[POSTER_CACHE_WRITE_FAILED] error=\(error.localizedDescription)")
+                }
+                return image
+            } catch {
+                if requestGeneration == generation, error is PosterImageError {
+                    try? fileManager.removeItem(at: cacheFileURL(for: key))
+                }
+                throw error
+            }
         }
+        inFlight[sizedKey] = ImageInFlight(id: requestID, generation: requestGeneration, task: decodeTask)
+        let image = try await decodeTask.value
+        try Task.checkCancellation()
+        guard requestGeneration == generation else { throw CancellationError() }
+        return image
     }
 
     func diskUsage() -> Int64 {
@@ -336,9 +360,9 @@ actor PosterImagePipeline {
 
     private func data(request: URLRequest, key: String, generation requestGeneration: UInt64) async throws -> Data {
         let fileURL = cacheFileURL(for: key)
-        if let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
-           let modifiedAt = values.contentModificationDate,
-           now().timeIntervalSince(modifiedAt) <= ttl,
+        if let values = try? fileURL.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey]),
+           let storedAt = values.creationDate ?? values.contentModificationDate,
+           now().timeIntervalSince(storedAt) <= ttl,
            let data = try? Data(contentsOf: fileURL, options: [.mappedIfSafe]),
            !data.isEmpty {
             guard requestGeneration == generation else { throw CancellationError() }
@@ -374,6 +398,8 @@ actor PosterImagePipeline {
         let fileURL = cacheFileURL(for: key)
         guard !fileManager.fileExists(atPath: fileURL.path) else { return }
         try data.write(to: fileURL, options: .atomic)
+        // Creation time is the fixed TTL anchor; modification time tracks LRU access.
+        try fileManager.setAttributes([.creationDate: now(), .modificationDate: now()], ofItemAtPath: fileURL.path)
         try trimIfNeeded()
         NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
@@ -411,6 +437,12 @@ actor PosterImagePipeline {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw PosterImageError.invalidData(data.count)
         }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let width = (properties?[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue ?? 0
+        let height = (properties?[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue ?? 0
+        guard !ImageLoader.isPlaceholderImage(width: width, height: height, dataCount: data.count) else {
+            throw PosterImageError.placeholderImage(width: width, height: height, bytes: data.count)
+        }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -419,17 +451,6 @@ actor PosterImagePipeline {
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             throw PosterImageError.invalidData(data.count)
-        }
-        guard !ImageLoader.isPlaceholderImage(
-            width: CGFloat(image.width),
-            height: CGFloat(image.height),
-            dataCount: data.count
-        ) else {
-            throw PosterImageError.placeholderImage(
-                width: CGFloat(image.width),
-                height: CGFloat(image.height),
-                bytes: data.count
-            )
         }
         return DecodedPosterImage(cgImage: image, byteCount: data.count)
     }
@@ -449,11 +470,18 @@ final class ImageLoader: ObservableObject {
         return cache
     }()
     private static var failedAt: [String: Date] = [:]
+    private static var memoryGeneration: UInt64 = 0
     private static let failureTTL: TimeInterval = 60
     private static let woggFallbackPosterURL = "https://cos.ffnews.cn/feedback/20251217/6941c9f5c06e2.jpg"
 
     private var currentTask: Task<Void, Never>? = nil
     private var currentKey: String = ""
+    private var currentRequestID = UUID()
+    private let pipeline: PosterImagePipeline
+
+    init(pipeline: PosterImagePipeline = .shared) {
+        self.pipeline = pipeline
+    }
 
     func load(
         from urlString: String,
@@ -478,6 +506,8 @@ final class ImageLoader: ObservableObject {
         }
         currentTask?.cancel()
         currentKey = imageKey
+        let requestID = UUID()
+        currentRequestID = requestID
 
         if let cached = Self.imageCache.object(forKey: imageKey as NSString) {
             self.image = cached
@@ -500,25 +530,33 @@ final class ImageLoader: ObservableObject {
             embeddedHeaders: source.headers,
             timeout: timeout
         )
+        let requestGeneration = Self.memoryGeneration
+        let pipeline = self.pipeline
         currentTask = Task { [weak self] in
             do {
-                let decoded = try await PosterImagePipeline.shared.image(
+                let decoded = try await pipeline.image(
                     request: request,
                     key: requestKey,
                     maxPixelSize: maxPixelSize
                 )
+                try Task.checkCancellation()
+                guard requestGeneration == Self.memoryGeneration else { throw CancellationError() }
                 let nsImage = NSImage(
                     cgImage: decoded.cgImage,
                     size: NSSize(width: decoded.cgImage.width, height: decoded.cgImage.height)
                 )
                 Self.imageCache.setObject(nsImage, forKey: imageKey as NSString, cost: decoded.memoryCost)
-                guard let self, self.currentKey == imageKey else { return }
+                guard let self, self.currentRequestID == requestID else { return }
                 self.image = nsImage
                 self.isLoading = false
             } catch is CancellationError {
-                guard let self, self.currentKey == imageKey else { return }
+                guard let self, self.currentRequestID == requestID else { return }
                 self.isLoading = false
             } catch {
+                guard !Task.isCancelled, requestGeneration == Self.memoryGeneration else {
+                    if let self, self.currentRequestID == requestID { self.isLoading = false }
+                    return
+                }
                 if let fallbackURL = Self.fallbackURL(for: url, headers: effectiveHeaders, error: error) {
                     let fallbackRequestKey = Self.cacheKey(url: fallbackURL, headers: effectiveHeaders)
                     let fallbackImageKey = "\(fallbackRequestKey)-\(Int(maxPixelSize.rounded()))"
@@ -530,11 +568,13 @@ final class ImageLoader: ObservableObject {
                                 embeddedHeaders: source.headers,
                                 timeout: timeout
                             )
-                            let decoded = try await PosterImagePipeline.shared.image(
+                            let decoded = try await pipeline.image(
                                 request: fallbackRequest,
                                 key: fallbackRequestKey,
                                 maxPixelSize: maxPixelSize
                             )
+                            try Task.checkCancellation()
+                            guard requestGeneration == Self.memoryGeneration else { throw CancellationError() }
                             let fallbackImage = NSImage(
                                 cgImage: decoded.cgImage,
                                 size: NSSize(width: decoded.cgImage.width, height: decoded.cgImage.height)
@@ -542,11 +582,16 @@ final class ImageLoader: ObservableObject {
                             Self.imageCache.setObject(fallbackImage, forKey: imageKey as NSString, cost: decoded.memoryCost)
                             Self.imageCache.setObject(fallbackImage, forKey: fallbackImageKey as NSString, cost: decoded.memoryCost)
                             Self.logFallback(from: url, to: fallbackURL, reason: error)
-                            guard let self, self.currentKey == imageKey else { return }
+                            guard let self, self.currentRequestID == requestID else { return }
                             self.image = fallbackImage
                             self.isLoading = false
                             return
                         } catch {
+                            guard !Task.isCancelled, requestGeneration == Self.memoryGeneration,
+                                  !(error is CancellationError) else {
+                                if let self, self.currentRequestID == requestID { self.isLoading = false }
+                                return
+                            }
                             Self.markFailed(fallbackRequestKey)
                             Self.logFailure(error, url: fallbackURL, timeout: timeout)
                         }
@@ -554,7 +599,7 @@ final class ImageLoader: ObservableObject {
                 }
                 Self.markFailed(requestKey)
                 Self.logFailure(error, url: url, timeout: timeout)
-                guard let self, self.currentKey == imageKey else { return }
+                guard let self, self.currentRequestID == requestID else { return }
                 self.image = nil
                 self.isLoading = false
             }
@@ -740,6 +785,7 @@ final class ImageLoader: ObservableObject {
     }
 
     static func clearMemoryCache() {
+        memoryGeneration &+= 1
         imageCache.removeAllObjects()
         failedAt.removeAll()
     }

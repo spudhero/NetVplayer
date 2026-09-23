@@ -226,7 +226,7 @@ struct SettingsView: View {
             if selectedSection == .system { refreshCacheSize(debounced: true) }
         }
         .confirmationDialog(
-            "清理所有缓存？",
+            "清理性能缓存？",
             isPresented: $isShowingCacheConfirmation,
             titleVisibility: .visible
         ) {
@@ -2126,7 +2126,7 @@ struct SettingsView: View {
                             Button(role: .destructive) {
                                 isShowingCacheConfirmation = true
                             } label: {
-                                Label("清理缓存", systemImage: "trash")
+                                Label("清理性能缓存", systemImage: "trash")
                             }
                             .disabled(isClearingCache)
 
@@ -2358,9 +2358,9 @@ struct SettingsView: View {
     private func clearPerformanceCaches() {
         isClearingCache = true
         cacheOperationStatus = nil
+        appState.didClearPerformanceCaches()
         Task { @MainActor in
             let report = await CacheCoordinator.shared.clearPerformanceCaches()
-            appState.didClearPerformanceCaches()
             isClearingCache = false
             cacheOperationFailed = !report.succeeded
             cacheOperationStatus = report.succeeded

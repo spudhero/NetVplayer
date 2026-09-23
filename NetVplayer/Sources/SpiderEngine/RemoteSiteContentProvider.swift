@@ -13,10 +13,11 @@ enum RemoteProviderRequestPolicy {
     }
 }
 
-public struct RemoteSiteContentProvider: SiteContentProvider, Sendable {
+public struct RemoteSiteContentProvider: SiteContentProvider, SiteContentCacheClearing, Sendable {
     public let providerID: String
     public let manager: ProviderManager
     private let driveShareExpander: DriveShareExpander
+    private let detailStore = ProgressiveDetailStore()
 
     public init(
         providerID: String,
@@ -56,8 +57,16 @@ public struct RemoteSiteContentProvider: SiteContentProvider, Sendable {
     }
 
     public func detailContent(site: Site, id: String) async throws -> Result {
-        let decoded = try await result(operation: .detail, site: site, arguments: ["id": .string(id)])
-        return await RemoteProviderDriveShareResolver(expander: driveShareExpander).resolve(decoded)
+        try await detailStore.result(
+            for: ProgressiveDetailKey(site: site, id: id),
+            resolver: RemoteProviderDriveShareResolver(expander: driveShareExpander)
+        ) {
+            try await result(operation: .detail, site: site, arguments: ["id": .string(id)])
+        }
+    }
+
+    public func clearContentCache() async {
+        await detailStore.clear()
     }
 
     public func playerContent(site: Site, flag: String, id: String) async throws -> Result {
@@ -211,54 +220,85 @@ enum RemoteProviderPlayerResultAdapter {
 struct RemoteProviderDriveShareResolver: Sendable {
     let expander: DriveShareExpander
 
-    func resolve(_ result: Result) async -> Result {
-        var resolved = result
-        for index in resolved.list.indices {
-            resolved.list[index] = await resolve(resolved.list[index])
-        }
-        return resolved
+    private struct Location: Hashable, Sendable {
+        let vod: Int
+        let flag: Int
+        let episode: Int
     }
 
-    private func resolve(_ vod: Vod) async -> Vod {
-        var resolved = vod
-        var flags = vod.parseFlags()
-        var changed = false
+    private struct Share: Sendable {
+        let location: Location
+        let episode: Episode
+    }
 
-        for flagIndex in flags.indices {
-            var episodes: [Episode] = []
-            for episode in flags[flagIndex].episodes {
-                // A file-level reference already contains the selected fid and
-                // must go straight to SourceManager; expanding it again turns
-                // a playable item into an auth-dependent directory request.
-                if DriveFileReference.parse(episode.url) != nil {
-                    episodes.append(episode)
-                    continue
-                }
-                guard DriveFileReference.provider(for: episode.url) != .unknown else {
-                    episodes.append(episode)
-                    continue
-                }
-
-                changed = true
-                switch await expander.expansionOutcome(url: episode.url, fallbackTitle: episode.name) {
-                case .expanded(let expanded):
-                    episodes.append(contentsOf: expanded)
-                case .unavailable(let reason):
-                    episodes.append(Self.unavailableEpisode(title: episode.name, reason: reason))
+    private func shares(in result: Result) -> [Share] {
+        result.list.enumerated().flatMap { vodIndex, vod in
+            vod.parseFlags().enumerated().flatMap { flagIndex, flag in
+                flag.episodes.enumerated().compactMap { episodeIndex, episode in
+                    guard DriveFileReference.parse(episode.url) == nil,
+                          DriveFileReference.provider(for: episode.url) != .unknown else { return nil }
+                    return Share(location: Location(vod: vodIndex, flag: flagIndex, episode: episodeIndex), episode: episode)
                 }
             }
-            flags[flagIndex].episodes = episodes
         }
+    }
 
-        guard changed else { return vod }
-        resolved.vodPlayFrom = flags.map(\.name).joined(separator: "$$$")
-        resolved.vodPlayUrl = flags.map { flag in
-            flag.episodes.map { episode in
-                "\(Self.safeEpisodeText(episode.name))$\(episode.url)"
-            }.joined(separator: "#")
-        }.joined(separator: "$$$")
-        resolved.episodeDetails = flags.flatMap(\.episodes)
-        return resolved
+    func provisional(_ result: Result) -> Result {
+        render(result, shares: shares(in: result), completed: [:])
+    }
+
+    func resolve(
+        _ result: Result,
+        onUpdate: @escaping @Sendable (Result) async -> Void = { _ in }
+    ) async -> Result {
+        let work = shares(in: result)
+        guard !work.isEmpty else { return result }
+        return await withTaskGroup(of: (Location, [Episode]).self) { group in
+            var next = 0
+            func submit(_ share: Share) {
+                group.addTask {
+                    let episodes: [Episode]
+                    switch await expander.expansionOutcome(url: share.episode.url, fallbackTitle: share.episode.name) {
+                    case .expanded(let expanded): episodes = expanded
+                    case .unavailable(let reason):
+                        episodes = [Self.unavailableEpisode(title: share.episode.name, reason: reason)]
+                    }
+                    return (share.location, episodes)
+                }
+            }
+            for share in work.prefix(8) { submit(share); next += 1 }
+            var completed: [Location: [Episode]] = [:]
+            for await (location, episodes) in group {
+                guard !Task.isCancelled else { group.cancelAll(); break }
+                completed[location] = episodes
+                await onUpdate(render(result, shares: work, completed: completed))
+                if next < work.count { submit(work[next]); next += 1 }
+            }
+            return render(result, shares: work, completed: completed)
+        }
+    }
+
+    private func render(_ input: Result, shares: [Share], completed: [Location: [Episode]]) -> Result {
+        guard !shares.isEmpty else { return input }
+        let locations = Set(shares.map(\.location))
+        var result = input
+        for vodIndex in result.list.indices {
+            var flags = input.list[vodIndex].parseFlags()
+            for flagIndex in flags.indices {
+                flags[flagIndex].episodes = flags[flagIndex].episodes.enumerated().flatMap { episodeIndex, episode in
+                    let location = Location(vod: vodIndex, flag: flagIndex, episode: episodeIndex)
+                    guard locations.contains(location) else { return [episode] }
+                    if let expanded = completed[location] { return expanded }
+                    return [Episode(name: "正在加载网盘资源", url: "netvplayer-pending://episode/\(vodIndex)/\(flagIndex)/\(episodeIndex)")]
+                }
+            }
+            result.list[vodIndex].vodPlayFrom = flags.map(\.name).joined(separator: "$$$")
+            result.list[vodIndex].vodPlayUrl = flags.map { flag in
+                flag.episodes.map { "\(Self.safeEpisodeText($0.name))$\($0.url)" }.joined(separator: "#")
+            }.joined(separator: "$$$")
+            result.list[vodIndex].episodeDetails = flags.flatMap(\.episodes)
+        }
+        return result
     }
 
     private static func unavailableEpisode(title: String, reason: String) -> Episode {

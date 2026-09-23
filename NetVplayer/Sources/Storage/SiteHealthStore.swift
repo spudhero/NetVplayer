@@ -25,10 +25,10 @@ public final class SiteHealthStore: @unchecked Sendable {
         events.append(event)
         pruneLocked(now: Date())
         let snapshot = events
-        lock.unlock()
         persistenceQueue.async { [storage, filename] in
             try? storage.save(snapshot, to: filename)
         }
+        lock.unlock()
     }
 
     public func allEvents() -> [SiteHealthEvent] {
@@ -47,10 +47,10 @@ public final class SiteHealthStore: @unchecked Sendable {
     public func clear() {
         lock.lock()
         events = []
-        lock.unlock()
         persistenceQueue.async { [storage, filename] in
             try? storage.save([SiteHealthEvent](), to: filename)
         }
+        lock.unlock()
     }
 
     public func flushPendingWrites() {

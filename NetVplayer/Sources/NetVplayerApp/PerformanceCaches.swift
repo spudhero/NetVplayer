@@ -166,12 +166,14 @@ actor CatalogRepository {
             inFlight[key]?.task.cancel()
             inFlight[key] = nil
         }
+        NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
 
     func clear() {
         entries.removeAll()
         for request in inFlight.values { request.task.cancel() }
         inFlight.removeAll()
+        NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
 
     func stats() -> CatalogCacheStats {
@@ -188,6 +190,7 @@ actor CatalogRepository {
            let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
             entries[oldest] = nil
         }
+        NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
 }
 
@@ -220,7 +223,8 @@ actor VodDetailRepository {
     private let now: @Sendable () -> Date
     private var entries: [VodDetailCacheKey: Entry] = [:]
     private var inFlight: [VodDetailCacheKey: InFlight] = [:]
-    private var prefetchKeys = Set<VodDetailCacheKey>()
+    private var prefetchTasks: [VodDetailCacheKey: (id: UUID, task: Task<Void, Never>)] = [:]
+    private var activePrefetchIDs = Set<UUID>()
     private var accessSerial: UInt64 = 0
 
     init(
@@ -256,13 +260,11 @@ actor VodDetailRepository {
             let result = try await task.value
             if inFlight[key]?.id == requestID {
                 inFlight[key] = nil
-                prefetchKeys.remove(key)
                 if !result.list.isEmpty, !isProvisionalDetailResult(result) { store(result, for: key) }
             }
             return result
         } catch {
             if inFlight[key]?.id == requestID { inFlight[key] = nil }
-            prefetchKeys.remove(key)
             throw error
         }
     }
@@ -272,35 +274,36 @@ actor VodDetailRepository {
         loader: @escaping @Sendable () async throws -> Models.Result
     ) {
         if let cached = entries[key], now().timeIntervalSince(cached.storedAt) <= ttl { return }
-        entries[key] = nil
-        guard inFlight[key] == nil, prefetchKeys.count < 2 else { return }
-        prefetchKeys.insert(key)
-        let requestID = UUID()
-        let task = Task { try await loader() }
-        inFlight[key] = InFlight(id: requestID, task: task)
-        Task {
+        guard inFlight[key] == nil, prefetchTasks[key] == nil, activePrefetchIDs.count < 2 else { return }
+        let id = UUID()
+        activePrefetchIDs.insert(id)
+        let task = Task {
+            defer {
+                activePrefetchIDs.remove(id)
+                if prefetchTasks[key]?.id == id { prefetchTasks[key] = nil }
+            }
             do {
-                let result = try await task.value
-                if inFlight[key]?.id == requestID {
-                    if !result.list.isEmpty, !isProvisionalDetailResult(result) { store(result, for: key) }
-                    inFlight[key] = nil
-                    prefetchKeys.remove(key)
+                var value = try await result(for: key, loader: loader)
+                while isProvisionalDetailResult(value), !Task.isCancelled {
+                    try await Task.sleep(for: .milliseconds(250))
+                    guard prefetchTasks[key]?.id == id else { return }
+                    value = try await result(for: key, loader: loader)
                 }
             } catch {
-                // Prefetch failures are intentionally silent.
-                if inFlight[key]?.id == requestID {
-                    inFlight[key] = nil
-                    prefetchKeys.remove(key)
-                }
+                // Hover loading is best effort. A click can retry the detail.
             }
         }
+        prefetchTasks[key] = (id, task)
     }
 
     func clear() {
         entries.removeAll()
         for request in inFlight.values { request.task.cancel() }
         inFlight.removeAll()
-        prefetchKeys.removeAll()
+        for request in prefetchTasks.values { request.task.cancel() }
+        prefetchTasks.removeAll()
+        // Occupied slots are released only when each real loader exits.
+        NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
 
     func entryCount() -> Int {
@@ -316,6 +319,7 @@ actor VodDetailRepository {
            let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
             entries[oldest] = nil
         }
+        NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
 }
 

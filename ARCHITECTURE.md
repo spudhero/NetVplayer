@@ -82,7 +82,7 @@ Swift Package 的产品和 target 关系以 [`NetVplayer/Package.swift`](NetVpla
 
 首页在构造 `AppState` 时同步读取保存的点播配置是否存在：没有配置才显示添加入口，已有配置从首帧显示准备或加载状态。扩展支持页分别呈现构建未配置、首次安装未完成、本地包失效、更新检查失败和待升级，不以在线检查结果推断本地播放能力。
 
-目录缓存以配置 revision、站点、首页/分类、规范化筛选和页码为键，在会话内保存最多 64 页：5 分钟内直接命中，5 至 30 分钟保留当前列表并后台刷新，过期冷请求也不会先清空旧内容。详情缓存保留 10 分钟、最多 32 项，并与 250ms 悬停预取合并请求；玩偶详情先返回元数据和不可点击的 pending 线路，后台并发展开网盘目录后由 generation 校验更新同一页面。海报原始数据写入 `Caches/NetVplayer/Posters-v2`，按 256 MiB / 7 天裁剪，解码图使用 64 MiB 内存缓存。性能缓存清理只删除这些可重建数据与 WebKit 缓存；Cookie、LocalStorage、配置、历史、收藏、反馈和 Provider 保留，网页会话由独立操作删除。
+目录缓存以配置 revision、站点、首页/分类、规范化筛选和页码为键，在会话内保存最多 64 页：5 分钟内直接命中，5 至 30 分钟保留当前列表并后台刷新，过期冷请求也不会先清空旧内容。详情缓存保留 10 分钟、最多 32 项，并与 250ms 悬停预取合并请求；签名扩展和本机玩偶详情先返回元数据和不可点击的 pending 线路，后台并发展开网盘目录后由 generation 校验更新同一页面。海报原始数据写入 `Caches/NetVplayer/Posters-v2`，按 256 MiB / 7 天裁剪，解码图使用 64 MiB 内存缓存。性能缓存清理只删除这些可重建数据与 WebKit 缓存；Cookie、LocalStorage、配置、历史、收藏、反馈和 Provider 保留，网页会话由独立操作删除。
 
 ### Provider 信任边界
 
@@ -215,7 +215,7 @@ At startup, active local Provider versions are restored and verified before comp
 
 `AppState` reads whether a VOD configuration was saved before the first home-screen render. Only a truly unconfigured install shows the add-source prompt; a saved source shows preparation or loading immediately. Extension Settings distinguishes an unconfigured build, incomplete first install, invalid local package, failed update check, and pending upgrade without treating online status as a playback-health test.
 
-Catalog cache keys include the configuration revision, site, home/category identity, normalized filters, and page. A session keeps at most 64 pages: entries are fresh for five minutes, remain visible with background refresh for thirty minutes, and preserve existing content during an expired reload. The ten-minute, 32-entry detail cache coalesces clicks with 250ms hover prefetch. WoGG returns metadata and disabled pending routes before concurrent cloud-drive expansion completes, then generation checks update the same detail view. Poster bytes live under `Caches/NetVplayer/Posters-v2` with a 256 MiB seven-day disk policy and a 64 MiB decoded-image memory cache. Performance cleanup removes only reproducible caches and WebKit cache data; cookies, LocalStorage, configurations, history, favorites, reports, and Providers remain until their dedicated controls remove them.
+Catalog cache keys include the configuration revision, site, home/category identity, normalized filters, and page. A session keeps at most 64 pages: entries are fresh for five minutes, remain visible with background refresh for thirty minutes, and preserve existing content during an expired reload. The ten-minute, 32-entry detail cache coalesces clicks with 250ms hover prefetch. Signed extensions and local WoGG return metadata and disabled pending routes before concurrent cloud-drive expansion completes, then generation checks update the same detail view. Poster bytes live under `Caches/NetVplayer/Posters-v2` with a 256 MiB seven-day disk policy and a 64 MiB decoded-image memory cache. Performance cleanup removes only reproducible caches and WebKit cache data; cookies, LocalStorage, configurations, history, favorites, reports, and Providers remain until their dedicated controls remove them.
 
 ### Provider trust boundary
 
