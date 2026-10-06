@@ -12,6 +12,7 @@ struct nvp_curl_buffer {
     uint8_t *bytes;
     size_t length;
     size_t capacity;
+    size_t limit;
 };
 
 struct nvp_curl_response_headers {
@@ -39,6 +40,9 @@ static size_t nvp_curl_write(void *contents, size_t size, size_t count, void *co
         return 0;
     }
     size_t new_length = buffer->length + incoming;
+    if (buffer->limit != 0 && new_length > buffer->limit) {
+        return 0;
+    }
     if (new_length == SIZE_MAX) {
         return 0;
     }
@@ -245,6 +249,7 @@ int32_t nvp_curl_range_get(
     const char *range,
     const char *resolve_entry,
     const char *interface_name,
+    int32_t restrict_to_resolved_endpoint,
     long timeout_milliseconds,
     const int32_t *cancel_flag,
     uint8_t **out_bytes,
@@ -308,6 +313,9 @@ int32_t nvp_curl_range_get(
         out_accept_ranges,
         accept_ranges_capacity
     };
+    if (restrict_to_resolved_endpoint) {
+        buffer.limit = 4 * 1024 * 1024;
+    }
     struct curl_slist *headers = NULL;
     struct curl_slist *resolve_entries = NULL;
     if (!nvp_curl_append_header(&headers, "Cookie", cookie) ||
@@ -332,14 +340,19 @@ int32_t nvp_curl_range_get(
     curl_easy_setopt(handle, CURLOPT_REFERER, referer);
     curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(handle, CURLOPT_ACCEPT_ENCODING, "identity");
-    curl_easy_setopt(handle, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+    curl_easy_setopt(handle, CURLOPT_HTTP_VERSION,
+                     restrict_to_resolved_endpoint ? CURL_HTTP_VERSION_1_1 : CURL_HTTP_VERSION_2TLS);
     if (resolve_entries != NULL) {
         curl_easy_setopt(handle, CURLOPT_RESOLVE, resolve_entries);
     }
     if (interface_name[0] != '\0') {
         curl_easy_setopt(handle, CURLOPT_INTERFACE, interface_name);
     }
-    curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, restrict_to_resolved_endpoint ? 0L : 1L);
+    if (restrict_to_resolved_endpoint) {
+        curl_easy_setopt(handle, CURLOPT_PROXY, "");
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+    }
     curl_easy_setopt(handle, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS, timeout_milliseconds < 15000L ? timeout_milliseconds : 15000L);

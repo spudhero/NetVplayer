@@ -107,9 +107,9 @@ enum PlayerSkipEditorTarget: Equatable {
     var title: String {
         switch self {
         case .opening:
-            return "片头"
+            return L10n.text("片头")
         case .ending:
-            return "片尾"
+            return L10n.text("片尾")
         }
     }
 }
@@ -361,7 +361,10 @@ enum PlayerHUDVisualPolicy {
 
     static func audioStatusText(for track: PlayerTrackInfo) -> String {
         let displayName = track.displayName
-        return displayName.hasPrefix("音轨 ") ? displayName : "音轨 \(displayName)"
+        let isGeneratedFallback = track.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && track.language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && track.format.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return isGeneratedFallback ? displayName : L10n.text("音轨 {0}", ["\(displayName)"])
     }
 
     static func episodeSortSymbolName(descending: Bool) -> String {
@@ -447,12 +450,11 @@ enum PlayerHUDVisualPolicy {
     static let popoverBackedControlSlots: [PlayerHUDControlSlot] = [
         .subtitles,
         .audio,
-    ]
-
-    static let cyclicControlSlots: [PlayerHUDControlSlot] = [
         .aspectRatio,
         .speed,
     ]
+
+    static let cyclicControlSlots: [PlayerHUDControlSlot] = []
 
     static let skipAnchorWidth: CGFloat = 144
     static let skipChipWidth: CGFloat = 66
@@ -636,7 +638,7 @@ enum PlayerSkipEditorPolicy {
            duration.isFinite,
            duration > 0,
            Double(nextOpening + nextEnding + 10) > duration {
-            return "片头与片尾之间至少保留 10 秒。"
+            return L10n.text("片头与片尾之间至少保留 10 秒。")
         }
         return nil
     }
@@ -667,6 +669,7 @@ enum PlayerHUDGlyphKind: CaseIterable, Equatable {
     case forward10
     case nextEpisode
     case episodeGrid
+    case chapters
     case subtitles
     case audio
     case aspectRatio
@@ -747,12 +750,14 @@ struct PlayerView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var showHUD: Bool = true
+    @State private var videoSurfaceRevision: Int = 0
     @State private var isPointerInsidePlayer: Bool = false
     @State private var overlayPanel: PlayerOverlayPanel = .none
     @State private var hideHUDTimer: Timer?
     @State private var progressSaveTimer: Timer?
     @State private var isSeeking: Bool = false
     @State private var pendingSeekPosition: Double = 0
+    @State private var subtitleAppearance = UserPreferences.shared.subtitleAppearance
     @State private var subtitleFontSize: Int = UserPreferences.shared.subtitleFontSize
     @State private var subtitlePosition: Int = UserPreferences.shared.subtitlePosition
     @State private var subtitleOverrideSourceStyle: Bool = UserPreferences.shared.subtitleOverrideSourceStyle
@@ -762,7 +767,6 @@ struct PlayerView: View {
     @State private var danmakuOpacity: Double = UserPreferences.shared.danmakuOpacity
     @State private var danmakuFontSize: Int = UserPreferences.shared.danmakuFontSize
     @State private var danmakuOffsetMs: Int = UserPreferences.shared.danmakuOffsetMs
-    @State private var episodeSortDescending: Bool = true
     @State private var isSkipEditorPresented: Bool = false
     @State private var skipEditorTarget: PlayerSkipEditorTarget = .opening
     @State private var skipDraftText: String = "00:00"
@@ -770,9 +774,16 @@ struct PlayerView: View {
     @State private var skipEditorHint: String = ""
     @State private var skipEditorError: String?
     @State private var isVolumePopoverPresented: Bool = false
+    @State private var isOnlineSubtitlePresented = false
     @State private var isSubtitlePopoverPresented: Bool = false
     @State private var isAudioPopoverPresented: Bool = false
-    @State private var lastNonZeroVolume: Float = 1.0
+    @State private var isSpeedPopoverPresented = false
+    @State private var isAspectPopoverPresented = false
+    @State private var isChapterPanelPresented = false
+    @State private var hoveredChapterID: Int?
+    @State private var hasDraggedTimeline = false
+    @StateObject private var chapterPreviewStore = PlayerChapterPreviewStore()
+    @State private var settingsCategory: PlayerSettingsCategory = .playback
 
     private let visualRegressionConfiguration: PlayerVisualRegressionConfiguration?
 
@@ -804,7 +815,7 @@ struct PlayerView: View {
         let state = visualRegressionConfiguration?.state
         let initialOverlayPanel: PlayerOverlayPanel
         switch state {
-        case .settingsDrawer:
+        case .settingsDrawer, .subtitleSettings:
             initialOverlayPanel = .settings
         case .episodeDrawer:
             initialOverlayPanel = .episodes
@@ -813,130 +824,218 @@ struct PlayerView: View {
         }
         _showHUD = State(initialValue: state != .hudHidden)
         _overlayPanel = State(initialValue: initialOverlayPanel)
+        _settingsCategory = State(initialValue: state == .subtitleSettings ? .subtitles : .playback)
         _isSkipEditorPresented = State(initialValue: state == .skipDialog)
+        _isChapterPanelPresented = State(initialValue: state == .chapterNavigation)
+    }
+
+    private var compactControlsLayer: some View {
+        CompactPlayerControls(
+            kind: .vod,
+            isPlaying: playerState.isPlaying,
+            isPlaybackEnabled: playerState.currentSpec != nil && !appState.isPreparingVodPlayback,
+            position: displayedPosition,
+            duration: displayedDuration,
+            isAlwaysOnTop: windowContext.isAlwaysOnTop,
+            isVisible: compactControlsAreVisible,
+            mediaID: timelineMediaID,
+            visualRegressionProgress: visualRegressionConfiguration?.state == .timePreview ? 0.98 :
+                (visualRegressionConfiguration?.state == .chapterPreview ? 0.35 : nil),
+            chapters: playerState.chapters,
+            onSelectChapter: chapterAction,
+            chapterSpec: playerState.currentSpec,
+            chapterPreviewStore: chapterPreviewStore,
+            chapterFixtureURL: visualRegressionConfiguration?.fixtureURL,
+            onChapterPresentationChange: { isChapterPanelPresented = $0 },
+            onTogglePlayback: togglePlayPause,
+            onSeek: { target in
+                MPVPlayerEngine.vod.seek(to: Int64(target * 1_000))
+            },
+            onToggleAlwaysOnTop: {
+                _ = windowContext.toggleAlwaysOnTop()
+            },
+            onRestoreWindow: {
+                _ = windowContext.restoreRegularWindow()
+            },
+            onClose: exitPlayer
+        )
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            let usesCompactControls = CompactPlayerLayoutPolicy.isCompact(
-                contentSize: windowContext.contentSize == .zero
-                    ? proxy.size
-                    : windowContext.contentSize
-            )
-
-            ZStack {
-                videoLayer
-
-                videoInteractionLayer
-                    .zIndex(0.5)
-
-                if usesCompactControls {
-                    CompactPlayerStatusOverlay(
-                        isLoading: isPlaybackActivityActive,
-                        errorMessage: playerState.errorMessage ?? appState.playbackWarningMessage
-                    )
-                    .zIndex(2)
-
-                    CompactPlayerControls(
-                        kind: .vod,
-                        isPlaying: playerState.isPlaying,
-                        isPlaybackEnabled: playerState.currentSpec != nil,
-                        position: playerState.position,
-                        duration: playerState.duration,
-                        isAlwaysOnTop: windowContext.isAlwaysOnTop,
-                        isVisible: compactControlsAreVisible,
-                        onTogglePlayback: togglePlayPause,
-                        onSeek: { target in
-                            MPVPlayerEngine.vod.seek(to: Int64(target * 1_000))
-                        },
-                        onToggleAlwaysOnTop: {
-                            _ = windowContext.toggleAlwaysOnTop()
-                        },
-                        onRestoreWindow: {
-                            _ = windowContext.restoreRegularWindow()
-                        },
-                        onClose: exitPlayer
-                    )
-                    .zIndex(3)
-                } else {
-                    PlayerReferenceCanvas(availableSize: proxy.size) {
-                        playerOverlayCanvas
-                    }
-                    .zIndex(PlayerOverlayLayerPolicy.referenceCanvas)
-
-                    PlayerPlaybackActivityView(
-                        phase: playbackActivityPhase,
-                        progress: playerState.isMediaLoading ? nil : playerState.cacheBufferingProgress,
-                        speedBytesPerSecond: playbackActivitySpeedBytesPerSecond,
-                        bufferedAheadDuration: playbackActivityBufferedAheadDuration,
-                        transferredBytes: playerState.isMediaLoading ? playerState.seekReceivedBytes : nil,
-                        showsImmediately: visualRegressionConfiguration?.state == .loading
-                            || visualRegressionConfiguration?.state == .buffering
-                    )
-                    .zIndex(PlayerOverlayLayerPolicy.playbackActivity)
-
-                    if isPrimaryHUDVisible {
-                        topHUDBackdrop(availableSize: proxy.size)
-                            .transition(.opacity)
-                            .zIndex(2)
-
-                        PlayerReferenceCanvas(availableSize: proxy.size, verticalAnchor: .bottom) {
-                            bottomHUDLayer
-                        }
-                        .transition(.opacity)
-                        .zIndex(3)
-
-                        PlayerReferenceCanvas(availableSize: proxy.size, verticalAnchor: .top) {
-                            topHUDLayer
-                        }
-                        .transition(.opacity)
-                        .zIndex(4)
-                    }
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .background(Color.black)
-            .onContinuousHover { phase in
-                guard visualRegressionConfiguration == nil else { return }
-                switch phase {
-                case .active:
-                    isPointerInsidePlayer = true
-                    showHUDTemporarily()
-                case .ended:
+        popoverLifecycleContent
+        .onChange(of: timelineMediaID) { _, _ in
+            isChapterPanelPresented = false
+            hoveredChapterID = nil
+            chapterPreviewStore.reset(mediaID: timelineMediaID)
+        }
+        .onChange(of: playerState.chapters) { _, chapters in
+            if chapters.isEmpty { isChapterPanelPresented = false }
+        }
+        .task(id: chapterPreviewWarmupIdentity) {
+            guard visualRegressionConfiguration == nil, chapterPreviewWarmupReady else { return }
+            await chapterPreviewStore.prefetch(spec: playerState.currentSpec, mediaID: timelineMediaID,
+                targets: PlayerChapterPreviewPolicy.targets(chapters: playerState.chapters, duration: playerState.duration),
+                position: playerState.position)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                resetHUDTimer()
+            } else {
+                if !windowContext.isCompact {
                     isPointerInsidePlayer = false
-                    restorePlayerCursor()
-                    resetHUDTimer()
                 }
-            }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: showHUD)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: overlayPanel)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isSkipEditorPresented)
-            .onChange(of: usesCompactControls) { _, isCompact in
-                handleCompactModeChange(isCompact)
+                hideHUDTimer?.invalidate()
+                restorePlayerCursor()
             }
         }
+    }
+
+    private var playbackContent: some View {
+        GeometryReader { proxy in
+            playerCanvas(availableSize: proxy.size)
+        }
         .ignoresSafeArea()
+        .sheet(isPresented: $isOnlineSubtitlePresented) {
+            OnlineSubtitleSearchView(player: playerState) { sub, slot in
+                appState.attachSubtitleForCurrentPlayback(sub, slot: slot)
+            }
+        }
         .preferredColorScheme(.dark)
         .background {
             PlayerShortcutMonitor(
-                isPlaybackControlEnabled: !isSkipEditorPresented,
+                isPlaybackControlEnabled: !isSkipEditorPresented && !isOnlineSubtitlePresented,
                 isScrollVolumeEnabled: overlayPanel == .none
                     && !isSkipEditorPresented
                     && !isVolumePopoverPresented
                     && !isSubtitlePopoverPresented
                     && !isAudioPopoverPresented
+                    && !isSpeedPopoverPresented
+                    && !isAspectPopoverPresented
+                    && !isChapterPanelPresented
             ) { command, _ in
                 handleKeyboardShortcut(command)
             }
             .frame(width: 0, height: 0)
         }
+    }
+
+    @ViewBuilder
+    private func playerCanvas(availableSize: CGSize) -> some View {
+        let usesCompactControls = CompactPlayerLayoutPolicy.isCompact(
+            contentSize: windowContext.contentSize == .zero ? availableSize : windowContext.contentSize
+        )
+        ZStack {
+            videoLayer
+
+            videoInteractionLayer
+                .zIndex(0.5)
+
+            if isChapterPanelPresented, !usesCompactControls {
+                Color.black.opacity(0.001).contentShape(Rectangle())
+                    .onTapGesture { isChapterPanelPresented = false }
+                    .zIndex(2.9)
+            }
+
+            if usesCompactControls {
+                CompactPlayerStatusOverlay(
+                    isLoading: isPlaybackActivityActive,
+                    errorMessage: playerState.errorMessage ?? appState.playbackWarningMessage
+                )
+                .zIndex(2)
+
+                compactControlsLayer
+                .zIndex(3)
+            } else {
+                regularPlayerLayers(availableSize: availableSize)
+            }
+            playbackEndedLayer(availableSize: availableSize, usesCompactControls: usesCompactControls)
+        }
+        .frame(width: availableSize.width, height: availableSize.height)
+        .background(Color.black)
+        .onContinuousHover { phase in
+            guard visualRegressionConfiguration == nil else { return }
+            switch phase {
+            case .active:
+                isPointerInsidePlayer = true
+                showHUDTemporarily()
+            case .ended:
+                isPointerInsidePlayer = false
+                restorePlayerCursor()
+                resetHUDTimer()
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: showHUD)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: overlayPanel)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isSkipEditorPresented)
+        .onChange(of: usesCompactControls) { _, isCompact in
+            handleCompactModeChange(isCompact)
+        }
+    }
+
+    @ViewBuilder
+    private func regularPlayerLayers(availableSize: CGSize) -> some View {
+        PlayerReferenceCanvas(availableSize: availableSize) {
+            playerOverlayCanvas
+        }
+        .zIndex(PlayerOverlayLayerPolicy.referenceCanvas)
+
+        PlayerPlaybackActivityView(
+            phase: playbackActivityPhase,
+            progress: appState.isPreparingVodPlayback || playerState.isMediaLoading ? nil : playerState.cacheBufferingProgress,
+            speedBytesPerSecond: playbackActivitySpeedBytesPerSecond,
+            bufferedAheadDuration: playbackActivityBufferedAheadDuration,
+            transferredBytes: !appState.isPreparingVodPlayback && playerState.isMediaLoading ? playerState.seekReceivedBytes : nil,
+            showsImmediately: visualRegressionConfiguration?.state == .loading
+                || visualRegressionConfiguration?.state == .buffering
+        )
+        .zIndex(PlayerOverlayLayerPolicy.playbackActivity)
+
+        if isPrimaryHUDVisible {
+            topHUDBackdrop(availableSize: availableSize)
+                .transition(.opacity)
+                .zIndex(2)
+
+            PlayerReferenceCanvas(availableSize: availableSize, verticalAnchor: .bottom) {
+                bottomHUDLayer
+            }
+            .transition(.opacity)
+            .zIndex(3)
+
+            PlayerReferenceCanvas(availableSize: availableSize, verticalAnchor: .top) {
+                topHUDLayer
+            }
+            .transition(.opacity)
+            .zIndex(4)
+        }
+    }
+
+    @ViewBuilder
+    private func playbackEndedLayer(availableSize: CGSize, usesCompactControls: Bool) -> some View {
+        if appState.shouldShowPlaybackEndedPanel, overlayPanel == .none {
+            PlaybackEndedPanel(
+                compact: usesCompactControls,
+                interrupted: playerState.endDisposition == .premature,
+                listState: appState.episodeListState,
+                hasNext: appState.playbackEpisodeContext().hasNext,
+                onReplay: { Task { await appState.replayCurrentEpisode() } },
+                onNext: { Task { await appState.playRelativeEpisode(offset: 1) } },
+                onRetryList: { Task { await appState.retryEpisodeList() } }
+            )
+            .frame(width: min(420, max(0, availableSize.width - 32)))
+            .padding(16)
+            .offset(y: usesCompactControls ? -12 : 0)
+            .zIndex(5)
+        }
+    }
+
+    private var playbackLifecycleContent: some View {
+        playbackContent
         .onAppear {
             if visualRegressionConfiguration == nil {
                 syncSettingsState()
             } else {
                 applyVisualRegressionSettingsState()
             }
-            lastNonZeroVolume = max(0.01, appState.playerState.volume)
             if visualRegressionConfiguration == nil {
                 startProgressSaveTimer()
                 resetHUDTimer()
@@ -947,6 +1046,7 @@ struct PlayerView: View {
             progressSaveTimer?.invalidate()
             isPointerInsidePlayer = false
             restorePlayerCursor()
+            chapterPreviewStore.reset()
             appState.cleanupDrivePlaybackIfNeeded(spec: appState.playerState.currentSpec)
         }
         .onChange(of: currentVodSkipIdentity) { _, _ in
@@ -967,6 +1067,9 @@ struct PlayerView: View {
             isVolumePopoverPresented = false
             isSubtitlePopoverPresented = false
             isAudioPopoverPresented = false
+            isSpeedPopoverPresented = false
+            isAspectPopoverPresented = false
+            isChapterPanelPresented = false
             if panel == .none {
                 resetHUDTimer()
             } else {
@@ -982,21 +1085,30 @@ struct PlayerView: View {
                 resetHUDTimer()
             }
         }
+    }
+
+    private var popoverLifecycleContent: some View {
+        playbackLifecycleContent
         .onChange(of: isSubtitlePopoverPresented) { _, isPresented in
+            updateTrackPopoverTimer(isPresented: isPresented)
+        }
+        .onChange(of: isAspectPopoverPresented) { _, isPresented in
+            updateTrackPopoverTimer(isPresented: isPresented)
+        }
+        .onChange(of: isSpeedPopoverPresented) { _, isPresented in
             updateTrackPopoverTimer(isPresented: isPresented)
         }
         .onChange(of: isAudioPopoverPresented) { _, isPresented in
             updateTrackPopoverTimer(isPresented: isPresented)
         }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                resetHUDTimer()
-            } else {
-                if !windowContext.isCompact {
-                    isPointerInsidePlayer = false
-                }
-                hideHUDTimer?.invalidate()
-                restorePlayerCursor()
+        .onChange(of: isChapterPanelPresented) { _, isPresented in
+            updateTrackPopoverTimer(isPresented: isPresented)
+            if isPresented {
+                isVolumePopoverPresented = false
+                isSubtitlePopoverPresented = false
+                isAudioPopoverPresented = false
+                isSpeedPopoverPresented = false
+                isAspectPopoverPresented = false
             }
         }
     }
@@ -1018,6 +1130,9 @@ struct PlayerView: View {
             isVolumePopoverPresented = false
             isSubtitlePopoverPresented = false
             isAudioPopoverPresented = false
+            isSpeedPopoverPresented = false
+            isAspectPopoverPresented = false
+            isChapterPanelPresented = false
             restorePlayerCursor()
         } else {
             showHUDTemporarily()
@@ -1074,11 +1189,18 @@ struct PlayerView: View {
                     .clipped()
             } else {
                 MPVVideoView(engine: MPVPlayerEngine.vod, surface: .vod)
+                    .id(videoSurfaceRevision)
             }
             if shouldRenderDanmaku {
-                DanmakuOverlayView(
+                DanmakuCanvas(
                     cues: appState.currentDanmakuCues,
-                    positionMs: Int((appState.playerState.position * 1000).rounded()) + danmakuOffsetMs,
+                    epoch: appState.danmakuRenderRevision.uuidString + (playerState.currentSpec?.metadata["playback.sessionGeneration"] ?? ""),
+                    position: playerState.position,
+                    rate: Double(playerState.speed),
+                    playing: playerState.isPlaying,
+                    buffering: playerState.isBuffering || playerState.isMediaLoading,
+                    seeking: playerState.isSeeking,
+                    offsetMs: playerState.currentSpec?.danmakuAttachment?.offsetMs ?? danmakuOffsetMs,
                     opacity: danmakuOpacity,
                     fontSize: danmakuFontSize
                 )
@@ -1165,6 +1287,25 @@ struct PlayerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.container, edges: .top)
+        .overlayPreferenceValue(ChapterButtonAnchorPreferenceKey.self) { anchor in
+            GeometryReader { proxy in
+                if isChapterPanelPresented, let anchor {
+                    let rect = proxy[anchor]
+                    let height = PlayerChapterVisualPolicy.panelHeight(count: playerState.chapters.count)
+                    ChapterNavigationPanel(chapters: playerState.chapters, position: playerState.position,
+                        duration: playerState.duration, spec: playerState.currentSpec, mediaID: timelineMediaID,
+                        previewStore: chapterPreviewStore, fixtureURL: visualRegressionConfiguration?.fixtureURL,
+                        onSelect: { id in chapterAction(id); isChapterPanelPresented = false },
+                        onClose: { isChapterPanelPresented = false })
+                        .fixedSize()
+                        .position(x: PlayerTimelineCoordinatePolicy.previewCenter(x: rect.midX,
+                            width: proxy.size.width, bubbleWidth: PlayerChapterVisualPolicy.panelWidth),
+                            y: max(height / 2 + 12, min(rect.minY,
+                                PlayerHUDLayoutPolicy.referenceSize.height - PlayerHUDVisualPolicy.bottomBottomInset
+                                    - PlayerHUDVisualPolicy.bottomMinHeight) - height / 2 - 12))
+                }
+            }
+        }
     }
 
     private var topGlassBar: some View {
@@ -1175,7 +1316,7 @@ struct PlayerView: View {
                 } label: {
                     HStack(spacing: 8) {
                         PlayerHUDGlyph(kind: .backArrow, size: PlayerHUDVisualPolicy.topBackIconSize, baseStrokeWidth: PlayerHUDVisualPolicy.menuGlyphStrokeWidth)
-                        Text("返回详情")
+                        Text(L10n.text("返回详情"))
                     }
                     .font(.system(size: PlayerHUDVisualPolicy.topBackFontSize, weight: .semibold))
                     .frame(minHeight: PlayerHUDVisualPolicy.topBackButtonHeight)
@@ -1188,7 +1329,7 @@ struct PlayerView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .help("保存进度并返回详情")
+                .help(L10n.text("保存进度并返回详情"))
 
                 Spacer()
             }
@@ -1207,7 +1348,7 @@ struct PlayerView: View {
                 if !activeLineLabel.isEmpty {
                     HStack(spacing: 7) {
                         PlayerHUDGlyph(kind: .routeBolt, size: PlayerHUDVisualPolicy.topRouteIconSize, baseStrokeWidth: PlayerHUDVisualPolicy.menuGlyphStrokeWidth)
-                        Text("线路：\(activeLineLabel)")
+                        Text(L10n.text("线路：{0}", ["\(activeLineLabel)"]))
                     }
                     .font(.system(size: PlayerHUDVisualPolicy.topRouteFontSize, weight: .semibold))
                     .lineLimit(1)
@@ -1258,7 +1399,7 @@ struct PlayerView: View {
 
                 timelineSlider
 
-                Text(formatClock(appState.playerState.duration))
+                Text(formatClock(displayedDuration))
                     .font(.system(size: PlayerHUDVisualPolicy.progressTimeFontSize, design: .monospaced))
                     .foregroundStyle(PlayerHUDPalette.foreground.opacity(0.88))
                     .frame(width: PlayerHUDVisualPolicy.progressTrackTimeWidth, alignment: .trailing)
@@ -1276,10 +1417,27 @@ struct PlayerView: View {
                 .frame(width: PlayerHUDVisualPolicy.progressPlayButtonSize, height: PlayerHUDVisualPolicy.progressPlayButtonSize)
                 .background(controlIconBackground(isActive: false, isPrimary: true))
                 .foregroundStyle(.white)
-                .accessibilityLabel(appState.playerState.isPlaying ? "暂停" : "播放")
+                .accessibilityLabel(appState.playerState.isPlaying ? L10n.text("暂停") : L10n.text("播放"))
         }
         .buttonStyle(.plain)
-        .help(appState.playerState.isPlaying ? "暂停" : "播放")
+        .help(appState.playerState.isPlaying ? L10n.text("暂停") : L10n.text("播放"))
+        .disabled(appState.isPreparingVodPlayback)
+    }
+
+    private var timelineMediaID: String {
+        (playerState.currentSpec?.metadata["playback.sessionGeneration"] ?? "")
+            + (playerState.currentSpec?.url ?? "")
+    }
+
+    private var chapterPreviewWarmupReady: Bool {
+        playerState.isPlaying && !playerState.isMediaLoading && !playerState.isBuffering
+            && !playerState.isSeeking && !playerState.chapters.isEmpty && playerState.errorMessage == nil
+    }
+
+    private var chapterPreviewWarmupIdentity: String {
+        timelineMediaID + ":" + String(chapterPreviewWarmupReady)
+            + ":" + String(playerState.duration)
+            + ":" + playerState.chapters.map { String($0.seconds) }.joined(separator: ",")
     }
 
     private var timelineSlider: some View {
@@ -1287,12 +1445,12 @@ struct PlayerView: View {
             let width = timelineProxy.size.width
             let thumbX = PlayerTimelineMarkerPolicy.markerCenterX(
                 value: Int(displayedPosition.rounded()),
-                duration: appState.playerState.duration,
+                duration: displayedDuration,
                 trackWidth: width
             ) ?? PlayerHUDVisualPolicy.timelineThumbSize / 2
             let bufferedWidth = PlayerTimelineMarkerPolicy.fillWidth(
                 value: appState.playerState.bufferedPosition,
-                duration: appState.playerState.duration,
+                duration: displayedDuration,
                 trackWidth: width
             )
 
@@ -1332,15 +1490,47 @@ struct PlayerView: View {
             }
             .frame(width: width, height: PlayerHUDVisualPolicy.timelineHeight)
             .contentShape(Rectangle())
+            .overlay { ChapterTimelineMarkers(chapters: playerState.chapters, duration: playerState.duration,
+                thumbWidth: PlayerHUDVisualPolicy.timelineThumbSize, position: displayedPosition, hoveredChapterID: hoveredChapterID) }
+            .modifier(PlayerTimelinePreview(duration: playerState.duration,
+                thumbWidth: PlayerHUDVisualPolicy.timelineThumbSize,
+                mediaID: timelineMediaID, isEnabled: canSeek && isPrimaryHUDVisible,
+                onReset: { isSeeking = false },
+                visualRegressionProgress: visualRegressionConfiguration?.state == .timePreview ? 0.98 :
+                    (visualRegressionConfiguration?.state == .chapterPreview ? 0.35 : nil),
+                chapters: playerState.chapters, spec: playerState.currentSpec, previewStore: chapterPreviewStore,
+                fixtureURL: visualRegressionConfiguration?.fixtureURL, isChapterPanelPresented: isChapterPanelPresented,
+                isDragging: isSeeking, onChapterHover: { hoveredChapterID = $0 }))
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        if !isSeeking { hasDraggedTimeline = false }
+                        if !PlayerChapterPresentationPolicy.isClick(translation: value.translation) { hasDraggedTimeline = true }
                         updateTimelineSeek(locationX: value.location.x, trackWidth: width, commit: false)
                     }
                     .onEnded { value in
-                        updateTimelineSeek(locationX: value.location.x, trackWidth: width, commit: true)
+                        let hasDragged = hasDraggedTimeline
+                        hasDraggedTimeline = false
+                        if canSeek, PlayerChapterPresentationPolicy.isClick(translation: value.translation, hasDragged: hasDragged),
+                           let chapter = PlayerChapterPresentationPolicy.hit(at: value.location.x, width: width,
+                            chapters: playerState.chapters, duration: playerState.duration,
+                            thumbWidth: PlayerHUDVisualPolicy.timelineThumbSize) {
+                            isSeeking = false
+                            chapterAction(chapter.id)
+                            resetHUDTimer()
+                        } else {
+                            updateTimelineSeek(locationX: value.location.x, trackWidth: width, commit: true)
+                        }
                     }
             )
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(L10n.text("播放进度"))
+            .accessibilityChildren {
+                ForEach(playerState.chapters) { chapter in
+                    Button(PlayerChapterPresentationPolicy.title(for: chapter, in: playerState.chapters)
+                        + ", " + PlayerTimelineCoordinatePolicy.label(seconds: chapter.seconds)) { chapterAction(chapter.id) }
+                }
+            }
         }
         .frame(height: PlayerHUDVisualPolicy.timelineHeight)
     }
@@ -1349,7 +1539,7 @@ struct PlayerView: View {
     private func timelineSkipMarker(kind: PlayerHUDSkipKind, seconds: Int, width: CGFloat) -> some View {
         if let x = PlayerTimelineMarkerPolicy.markerCenterX(
             value: seconds,
-            duration: appState.playerState.duration,
+            duration: displayedDuration,
             trackWidth: width
         ) {
             VStack(spacing: 0) {
@@ -1402,15 +1592,15 @@ struct PlayerView: View {
     private var episodeControlsCluster: some View {
         let context = appState.playbackEpisodeContext()
         return HStack(alignment: .top, spacing: PlayerHUDVisualPolicy.controlClusterGap) {
-            hudControlButton(title: "上一集", glyph: .previousEpisode, disabled: !context.hasPrevious || appState.isPlayerLoading) {
+            hudControlButton(title: L10n.text("上一集"), glyph: .previousEpisode, disabled: !context.hasPrevious || appState.isPreparingVodPlayback) {
                 playRelativeEpisode(-1)
             }
 
-            hudControlButton(title: "下一集", glyph: .nextEpisode, disabled: !context.hasNext || appState.isPlayerLoading) {
+            hudControlButton(title: L10n.text("下一集"), glyph: .nextEpisode, disabled: !context.hasNext || appState.isPreparingVodPlayback) {
                 playRelativeEpisode(1)
             }
 
-            hudControlButton(title: "选集", glyph: .episodeGrid, isActive: overlayPanel == .episodes) {
+            hudControlButton(title: L10n.text("选集"), glyph: .episodeGrid, isActive: overlayPanel == .episodes) {
                 toggleOverlayPanel(.episodes)
             }
         }
@@ -1419,11 +1609,11 @@ struct PlayerView: View {
 
     private var jumpControlsCluster: some View {
         HStack(alignment: .top, spacing: PlayerHUDVisualPolicy.controlClusterGap) {
-            hudControlButton(title: "后退10秒", glyph: .rewind10, disabled: !canSeek) {
+            hudControlButton(title: L10n.text("后退10秒"), glyph: .rewind10, disabled: !canSeek) {
                 seekBy(-10)
             }
 
-            hudControlButton(title: "前进10秒", glyph: .forward10, disabled: !canSeek) {
+            hudControlButton(title: L10n.text("前进10秒"), glyph: .forward10, disabled: !canSeek) {
                 seekBy(10)
             }
         }
@@ -1435,11 +1625,11 @@ struct PlayerView: View {
             ForEach(PlayerHUDVisualPolicy.visibleSkipKinds(openingSkip: openingSkip, endingSkip: endingSkip), id: \.self) { kind in
                 switch kind {
                 case .opening:
-                    skipControlButton(label: "首", seconds: openingSkip, target: .opening, missingSide: .leading) {
+                    skipControlButton(label: L10n.text("首"), seconds: openingSkip, target: .opening, missingSide: .leading) {
                         openSkipEditor(.opening)
                     }
                 case .ending:
-                    skipControlButton(label: "尾", seconds: endingSkip, target: .ending, missingSide: .trailing) {
+                    skipControlButton(label: L10n.text("尾"), seconds: endingSkip, target: .ending, missingSide: .trailing) {
                         openSkipEditor(.ending)
                     }
                 }
@@ -1454,50 +1644,77 @@ struct PlayerView: View {
             .frame(maxWidth: .infinity, alignment: .center)
     }
 
+    private var chapterAction: (Int) -> Void {
+        let owner = playerState.chapterOwnerID
+        return { id in
+            guard let owner else { return }
+            MPVPlayerEngine.vod.seekToChapter(id: id, owner: owner)
+        }
+    }
+
     private var rightFeatureControls: some View {
         HStack(alignment: .top, spacing: PlayerHUDVisualPolicy.featureClusterGap) {
+            if !playerState.chapters.isEmpty {
+                chapterControl
+            }
             subtitleControl
             audioControl
             aspectRatioControl
             speedControl
             volumeControl
-            featureControlButton(title: "设置", glyph: .settings, isActive: overlayPanel == .settings) {
+            featureControlButton(title: L10n.text("设置"), glyph: .settings, isActive: overlayPanel == .settings) {
                 toggleOverlayPanel(.settings)
             }
-            featureControlButton(title: "全屏", glyph: .fullscreen) {
+            featureControlButton(title: L10n.text("全屏"), glyph: .fullscreen) {
                 toggleFullScreen()
             }
         }
     }
 
+    private var chapterControl: some View {
+        let current = PlayerChapterPolicy.current(at: playerState.position, in: playerState.chapters)
+        let index = current.map { PlayerChapterPresentationPolicy.number(of: $0, in: playerState.chapters) } ?? 1
+        return featureControlButton(title: L10n.text("章节"), glyph: .chapters,
+            detail: "\(index)/\(playerState.chapters.count)", isActive: isChapterPanelPresented) {
+                isChapterPanelPresented.toggle()
+            }
+            .anchorPreference(key: ChapterButtonAnchorPreferenceKey.self, value: .bounds) { $0 }
+    }
+
     private var aspectRatioControl: some View {
-        featureControlButton(
-            title: "比例",
-            glyph: .aspectRatio,
-            detail: playerState.videoAspectMode.displayName,
-            isActive: playerState.videoAspectMode != .fit
+        featurePopoverControl(
+            title: L10n.text("比例"), glyph: .aspectRatio, detail: playerState.videoAspectMode.displayName,
+            isActive: playerState.videoAspectMode != .fit, isPresented: $isAspectPopoverPresented
         ) {
-            cycleVideoAspectMode()
+            trackSelectionPopover(title: L10n.text("画面比例"), optionCount: PlayerVideoAspectMode.allCases.count) {
+                ForEach(PlayerVideoAspectMode.allCases, id: \.self) { mode in
+                    trackOptionButton(title: mode.displayName, isSelected: playerState.videoAspectMode == mode) {
+                        setVideoAspectMode(mode)
+                        isAspectPopoverPresented = false
+                    }
+                }
+            }
         }
     }
 
     private var volumeControl: some View {
         ZStack(alignment: .top) {
             Button {
+                isChapterPanelPresented = false
                 isVolumePopoverPresented.toggle()
                 showHUDTemporarily()
             } label: {
                 featureControlLabel(
-                    title: appState.playerState.volume <= 0 ? "静音" : "音量",
+                    title: (appState.playerState.isMuted || appState.playerState.volume <= 0) ? L10n.text("静音") : L10n.text("音量"),
                     glyph: .volume,
                     detail: volumePercentText,
-                    isActive: isVolumePopoverPresented || appState.playerState.volume <= 0
+                    isActive: isVolumePopoverPresented || (appState.playerState.isMuted || appState.playerState.volume <= 0)
                 )
             }
             .buttonStyle(.plain)
             .frame(width: PlayerHUDVisualPolicy.menuControlWidth, height: PlayerHUDVisualPolicy.menuControlHeight)
             .contentShape(Rectangle())
-            .help("音量，点击展开调节条，双击静音")
+            .help(L10n.text("音量，点击展开调节条，双击静音"))
             .simultaneousGesture(TapGesture(count: 2).onEnded {
                 toggleMute()
             })
@@ -1579,10 +1796,10 @@ struct PlayerView: View {
 
     private var subtitleControl: some View {
         featurePopoverControl(
-            title: "字幕",
+            title: L10n.text("字幕"),
             glyph: .subtitles,
             isActive: playerState.selectedSubtitleTrackID != nil,
-            isUnavailable: playerState.subtitleTracks.isEmpty,
+            isUnavailable: playerState.currentSpec == nil,
             isPresented: $isSubtitlePopoverPresented
         ) {
             subtitleTrackPopover
@@ -1591,9 +1808,9 @@ struct PlayerView: View {
 
     private var audioControl: some View {
         featurePopoverControl(
-            title: "音轨",
+            title: L10n.text("音轨"),
             glyph: .audio,
-            detail: playerState.selectedAudioTrackID == nil ? nil : "已选",
+            detail: playerState.selectedAudioTrackID == nil ? nil : L10n.text("已选"),
             isActive: playerState.selectedAudioTrackID != nil,
             isUnavailable: playerState.audioTracks.isEmpty,
             isPresented: $isAudioPopoverPresented
@@ -1603,50 +1820,59 @@ struct PlayerView: View {
     }
 
     private var subtitleTrackPopover: some View {
-        trackSelectionPopover(
-            title: "字幕",
-            optionCount: playerState.subtitleTracks.isEmpty ? 0 : playerState.subtitleTracks.count + 1
-        ) {
-            if playerState.subtitleTracks.isEmpty {
-                trackPopoverEmptyState("暂无可选字幕")
-            } else {
-                trackOptionButton(title: "关闭字幕", isSelected: playerState.selectedSubtitleTrackID == nil) {
-                    MPVPlayerEngine.vod.disableSubtitle()
-                    appState.saveTrackPreference(
-                        type: .subtitle,
-                        id: PlaybackLinkage.disabledSubtitleTrackID,
-                        name: "关闭字幕",
-                        format: ""
-                    )
-                    isSubtitlePopoverPresented = false
-                }
-
-                ForEach(playerState.subtitleTracks) { track in
-                    trackOptionButton(title: track.displayName, isSelected: playerState.selectedSubtitleTrackID == track.id) {
-                        if track.isExternal,
-                           let sub = playerState.currentSpec?.subs.first(where: { "external:\($0.id)" == track.id }) {
-                            MPVPlayerEngine.vod.loadExternalSubtitle(sub, select: true)
-                        } else {
-                            MPVPlayerEngine.vod.selectSubtitleTrack(id: track.id)
-                        }
-                        appState.saveTrackPreference(type: .subtitle, id: track.id, name: track.displayName, format: track.format)
-                        isSubtitlePopoverPresented = false
-                    }
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(L10n.text("字幕")).font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Text(L10n.text("点选立即切换")).font(.system(size: 11)).foregroundStyle(.secondary)
             }
+            SubtitleTrackControls(state: playerState) { slot, track in
+                if let track {
+                    if let sub = playerState.currentSpec?.subs.first(where: { "external:" + $0.id == track.id }) {
+                        MPVPlayerEngine.vod.loadExternalSubtitle(sub, select: true, slot: slot)
+                    } else {
+                        MPVPlayerEngine.vod.selectSubtitleTrack(id: track.id, slot: slot)
+                    }
+                } else {
+                    MPVPlayerEngine.vod.selectSubtitleTrack(id: "no", slot: slot)
+                }
+                appState.saveTrackPreference(type: slot == .primary ? .subtitle : .secondarySubtitle,
+                    id: track?.id ?? PlaybackLinkage.disabledSubtitleTrackID,
+                    name: track?.displayName ?? L10n.text("关闭字幕"), format: track?.format ?? "")
+            }
+            Divider()
+            HStack(spacing: 12) {
+                Button {
+                    isSubtitlePopoverPresented = false
+                    isOnlineSubtitlePresented = true
+                } label: { Label(L10n.text("在线搜索"), systemImage: "magnifyingglass") }
+                Spacer()
+                Button {
+                    isSubtitlePopoverPresented = false
+                    settingsCategory = .subtitles
+                    overlayPanel = .settings
+                } label: { Label(L10n.text("字幕设置"), systemImage: "slider.horizontal.3") }
+            }
+            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(lavender)
         }
+        .padding(16).frame(width: 330)
+        .foregroundStyle(PlayerHUDPalette.foreground)
+        .preferredColorScheme(.dark)
+        .presentationBackground(PlayerHUDPalette.background.opacity(0.96))
     }
 
     private var audioTrackPopover: some View {
-        trackSelectionPopover(title: "音轨", optionCount: playerState.audioTracks.count) {
+        trackSelectionPopover(title: L10n.text("音轨"), optionCount: playerState.audioTracks.count) {
             if playerState.audioTracks.isEmpty {
-                trackPopoverEmptyState("暂无可选音轨")
+                trackPopoverEmptyState(L10n.text("暂无可选音轨"))
             } else {
                 ForEach(playerState.audioTracks) { track in
                     trackOptionButton(title: track.displayName, isSelected: playerState.selectedAudioTrackID == track.id) {
                         MPVPlayerEngine.vod.selectAudioTrack(id: track.id)
                         appState.saveTrackPreference(type: .audio, id: track.id, name: track.displayName, format: track.format)
                         isAudioPopoverPresented = false
+                        isSpeedPopoverPresented = false
+                        isAspectPopoverPresented = false
                     }
                 }
             }
@@ -1654,94 +1880,63 @@ struct PlayerView: View {
     }
 
     private var speedControl: some View {
-        featureControlButton(
-            title: "倍速",
-            glyph: .speed,
-            detail: speedLabel(playerState.speed),
-            isActive: abs(playerState.speed - 1.0) > 0.01
+        featurePopoverControl(
+            title: L10n.text("倍速"), glyph: .speed, detail: speedLabel(playerState.speed),
+            isActive: abs(playerState.speed - 1.0) > 0.01, isPresented: $isSpeedPopoverPresented
         ) {
-            cyclePlaybackSpeed()
+            trackSelectionPopover(title: L10n.text("播放速度"), optionCount: PlayerHUDInteractionPolicy.playbackSpeeds.count) {
+                ForEach(PlayerHUDInteractionPolicy.playbackSpeeds, id: \.self) { speed in
+                    trackOptionButton(title: speedLabel(speed), isSelected: abs(playerState.speed - speed) < 0.01) {
+                        setPlaybackSpeed(speed)
+                        isSpeedPopoverPresented = false
+                        isAspectPopoverPresented = false
+                    }
+                }
+            }
         }
     }
 
     private func settingsDrawer(size _: CGSize) -> some View {
-        return HStack {
+        HStack {
             Spacer(minLength: 0)
-            ThemedScrollView(theme: .player) {
-                VStack(alignment: .leading, spacing: PlayerHUDVisualPolicy.drawerSectionSpacing) {
-                    drawerHeader("播放设置", followingSpacing: PlayerHUDVisualPolicy.drawerSectionSpacing)
-
-                    settingsSection("倍速") {
-                        LazyVGrid(
-                            columns: Array(
-                                repeating: GridItem(.flexible(), spacing: 8),
-                                count: PlayerHUDVisualPolicy.drawerSpeedColumnCount
-                            ),
-                            spacing: 8
-                        ) {
-                            ForEach(PlayerHUDInteractionPolicy.playbackSpeeds, id: \.self) { speed in
-                                settingsChip(speedLabel(speed), isSelected: abs(appState.playerState.speed - speed) < 0.01) {
-                                    setPlaybackSpeed(speed)
-                                }
+            VStack(spacing: 0) {
+                VStack(spacing: 14) {
+                    drawerHeader(L10n.text("播放设置"), followingSpacing: 14)
+                    HStack(spacing: 6) {
+                        ForEach(PlayerSettingsCategory.allCases) { category in
+                            Button { settingsCategory = category } label: {
+                                Text(category.title)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .frame(maxWidth: .infinity, minHeight: 34)
+                                    .background(settingsCategory == category ? lavender.opacity(0.22) : .clear, in: RoundedRectangle(cornerRadius: 9))
+                                    .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(settingsCategory == category ? .isSelected : [])
                         }
                     }
-
-                    settingsSection("字幕") {
-                        settingsStepperRow(title: "大小", value: subtitleFontSize, range: 16...72) {
-                            updateSubtitleFontSize($0)
-                        }
-
-                        settingsStepperRow(title: "位置", value: subtitlePosition, range: 0...100) {
-                            updateSubtitlePosition($0)
-                        }
-
-                        Toggle("忽略片源样式", isOn: Binding(
-                            get: { subtitleOverrideSourceStyle },
-                            set: { updateSubtitleOverride($0) }
-                        ))
-                        .toggleStyle(PlayerDrawerSwitchToggleStyle())
-                    }
-
-                    settingsSection("跳过") {
-                        settingActionRow(title: "片头", value: skipPreferenceLabel(openingSkip)) {
-                            openSkipEditor(.opening)
-                        }
-
-                        settingActionRow(title: "片尾", value: skipPreferenceLabel(endingSkip)) {
-                            openSkipEditor(.ending)
-                        }
-                    }
-
-                    settingsSection("弹幕") {
-                        Toggle("弹幕渲染", isOn: Binding(
-                            get: { danmakuEnabled },
-                            set: { updateDanmakuEnabled($0) }
-                        ))
-                        .toggleStyle(PlayerDrawerSwitchToggleStyle())
-
-                        settingInlineActionRow(title: "手动搜索当前标题", actionTitle: "搜索", disabled: !danmakuEnabled) {
-                            Task {
-                                await appState.manualSearchDanmakuForCurrentPlayback()
-                            }
-                        }
-                    }
-
-                    settingsSection("状态") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            settingStatusCard(
-                                appState.playerState.drivePlaybackStatus ?? "网盘路线：普通播放",
-                                detail: appState.playerState.drivePlaybackStatus == nil ? "当前源无需转码代理" : "播放器实时路线状态"
-                            )
-                            settingStatusCard(
-                                appState.playerState.drmStatus ?? "DRM：未识别",
-                                detail: appState.playerState.drmStatus == nil ? "保持原生 mpv 会话" : "播放器实时 DRM 状态"
-                            )
-                        }
-                    }
+                    .padding(4)
+                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
                 }
-                .padding(PlayerHUDVisualPolicy.drawerContentPadding)
+                .padding(.horizontal, PlayerHUDVisualPolicy.drawerContentPadding)
+                .padding(.top, PlayerHUDVisualPolicy.drawerContentPadding)
+                .padding(.bottom, 14)
+                ThemedScrollView(theme: .player) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        switch settingsCategory {
+                        case .playback: playbackSettingsContent
+                        case .subtitles: subtitleSettingsContent
+                        case .danmaku: danmakuSettingsContent
+                        case .advanced: advancedSettingsContent
+                        }
+                    }
+                    .padding(.horizontal, PlayerHUDVisualPolicy.drawerContentPadding)
+                    .padding(.bottom, PlayerHUDVisualPolicy.drawerContentPadding)
+                }
+                .id(settingsCategory)
             }
+            .foregroundStyle(PlayerHUDPalette.foreground)
+            .tint(lavender)
             .frame(width: PlayerHUDVisualPolicy.drawerWidth)
             .clipShape(RoundedRectangle(cornerRadius: PlayerHUDVisualPolicy.drawerCornerRadius, style: .continuous))
             .background(drawerGlassPanel)
@@ -1752,10 +1947,166 @@ struct PlayerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    @ViewBuilder
+    private var playbackSettingsContent: some View {
+        settingsSection(L10n.text("倍速")) {
+            LazyVGrid(
+                columns: Array(
+                    repeating: GridItem(.flexible(), spacing: 8),
+                    count: PlayerHUDVisualPolicy.drawerSpeedColumnCount
+                ),
+                spacing: 8
+            ) {
+                ForEach(PlayerHUDInteractionPolicy.playbackSpeeds, id: \.self) { speed in
+                    settingsChip(speedLabel(speed), isSelected: abs(appState.playerState.speed - speed) < 0.01) {
+                        setPlaybackSpeed(speed)
+                    }
+                }
+            }
+        }
+        settingsSection(L10n.text("跳过")) {
+            settingActionRow(title: L10n.text("片头"), value: skipPreferenceLabel(openingSkip)) {
+                openSkipEditor(.opening)
+            }
+
+            settingActionRow(title: L10n.text("片尾"), value: skipPreferenceLabel(endingSkip)) {
+                openSkipEditor(.ending)
+            }
+        }
+    }
+
+    private var subtitleSettingsContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            let isBitmap = playerState.subtitleTracks.first { $0.id == playerState.selectedSubtitleTrackID }?.subtitleKind == .bitmap
+            settingsSection(L10n.text("显示样式")) {
+                if !isBitmap {
+                    SubtitleSettingSlider(title: L10n.text("字号"), value: Binding(
+                        get: { Double(subtitleFontSize) }, set: { updateSubtitleFontSize(Int($0)) }
+                    ), range: 16...72, step: 1, valueText: "\(subtitleFontSize)")
+                    Toggle(L10n.text("使用自定义样式"), isOn: Binding(
+                        get: { subtitleOverrideSourceStyle }, set: { updateSubtitleOverride($0) }
+                    ))
+                    .font(.system(size: 13)).toggleStyle(PlayerDrawerSwitchToggleStyle())
+                    Text(L10n.text("开启后覆盖片源自带的字体、颜色和描边。"))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                SubtitleAppearanceControls(appearance: $subtitleAppearance, isBitmap: isBitmap)
+            }
+            settingsSection(L10n.text("字幕位置")) {
+                SubtitleSettingSlider(title: L10n.text("主字幕"), value: Binding(
+                    get: { Double(subtitlePosition) }, set: { updateSubtitlePosition(Int($0)) }
+                ), range: 0...100, step: 1, valueText: "\(subtitlePosition)%")
+                SubtitleSettingSlider(title: L10n.text("副字幕"), value: Binding(
+                    get: { Double(subtitleAppearance.secondaryPosition) }, set: { subtitleAppearance.secondaryPosition = Int($0) }
+                ), range: 0...100, step: 1, valueText: "\(subtitleAppearance.secondaryPosition)%")
+                Text(L10n.text("0% 靠近顶部，100% 靠近底部。"))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            settingsSection(L10n.text("时间同步")) {
+                SubtitleDelayControl(title: L10n.text("主字幕"), value: subtitleDelayBinding(secondary: false))
+                SubtitleDelayControl(title: L10n.text("副字幕"), value: subtitleDelayBinding(secondary: true))
+                Text(L10n.text("正值让字幕晚显示，负值让字幕提前。"))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                if let spec = playerState.currentSpec, SubtitleMediaIdentity.key(for: spec) == nil {
+                    Text(L10n.text("此播放没有稳定媒体身份，延迟仅在当前播放生效。"))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                Button(L10n.text("重置字幕延迟")) {
+                    subtitleDelayBinding(secondary: false).wrappedValue = 0
+                    subtitleDelayBinding(secondary: true).wrappedValue = 0
+                }.font(.system(size: 12))
+            }
+        }
+        .onChange(of: subtitleAppearance) { _, value in
+            UserPreferences.shared.subtitleAppearance = value
+            MPVPlayerEngine.vod.refreshSubtitleStyle()
+        }
+    }
+
+    private func subtitleDelayBinding(secondary: Bool) -> Binding<Double> {
+        Binding(
+            get: { secondary ? playerState.secondarySubtitleDelaySeconds : playerState.subtitleDelaySeconds },
+            set: { value in
+                if let spec = playerState.currentSpec {
+                    UserPreferences.shared.saveSubtitleDelay(value, for: spec, secondary: secondary)
+                }
+                MPVPlayerEngine.vod.setSubtitleDelay(value, slot: secondary ? .secondary : .primary)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var danmakuSettingsContent: some View {
+        settingsSection(L10n.text("弹幕")) {
+            Toggle(L10n.text("弹幕渲染"), isOn: Binding(
+                get: { danmakuEnabled },
+                set: { updateDanmakuEnabled($0) }
+            ))
+            .toggleStyle(PlayerDrawerSwitchToggleStyle())
+
+            settingInlineActionRow(title: L10n.text("手动搜索当前标题"), actionTitle: L10n.text("搜索"), disabled: !danmakuEnabled) {
+                Task {
+                    await appState.manualSearchDanmakuForCurrentPlayback()
+                }
+            }
+        }
+
+        settingsSection(L10n.text("弹幕文件与匹配")) {
+            Button(L10n.text("导入 XML / JSON 弹幕")) {
+                Task { await appState.importDanmakuForCurrentPlayback() }
+            }
+            .disabled(!danmakuEnabled)
+            if let attachment = playerState.currentSpec?.danmakuAttachment {
+                Text(L10n.text("同步偏移 {0} 秒", [String(format: "%.1f", Double(attachment.offsetMs) / 1_000)]))
+                    .font(.caption)
+                Slider(value: Binding(get: { Double(playerState.currentSpec?.danmakuAttachment?.offsetMs ?? 0) },
+                    set: { appState.updateCurrentDanmakuOffset(Int($0)) }), in: -60_000...60_000, step: 100)
+                Button(L10n.text("移除此集弹幕绑定")) { appState.removeCurrentDanmakuBinding() }
+            }
+            if !appState.danmakuCandidates.isEmpty {
+                Text(L10n.text("请选择与当前季集或版本对应的弹幕。")).font(.caption)
+                ForEach(appState.danmakuCandidates) { match in
+                    Button {
+                        Task { await appState.selectDanmakuCandidate(match) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(match.title).lineLimit(2)
+                            Text([match.track.sourceName, match.year.map(String.init),
+                                  match.season.map { "S\($0)" }, match.episode.map { "E\($0)" }, match.version]
+                                .compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Button(L10n.text("取消")) { appState.cancelDanmakuSelection() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var advancedSettingsContent: some View {
+        if !playerState.mpvOptionDiagnostics.isEmpty {
+            MPVOptionDiagnosticsMenu(diagnostics: playerState.mpvOptionDiagnostics)
+        }
+
+        settingsSection(L10n.text("状态")) {
+            VStack(alignment: .leading, spacing: 8) {
+                settingStatusCard(
+                    appState.playerState.drivePlaybackStatus ?? L10n.text("网盘路线：普通播放"),
+                    detail: appState.playerState.drivePlaybackStatus == nil ? L10n.text("当前源无需转码代理") : L10n.text("播放器实时路线状态")
+                )
+                settingStatusCard(
+                    appState.playerState.drmStatus ?? L10n.text("DRM：未识别"),
+                    detail: appState.playerState.drmStatus == nil ? L10n.text("保持原生 mpv 会话") : L10n.text("播放器实时 DRM 状态")
+                )
+            }
+        }
+    }
+
     private func episodeDrawer(size _: CGSize) -> some View {
         let currentEpisode = appState.episodeForCurrentPlayback(in: appState.episodes)
         let context = appState.playbackEpisodeContext(in: appState.episodes)
-        let sortedEpisodes = episodeSortDescending ? Array(appState.episodes.reversed()) : appState.episodes
+        let sortedEpisodes = appState.displayedPlaybackEpisodes
         let sourceColumns = Array(
             repeating: GridItem(.flexible(), spacing: 8),
             count: PlayerHUDVisualPolicy.drawerSourceColumnCount
@@ -1767,23 +2118,17 @@ struct PlayerView: View {
         return HStack {
             ThemedScrollView(theme: .player) {
                 VStack(alignment: .leading, spacing: 16) {
-                    drawerHeader("选集与线路", followingSpacing: 16)
+                    drawerHeader(L10n.text("选集与线路"), followingSpacing: 16)
 
                     HStack(alignment: .top, spacing: PlayerHUDVisualPolicy.episodePosterGap) {
-                        RoundedRectangle(cornerRadius: PlayerHUDVisualPolicy.episodePosterCornerRadius, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [lavender.opacity(0.25), PlayerHUDPalette.surface.opacity(0.86), Color.black.opacity(0.46)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .overlay {
-                                Capsule(style: .continuous)
-                                    .fill(Color.white.opacity(0.16))
-                                    .frame(width: 32, height: 92)
-                                    .offset(y: 22)
-                            }
+                        WebImage(
+                            urlString: PlayerPosterSource.resolve(episode: currentEpisode, detail: appState.detailVod, spec: playerState.currentSpec),
+                            siteHeader: appState.activeSite?.header,
+                            fallbackText: appState.detailVod?.vodName ?? playerState.currentSpec?.metadata["vod.name"] ?? L10n.text("正在播放"),
+                            maxPixelSize: 400
+                        )
+                            .scaledToFill()
+                            .frame(width: PlayerHUDVisualPolicy.episodePosterWidth, height: PlayerHUDVisualPolicy.episodePosterHeight)
                             .overlay {
                                 RoundedRectangle(cornerRadius: PlayerHUDVisualPolicy.episodePosterCornerRadius, style: .continuous)
                                     .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -1792,7 +2137,7 @@ struct PlayerView: View {
                             .frame(width: PlayerHUDVisualPolicy.episodePosterWidth, height: PlayerHUDVisualPolicy.episodePosterHeight)
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(appState.detailVod?.vodName ?? "正在播放")
+                            Text(appState.detailVod?.vodName ?? playerState.currentSpec?.metadata["vod.name"] ?? L10n.text("正在播放"))
                                 .font(.system(size: PlayerHUDVisualPolicy.drawerTitleFontSize, weight: .semibold))
                                 .foregroundStyle(PlayerHUDPalette.foreground)
                                 .lineLimit(2)
@@ -1824,13 +2169,13 @@ struct PlayerView: View {
                     }
 
                     Button {
-                        episodeSortDescending.toggle()
+                        appState.episodeSortOrder = appState.episodeSortOrder.next
                     } label: {
                         HStack(spacing: 7) {
-                            Image(systemName: PlayerHUDVisualPolicy.episodeSortSymbolName(descending: episodeSortDescending))
+                            Image(systemName: PlayerHUDVisualPolicy.episodeSortSymbolName(descending: appState.episodeSortOrder == .descending))
                                 .font(.system(size: 14, weight: .semibold))
                                 .frame(width: 16, height: 16)
-                            Text(episodeSortDescending ? "倒序" : "正序")
+                            Text(appState.episodeSortOrder.title)
                         }
                         .font(.system(size: PlayerHUDVisualPolicy.drawerBodyFontSize, weight: .semibold))
                         .frame(maxWidth: .infinity)
@@ -1841,20 +2186,23 @@ struct PlayerView: View {
                                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
                         }
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(episodeSortDescending ? "倒序" : "正序")
+                        .accessibilityLabel(appState.episodeSortOrder.title)
                     }
                     .buttonStyle(.plain)
-                    .help(episodeSortDescending ? "当前倒序，点击切换正序" : "当前正序，点击切换倒序")
+                    .help(appState.episodeSortOrder == .descending ? L10n.text("当前倒序，点击切换正序") : L10n.text("当前正序，点击切换倒序"))
 
                     currentPlaybackRouteSection
 
                     if !appState.playFlags.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            drawerSectionLabel("播放源")
+                            drawerSectionLabel(L10n.text("播放源"))
 
                             LazyVGrid(columns: sourceColumns, spacing: 8) {
                                 ForEach(appState.playFlags, id: \.self) { flag in
-                                    sourcePill(flag, isSelected: flag == appState.selectedPlayFlag) {
+                                    sourcePill(
+                                        PlaybackFlagPresentation.title(flag),
+                                        isSelected: flag == appState.selectedPlayFlag
+                                    ) {
                                         appState.selectPlayFlag(flag)
                                         showHUDTemporarily()
                                     }
@@ -1864,7 +2212,7 @@ struct PlayerView: View {
                     }
 
                     HStack(spacing: 10) {
-                        drawerSectionLabel("剧集")
+                        drawerSectionLabel(L10n.text("剧集"))
                         Spacer(minLength: 0)
                         EpisodeDisplayModePicker(selection: $appState.episodeDisplayMode)
                             .tint(lavender)
@@ -1918,10 +2266,10 @@ struct PlayerView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 7) {
-                        Text("设置跳过\(skipEditorTarget.title)")
+                        Text(L10n.text("设置跳过{0}", ["\(skipEditorTarget.title)"]))
                             .font(.system(size: PlayerHUDVisualPolicy.skipDialogTitleFontSize, weight: .semibold))
                             .foregroundStyle(PlayerHUDPalette.foreground)
-                        Text(skipEditorTarget == .opening ? "片头结束点" : "片尾开始点")
+                        Text(skipEditorTarget == .opening ? L10n.text("片头结束点") : L10n.text("片尾开始点"))
                             .font(.system(size: PlayerHUDVisualPolicy.skipDialogCopyFontSize))
                             .foregroundStyle(PlayerHUDPalette.muted)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1931,9 +2279,9 @@ struct PlayerView: View {
                 }
 
                 HStack {
-                    Text("当前位置 \(formatClock(appState.playerState.position))")
+                    Text(L10n.text("当前位置 {0}", ["\(formatClock(appState.playerState.position))"]))
                     Spacer()
-                    Text("已保存 \(formatSkipDuration(savedSkipSeconds(for: skipEditorTarget)))")
+                    Text(L10n.text("已保存 {0}", ["\(formatSkipDuration(savedSkipSeconds(for: skipEditorTarget)))"]))
                 }
                 .font(.system(size: PlayerHUDVisualPolicy.drawerMetaFontSize, design: .monospaced))
                 .foregroundStyle(PlayerHUDPalette.muted)
@@ -1984,17 +2332,17 @@ struct PlayerView: View {
                     .frame(minHeight: 20, alignment: .leading)
 
                 HStack(spacing: 10) {
-                    skipEditorActionButton("设为当前位置") {
+                    skipEditorActionButton(L10n.text("设为当前位置")) {
                         setSkipDraft(seconds: PlayerSkipEditorPolicy.valueAtCurrentPosition(
                             target: skipEditorTarget,
                             position: appState.playerState.position,
                             duration: appState.playerState.duration
                         ))
                     }
-                    skipEditorActionButton("清零") {
+                    skipEditorActionButton(L10n.text("清零")) {
                         setSkipDraft(seconds: 0)
                     }
-                    skipEditorActionButton("保存", prominent: true) {
+                    skipEditorActionButton(L10n.text("保存"), prominent: true) {
                         saveSkipEditor()
                     }
                     .disabled(skipEditorError != nil)
@@ -2050,7 +2398,7 @@ struct PlayerView: View {
                 .foregroundStyle(seaBlue)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("已自动降低清晰度")
+                Text(L10n.text("已自动降低清晰度"))
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white)
                 Text(message)
@@ -2067,7 +2415,7 @@ struct PlayerView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
-            .help("关闭提示")
+            .help(L10n.text("关闭提示"))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -2082,7 +2430,7 @@ struct PlayerView: View {
                 .foregroundStyle(.yellow)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("UC 备用转码不可用")
+                Text(L10n.text("UC 备用转码不可用"))
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white)
                 Text(message)
@@ -2097,7 +2445,7 @@ struct PlayerView: View {
                 Button {
                     appState.openCloudAuthFromPlaybackError()
                 } label: {
-                    Label("重新授权", systemImage: "person.badge.key")
+                    Label(L10n.text("重新授权"), systemImage: "person.badge.key")
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -2108,7 +2456,7 @@ struct PlayerView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
-            .help("关闭提示")
+            .help(L10n.text("关闭提示"))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -2119,13 +2467,13 @@ struct PlayerView: View {
     @ViewBuilder
     private var playbackErrorOverlay: some View {
         if let message = appState.playerState.errorMessage,
-           !message.contains("已切换到兼容播放器") {
+           !message.contains(L10n.text("已切换到兼容播放器")) {
             VStack(spacing: 16) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 42, weight: .semibold))
                     .foregroundColor(.yellow)
 
-                Text("播放失败")
+                Text(L10n.text("播放失败"))
                     .font(.title3.weight(.semibold))
                     .foregroundColor(.white)
 
@@ -2154,18 +2502,19 @@ struct PlayerView: View {
                         Button {
                             appState.openCloudAuthFromPlaybackError()
                         } label: {
-                            Label("重新授权", systemImage: "person.badge.key")
+                            Label(L10n.text("重新授权"), systemImage: "person.badge.key")
                         }
                         .buttonStyle(.borderedProminent)
                     }
 
                     if let spec = appState.playerState.currentSpec {
                         Button {
+                            videoSurfaceRevision += 1
                             Task {
                                 await MPVPlayerEngine.vod.play(spec: spec)
                             }
                         } label: {
-                            Label("重试", systemImage: "arrow.clockwise")
+                            Label(L10n.text("重试"), systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.bordered)
                     }
@@ -2175,7 +2524,7 @@ struct PlayerView: View {
                         MPVPlayerEngine.vod.stop()
                         appState.isPlayerPresented = false
                     } label: {
-                        Label("关闭", systemImage: "xmark")
+                        Label(L10n.text("关闭"), systemImage: "xmark")
                     }
                     .buttonStyle(.bordered)
                 }
@@ -2189,11 +2538,15 @@ struct PlayerView: View {
     }
 
     private var canSeek: Bool {
-        appState.playerState.duration > 0
+        !appState.isPreparingVodPlayback && appState.playerState.duration > 0
     }
 
     private var displayedPosition: Double {
-        isSeeking ? pendingSeekPosition : appState.playerState.position
+        appState.preparingEpisode == nil ? (isSeeking ? pendingSeekPosition : appState.playerState.position) : 0
+    }
+
+    private var displayedDuration: Double {
+        appState.preparingEpisode == nil ? appState.playerState.duration : 0
     }
 
     private var playbackBadgesAvailable: Bool {
@@ -2211,10 +2564,11 @@ struct PlayerView: View {
     }
 
     private var currentPlayerTitle: String {
+        if let title = appState.preparingPlaybackTitle { return title }
         if let spec = appState.playerState.currentSpec, !spec.title.isEmpty {
             return spec.title
         }
-        return appState.detailVod?.vodName ?? "正在播放"
+        return appState.detailVod?.vodName ?? L10n.text("正在播放")
     }
 
     private var activeLineLabel: String {
@@ -2233,7 +2587,7 @@ struct PlayerView: View {
            let track = appState.playerState.audioTracks.first(where: { $0.id == selectedID }) {
             return PlayerHUDVisualPolicy.audioStatusText(for: track)
         }
-        return "音轨 \(appState.playerState.audioTracks.count) 条"
+        return L10n.text("音轨 {0} 条", ["\(appState.playerState.audioTracks.count)"])
     }
 
     private var activeDrivePlaybackRoute: DrivePlaybackRouteOption? {
@@ -2242,15 +2596,15 @@ struct PlayerView: View {
     }
 
     private var currentPlaybackState: (title: String, detail: String, color: Color, isError: Bool) {
-        let label = activeLineLabel.isEmpty ? "当前源" : activeLineLabel
-        if appState.isPlayerLoading {
-            return ("\(label) 正在缓冲", "正在准备播放会话", lavender, false)
+        let label = activeLineLabel.isEmpty ? L10n.text("当前源") : activeLineLabel
+        if appState.isPreparingVodPlayback {
+            return (L10n.text("{0} 正在缓冲", ["\(label)"]), L10n.text("正在准备播放会话"), lavender, false)
         }
         if appState.playerState.errorMessage != nil {
-            return ("\(label) 连接失败", "可重试或切回其它线路", Color.red, true)
+            return (L10n.text("{0} 连接失败", ["\(label)"]), L10n.text("可重试或切回其它线路"), Color.red, true)
         }
-        let detail = activeDrivePlaybackRoute.map { "连接正常 · \($0.detail)" } ?? "连接正常 · 原生播放"
-        return ("\(label) 已就绪", detail, seaBlue, false)
+        let detail = activeDrivePlaybackRoute.map { L10n.text("连接正常 · {0}", ["\($0.detail)"]) } ?? L10n.text("连接正常 · 原生播放")
+        return (L10n.text("{0} 已就绪", ["\(label)"]), detail, seaBlue, false)
     }
 
     private var seaBlue: Color {
@@ -2275,7 +2629,7 @@ struct PlayerView: View {
                 }
         }
         .buttonStyle(.plain)
-        .help("关闭面板")
+        .help(L10n.text("关闭面板"))
     }
 
     private var skipEditorCloseButton: some View {
@@ -2288,7 +2642,7 @@ struct PlayerView: View {
                 .background(glassPanel(cornerRadius: PlayerHUDVisualPolicy.drawerCloseButtonCornerRadius, strokeOpacity: 0.22))
         }
         .buttonStyle(.plain)
-        .help("关闭跳过时间设置")
+        .help(L10n.text("关闭跳过时间设置"))
     }
 
     private func hudControlButton(
@@ -2388,6 +2742,7 @@ struct PlayerView: View {
         @ViewBuilder popoverContent: @escaping () -> Content
     ) -> some View {
         Button {
+            isChapterPanelPresented = false
             isPresented.wrappedValue.toggle()
             showHUDTemporarily()
         } label: {
@@ -2420,7 +2775,10 @@ struct PlayerView: View {
             .frame(height: PlayerHUDVisualPolicy.trackPopoverListHeight(optionCount: optionCount))
         }
         .padding(12)
-        .frame(width: 240)
+        .frame(width: 280)
+        .foregroundStyle(PlayerHUDPalette.foreground)
+        .preferredColorScheme(.dark)
+        .presentationBackground(PlayerHUDPalette.background.opacity(0.96))
     }
 
     private func trackOptionButton(
@@ -2547,7 +2905,7 @@ struct PlayerView: View {
         .buttonStyle(.plain)
         .frame(width: PlayerHUDVisualPolicy.skipChipWidth, height: PlayerHUDVisualPolicy.skipButtonHeight)
         .contentShape(Rectangle())
-        .help("设置跳过\(target.title)")
+        .help(L10n.text("设置跳过{0}", ["\(target.title)"]))
     }
 
     private func playbackBadge(_ text: String, icon _: String) -> some View {
@@ -2635,12 +2993,12 @@ struct PlayerView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(text)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityHint(isSelected ? "当前播放源" : "切换播放源")
+        .accessibilityHint(isSelected ? L10n.text("当前播放源") : L10n.text("切换播放源"))
     }
 
     private var currentPlaybackRouteSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            drawerSectionLabel("当前播放线路")
+            drawerSectionLabel(L10n.text("当前播放线路"))
             currentPlaybackStatusCard
 
             if appState.drivePlaybackRoutes.count > 1 {
@@ -2733,47 +3091,6 @@ struct PlayerView: View {
         .buttonStyle(.plain)
         .disabled(appState.pendingDrivePlaybackRouteID != nil)
         .help("\(route.title)：\(route.detail)")
-    }
-
-    private func settingsStepperRow(
-        title: String,
-        value: Int,
-        range: ClosedRange<Int>,
-        onChange: @escaping (Int) -> Void
-    ) -> some View {
-        HStack(spacing: 12) {
-            Text(title)
-                .foregroundStyle(.white.opacity(0.84))
-            Spacer(minLength: 12)
-            HStack(spacing: 0) {
-                Button {
-                    onChange(max(range.lowerBound, value - 1))
-                } label: {
-                    Image(systemName: "minus")
-                        .frame(width: 34, height: 32)
-                }
-                .disabled(value <= range.lowerBound)
-
-                Text("\(value)")
-                    .font(.system(size: PlayerHUDVisualPolicy.drawerBodyFontSize, design: .monospaced))
-                    .frame(minWidth: 54)
-
-                Button {
-                    onChange(min(range.upperBound, value + 1))
-                } label: {
-                    Image(systemName: "plus")
-                        .frame(width: 34, height: 32)
-                }
-                .disabled(value >= range.upperBound)
-            }
-            .buttonStyle(.plain)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: PlayerHUDVisualPolicy.drawerControlCornerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: PlayerHUDVisualPolicy.drawerControlCornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.13), lineWidth: 1)
-            }
-        }
-        .frame(minHeight: 42)
     }
 
     private func settingActionRow(title: String, value: String, action: @escaping () -> Void) -> some View {
@@ -2871,7 +3188,7 @@ struct PlayerView: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(appState.isPlayerLoading)
+        .disabled(appState.isPreparingVodPlayback)
     }
 
     private func episodeListButton(_ episode: Episode, isCurrent: Bool, isHistory: Bool) -> some View {
@@ -2894,7 +3211,7 @@ struct PlayerView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(lavender)
                         .frame(width: 16, height: 16)
-                        .accessibilityLabel("播放历史")
+                        .accessibilityLabel(L10n.text("播放历史"))
                 }
             }
             .foregroundStyle(isCurrent ? .white : .white.opacity(0.82))
@@ -2908,11 +3225,11 @@ struct PlayerView: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(appState.isPlayerLoading)
+        .disabled(appState.isPreparingVodPlayback)
         .accessibilityLabel(
             isCurrent
-                ? "\(episode.name)，当前播放"
-                : (isHistory ? "\(episode.name)，播放历史" : episode.name)
+                ? L10n.text("{0}，当前播放", ["\(episode.name)"])
+                : (isHistory ? L10n.text("{0}，播放历史", ["\(episode.name)"]) : episode.name)
         )
     }
 
@@ -2932,25 +3249,7 @@ struct PlayerView: View {
     }
 
     private func glassPanel(cornerRadius: CGFloat, strokeOpacity: Double = 0.28) -> some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(.ultraThinMaterial)
-            .opacity(PlayerHUDVisualPolicy.glassPanelMaterialOpacity)
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(PlayerHUDPalette.surface.opacity(PlayerHUDVisualPolicy.glassPanelSurfaceOpacity))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(
-                        LinearGradient(
-                            colors: [lavender.opacity(strokeOpacity), seaBlue.opacity(strokeOpacity * 0.75), Color.white.opacity(0.08)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            }
-            .shadow(color: seaBlue.opacity(0.12), radius: 18, x: 0, y: 8)
+        PlayerGlassPanel(cornerRadius: cornerRadius, strokeOpacity: strokeOpacity)
     }
 
     private func bottomHUDGlassPanel(cornerRadius: CGFloat) -> some View {
@@ -3002,16 +3301,8 @@ struct PlayerView: View {
     }
 
     private func timelineSeekPosition(locationX: CGFloat, trackWidth: CGFloat) -> Double {
-        guard appState.playerState.duration.isFinite,
-              appState.playerState.duration > 0,
-              trackWidth > 0 else {
-            return 0
-        }
-        let thumbWidth = PlayerHUDVisualPolicy.timelineThumbSize
-        let usableWidth = max(1, trackWidth - thumbWidth)
-        let clampedX = min(max(thumbWidth / 2, locationX), trackWidth - thumbWidth / 2)
-        let ratio = Double((clampedX - thumbWidth / 2) / usableWidth)
-        return clampedSeekPosition(appState.playerState.duration * ratio)
+        PlayerTimelineCoordinatePolicy.time(at: locationX, width: trackWidth,
+            duration: playerState.duration, thumbWidth: PlayerHUDVisualPolicy.timelineThumbSize) ?? 0
     }
 
     private func updateTimelineSeek(locationX: CGFloat, trackWidth: CGFloat, commit: Bool) {
@@ -3066,18 +3357,14 @@ struct PlayerView: View {
     }
 
     private func togglePlayPause() {
-        let shouldPlay = PlayerKeyboardShortcutPolicy.toggledPlaybackState(
-            from: appState.playerState.isPlaying
-        )
-        appState.playerState.isPlaying = shouldPlay
-        if shouldPlay {
-            MPVPlayerEngine.vod.resume()
-        } else {
-            MPVPlayerEngine.vod.pause()
-        }
+        Task { await appState.toggleVodPlayback() }
     }
 
     private func handleKeyboardShortcut(_ command: PlayerShortcutCommand) {
+        if command == .exitFullScreen, isChapterPanelPresented {
+            isChapterPanelPresented = false
+            return
+        }
         switch command {
         case .togglePlayPause:
             togglePlayPause()
@@ -3124,20 +3411,13 @@ struct PlayerView: View {
 
     private func setVolume(_ volume: Float) {
         let clamped = min(1, max(0, volume))
-        if clamped > 0 {
-            lastNonZeroVolume = clamped
-        }
+        if clamped > 0 { appState.playerState.isMuted = false }
         appState.playerState.volume = clamped
         MPVPlayerEngine.vod.setVolume(clamped)
     }
 
     private func toggleMute() {
-        if appState.playerState.volume > 0 {
-            lastNonZeroVolume = appState.playerState.volume
-            MPVPlayerEngine.vod.setVolume(0)
-        } else {
-            MPVPlayerEngine.vod.setVolume(max(0.01, lastNonZeroVolume))
-        }
+        MPVPlayerEngine.vod.toggleMute()
         isVolumePopoverPresented = false
         showHUDTemporarily()
     }
@@ -3151,6 +3431,7 @@ struct PlayerView: View {
     }
 
     private func openSkipEditor(_ target: PlayerSkipEditorTarget) {
+        isChapterPanelPresented = false
         skipEditorTarget = target
         let currentValue = PlayerSkipEditorPolicy.valueAtCurrentPosition(
             target: target,
@@ -3192,7 +3473,7 @@ struct PlayerView: View {
 
     private func syncSkipDraftFromText(_ text: String) {
         guard let parsed = PlayerSkipEditorPolicy.parseTimeText(text) else {
-            skipEditorError = "请输入有效时间，例如 01:23 或 1:02:03。"
+            skipEditorError = L10n.text("请输入有效时间，例如 01:23 或 1:02:03。")
             return
         }
         skipDraftSeconds = PlayerSkipEditorPolicy.clamp(parsed, duration: appState.playerState.duration)
@@ -3211,7 +3492,7 @@ struct PlayerView: View {
 
     private func saveSkipEditor() {
         guard let parsed = PlayerSkipEditorPolicy.parseTimeText(skipDraftText) else {
-            skipEditorError = "请输入有效时间，例如 01:23 或 1:02:03。"
+            skipEditorError = L10n.text("请输入有效时间，例如 01:23 或 1:02:03。")
             return
         }
         let clamped = PlayerSkipEditorPolicy.clamp(parsed, duration: appState.playerState.duration)
@@ -3280,7 +3561,7 @@ struct PlayerView: View {
         if isPresented {
             hideHUDTimer?.invalidate()
             restorePlayerCursor()
-        } else if !isSubtitlePopoverPresented && !isAudioPopoverPresented {
+        } else if !isSubtitlePopoverPresented && !isAudioPopoverPresented && !isSpeedPopoverPresented && !isAspectPopoverPresented && !isChapterPanelPresented {
             resetHUDTimer()
         }
     }
@@ -3309,7 +3590,11 @@ struct PlayerView: View {
             || isSkipEditorPresented
             || isVolumePopoverPresented
             || isSubtitlePopoverPresented
+            || isOnlineSubtitlePresented
             || isAudioPopoverPresented
+            || isSpeedPopoverPresented
+            || isAspectPopoverPresented
+            || isChapterPanelPresented
     }
 
     private var hasBlockingPlaybackActivityUI: Bool {
@@ -3323,7 +3608,7 @@ struct PlayerView: View {
             return state == .loading || state == .buffering
         }
         return PlayerPlaybackActivityPolicy.isActive(
-            isSourceLoading: appState.isPlayerLoading,
+            isSourceLoading: appState.isPreparingVodPlayback,
             isMediaLoading: playerState.isMediaLoading,
             isBuffering: playerState.isBuffering
         )
@@ -3335,22 +3620,23 @@ struct PlayerView: View {
             case .loading:
                 return PlayerPlaybackActivityPhase(
                     kind: .loading,
-                    title: "正在加载视频",
-                    message: "正在解析高清播放地址..."
+                    title: L10n.text("正在加载视频"),
+                    message: L10n.text("正在解析高清播放地址...")
                 )
             case .buffering:
                 return PlayerPlaybackActivityPhase(
                     kind: .buffering,
-                    title: "正在缓冲",
-                    message: "网络速度较慢，正在补充播放缓存。"
+                    title: L10n.text("正在缓冲"),
+                    message: L10n.text("网络速度较慢，正在补充播放缓存。")
                 )
             default:
                 break
             }
         }
         return PlayerPlaybackActivityPolicy.vodPhase(
-            isSourceLoading: appState.isPlayerLoading,
-            sourceLoadingMessage: appState.playerLoadingMessage,
+            isSourceLoading: appState.isPreparingVodPlayback,
+            sourceLoadingMessage: appState.preparingEpisode.map { L10n.text("正在切换 {0}", [$0.name]) }
+                ?? appState.playerLoadingMessage,
             isMediaLoading: playerState.isMediaLoading,
             isSeeking: playerState.isSeeking,
             isBuffering: playerState.isBuffering,
@@ -3359,7 +3645,7 @@ struct PlayerView: View {
     }
 
     private var playbackActivityBufferedAheadDuration: Double {
-        if playerState.isMediaLoading { return 0 }
+        if appState.isPreparingVodPlayback || playerState.isMediaLoading { return 0 }
         switch visualRegressionConfiguration?.state {
         case .loading:
             return 0
@@ -3371,6 +3657,7 @@ struct PlayerView: View {
     }
 
     private var playbackActivitySpeedBytesPerSecond: Int64? {
+        if appState.isPreparingVodPlayback { return nil }
         if playerState.isMediaLoading, playerState.seekReceivedBytes != nil {
             return playerState.seekTransferSpeedBytesPerSecond
         }
@@ -3419,22 +3706,23 @@ struct PlayerView: View {
     }
 
     private func toggleFullScreen() {
-        NSApp.keyWindow?.toggleFullScreen(nil)
+        guard let window = windowContext.window else { return }
+        PlayerWindowChromePolicy.toggleFullScreen(window)
     }
 
     private func enterFullScreen() {
-        guard let window = NSApp.keyWindow,
-              !window.styleMask.contains(.fullScreen) else { return }
-        window.toggleFullScreen(nil)
+        guard let window = windowContext.window else { return }
+        PlayerWindowChromePolicy.configureFullScreenPlayback(window)
+        PlayerFullScreenCoordinator.attached(to: window).request(true)
     }
 
     private func exitFullScreen() {
-        guard let window = NSApp.keyWindow,
-              window.styleMask.contains(.fullScreen) else { return }
-        window.toggleFullScreen(nil)
+        guard let window = windowContext.window else { return }
+        PlayerFullScreenCoordinator.attached(to: window).request(false)
     }
 
     private func syncSettingsState() {
+        subtitleAppearance = UserPreferences.shared.subtitleAppearance
         subtitleFontSize = UserPreferences.shared.subtitleFontSize
         subtitlePosition = UserPreferences.shared.subtitlePosition
         subtitleOverrideSourceStyle = UserPreferences.shared.subtitleOverrideSourceStyle
@@ -3504,7 +3792,7 @@ struct PlayerView: View {
     private func updateDanmakuEnabled(_ enabled: Bool) {
         danmakuEnabled = enabled
         UserPreferences.shared.danmakuEnabled = enabled
-        appState.playerState.danmakuStatus = enabled ? "弹幕已启用，等待手动搜索" : "弹幕已关闭"
+        appState.playerState.danmakuStatus = enabled ? L10n.text("弹幕已启用，等待手动搜索") : L10n.text("弹幕已关闭")
     }
 }
 
@@ -3561,6 +3849,8 @@ private struct PlayerHUDGlyph: View {
                 playPauseGlyph(paused: true)
             case .episodeGrid:
                 gridGlyph
+            case .chapters:
+                chaptersGlyph
             case .subtitles:
                 subtitlesGlyph
             case .audio:
@@ -3693,6 +3983,19 @@ private struct PlayerHUDGlyph: View {
                 path.addRect(rectFor(x: 14, y: 15, width: 6, height: 4, in: rect))
             }
             .stroke(style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+        }
+    }
+
+    private var chaptersGlyph: some View {
+        GeometryReader { proxy in
+            let rect = CGRect(origin: .zero, size: proxy.size)
+            Path { path in
+                path.addRoundedRect(in: rectFor(x: 3, y: 5, width: 18, height: 14, in: rect), cornerSize: CGSize(width: 2, height: 2))
+                for y in [9.0, 12.0, 15.0] {
+                    path.move(to: point(6, y, in: rect)); path.addLine(to: point(7, y, in: rect))
+                    path.move(to: point(10, y, in: rect)); path.addLine(to: point(18, y, in: rect))
+                }
+            }.stroke(style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
         }
     }
 
@@ -3983,9 +4286,19 @@ struct MPVVideoView: NSViewRepresentable {
     let surface: MPVVideoSurface
     var attachmentRevision: Int = 0
 
-    func makeNSView(context: Context) -> MPVOpenGLVideoView {
-        let view = MPVOpenGLVideoView(engine: engine, surface: surface)!
-        let generation = view.activatePlaybackSurface()
+    func makeNSView(context: Context) -> NSView {
+        guard let view = MPVOpenGLVideoView(engine: engine, surface: surface) else {
+            Task { @MainActor in
+                engine.reportUnavailableVideoSurface(surface)
+            }
+            return NSView(frame: .zero)
+        }
+        guard let generation = view.activatePlaybackSurface() else {
+            Task { @MainActor in
+                engine.reportUnavailableVideoSurface(surface)
+            }
+            return view
+        }
         Task { @MainActor in
             guard view.acceptsPlaybackSurfaceAttachment(generation: generation) else { return }
             engine.attach(to: view, surface: surface)
@@ -3993,89 +4306,25 @@ struct MPVVideoView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: MPVOpenGLVideoView, context: Context) {
-        let generation = nsView.activatePlaybackSurface()
+    func updateNSView(_ view: NSView, context: Context) {
+        guard let nsView = view as? MPVOpenGLVideoView else { return }
+        guard let generation = nsView.activatePlaybackSurface() else {
+            Task { @MainActor in
+                engine.reportUnavailableVideoSurface(surface)
+            }
+            return
+        }
         Task { @MainActor in
             guard nsView.acceptsPlaybackSurfaceAttachment(generation: generation) else { return }
             engine.attach(to: nsView, surface: surface)
         }
     }
 
-    static func dismantleNSView(_ nsView: MPVOpenGLVideoView, coordinator: ()) {
+    static func dismantleNSView(_ view: NSView, coordinator: ()) {
+        guard let nsView = view as? MPVOpenGLVideoView else { return }
         nsView.deactivatePlaybackSurface()
         Task { @MainActor in
-            nsView.detachFromPlayerEngine()
+            await nsView.detachFromPlayerEngineAndReleaseOpenGLResources()
         }
-    }
-}
-
-private struct DanmakuOverlayView: View {
-    let cues: [DanmakuCue]
-    let positionMs: Int
-    let opacity: Double
-    let fontSize: Int
-
-    private let scrollDurationMs = 7_000
-    private let fixedDurationMs = 4_000
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .topLeading) {
-                ForEach(visibleCues) { cue in
-                    cueView(cue)
-                        .position(position(for: cue, in: proxy.size))
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-        }
-    }
-
-    private var visibleCues: [DanmakuCue] {
-        DanmakuOverlayPolicy.visibleCues(
-            cues,
-            positionMs: positionMs,
-            scrollDurationMs: scrollDurationMs,
-            fixedDurationMs: fixedDurationMs
-        )
-    }
-
-    private func cueView(_ cue: DanmakuCue) -> some View {
-        Text(cue.text)
-            .font(.system(size: CGFloat(DanmakuOverlayPolicy.effectiveFontSize(fontSize)), weight: .semibold))
-            .foregroundStyle(color(for: cue.color).opacity(opacity))
-            .lineLimit(1)
-            .shadow(color: .black.opacity(0.85), radius: 2, x: 0, y: 1)
-            .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private func position(for cue: DanmakuCue, in size: CGSize) -> CGPoint {
-        let effectiveFontSize = DanmakuOverlayPolicy.effectiveFontSize(fontSize)
-        let laneHeight = CGFloat(effectiveFontSize + 10)
-        let laneCount = DanmakuOverlayPolicy.laneCount(containerHeight: size.height, fontSize: effectiveFontSize)
-        let lane = DanmakuOverlayPolicy.stableLane(for: cue.id, count: laneCount)
-        let y = CGFloat(lane) * laneHeight + laneHeight
-        switch cue.mode {
-        case .scroll:
-            let progress = min(1, max(0, Double(positionMs - cue.timeMs) / Double(scrollDurationMs)))
-            let x = size.width + 240 - CGFloat(progress) * (size.width + 480)
-            return CGPoint(x: x, y: y)
-        case .top:
-            return CGPoint(x: size.width / 2, y: y)
-        case .bottom:
-            return CGPoint(x: size.width / 2, y: max(laneHeight, size.height - y))
-        }
-    }
-
-    private func color(for hex: String) -> Color {
-        let cleaned = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        guard cleaned.count == 6, let value = Int(cleaned, radix: 16) else {
-            return .white
-        }
-        return Color(
-            red: Double((value >> 16) & 0xFF) / 255.0,
-            green: Double((value >> 8) & 0xFF) / 255.0,
-            blue: Double(value & 0xFF) / 255.0
-        )
     }
 }

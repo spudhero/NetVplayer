@@ -189,6 +189,9 @@ final class FeedbackWorkspaceSpy: FeedbackWorkspaceOpening {
 
 @Test func feedbackReportFileStoreWritesPrivateFileAndCleansExpiredReports() throws {
     let fileManager = FileManager.default
+    let directory = fileManager.temporaryDirectory
+        .appendingPathComponent("feedback-store-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? fileManager.removeItem(at: directory) }
     let report = FeedbackReport(
         issueTitle: "title",
         issueBody: "body",
@@ -196,8 +199,7 @@ final class FeedbackWorkspaceSpy: FeedbackWorkspaceOpening {
         reproductionLevel: .generic,
         publicSourceURL: nil
     )
-    let url = try FeedbackReportFileStore.write(report: report)
-    defer { try? fileManager.removeItem(at: url) }
+    let url = try FeedbackReportFileStore.write(report: report, directoryOverride: directory)
 
     let attributes = try fileManager.attributesOfItem(atPath: url.path)
     let permissions = try #require(attributes[.posixPermissions] as? NSNumber)
@@ -210,6 +212,6 @@ final class FeedbackWorkspaceSpy: FeedbackWorkspaceOpening {
         [.modificationDate: Date(timeIntervalSinceNow: -(FeedbackReportFileStore.retentionInterval + 10))],
         ofItemAtPath: expired.path
     )
-    FeedbackReportFileStore.cleanupExpiredReports()
+    FeedbackReportFileStore.cleanupExpiredReports(directoryOverride: directory)
     #expect(!fileManager.fileExists(atPath: expired.path))
 }

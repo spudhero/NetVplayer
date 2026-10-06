@@ -197,6 +197,7 @@ public typealias ProxyHandler = @Sendable ([String: String]) async throws -> Pro
 public final class ProxyServer: @unchecked Sendable {
 
     public static let shared = ProxyServer()
+    public static let multiplexedRangeConnectionLimit = 2
 
     public init() {}
 
@@ -221,17 +222,81 @@ public final class ProxyServer: @unchecked Sendable {
 
     /// 代理请求处理器（由 SpiderEngine 设置）
     public var proxyHandler: ProxyHandler?
+    public var prefetchedProxyHandler: ProxyHandler?
     public var streamingProxyHandler: ProxyStreamingHandler?
     public var rawProxyHandler: (([String: String]) async throws -> Any?)?
     public var remoteStreamHTTPClient: HTTPClient = .shared
+    fileprivate let directRemoteStreamHTTPClient = HTTPClient.shared.withExplicitProxy(nil)
+    // The measured eight-range route needs eight transport connections too.
+    // Keep this pool separate from the shared control/API session and retain
+    // automatic routing unless the registration explicitly selects direct.
+    fileprivate let parallelRemoteStreamHTTPClient = ProxyServer.makeParallelRangeHTTPClient(direct: false)
+    fileprivate let directParallelRemoteStreamHTTPClient = ProxyServer.makeParallelRangeHTTPClient(direct: true)
+    private static func makeParallelRangeHTTPClient(direct: Bool) -> HTTPClient {
+        let configuration = URLSessionConfiguration.default
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.httpMaximumConnectionsPerHost = 8
+        let client = HTTPClient(session: URLSession(configuration: configuration))
+        return direct ? client.withExplicitProxy(nil) : client
+    }
+    fileprivate let multiplexedRemoteStreamHTTPClient: HTTPClient = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.httpMaximumConnectionsPerHost = ProxyServer.multiplexedRangeConnectionLimit
+        // Cloud Range multiplexing must keep the measured direct CDN route.
+        // Inheriting PAC or retrying each segment through a local proxy defeats
+        // connection reuse and can stall the next segment awaiting delivery.
+        return HTTPClient(session: URLSession(configuration: configuration)).withExplicitProxy(nil)
+    }()
     public var webResourceHTTPClient: HTTPClient = .shared
 
     private let cacheLock = NSLock()
     private var cache: [String: Data] = [:]
+    private var recoveryPlaylistKeys: [String] = []
     private let streamLock = NSLock()
     private var streams: [String: RemoteStream] = [:]
     private let localFileLock = NSLock()
     private var localFiles: [String: RegisteredLocalFile] = [:]
+    private let seekableLock = NSLock()
+    private var seekableResources: [String: SeekableResource] = [:]
+    private let seekableBuffer = SeekableResourceBuffer()
+
+    public func registerSeekableResource(_ resource: SeekableResource) throws -> String {
+        guard isRunning else { throw ProxyServerError.serverNotRunning }
+        let id = UUID().uuidString
+        seekableLock.withLock { seekableResources[id] = resource }
+        return getAddress("/resource?id=" + id)
+    }
+    public func unregisterSeekableResource(url: String) {
+        guard let id = URLComponents(string: url)?.queryItems?.first(where: { $0.name == "id" })?.value else { return }
+        _ = seekableLock.withLock { seekableResources.removeValue(forKey: id) }
+        Task { await seekableBuffer.close(id: id) }
+    }
+    /// Only the current server's live, opaque resource URL is a trusted file playback endpoint.
+    public func isRegisteredSeekableResource(url: String) -> Bool {
+        guard isRunning, let components = URLComponents(string: url),
+              components.scheme == "http", components.host == "127.0.0.1", components.port == port,
+              components.user == nil, components.password == nil, components.fragment == nil,
+              components.percentEncodedPath == "/resource",
+              let items = components.queryItems, items.count == 1,
+              items[0].name == "id", let id = items[0].value else { return false }
+        return seekableLock.withLock { seekableResources[id] != nil }
+    }
+    fileprivate func seekableResource(id: String) -> SeekableResource? {
+        seekableLock.withLock { seekableResources[id] }
+    }
+    public func seekableResourceTransferProfile(forLocalURL url: String) -> PlaybackTransferProfile? {
+        guard isRegisteredSeekableResource(url: url),
+              let id = URLComponents(string: url)?.queryItems?.first?.value else { return nil }
+        return seekableResource(id: id)?.transferProfile
+    }
+    fileprivate func readSeekableResource(id: String, range: Range<Int64>, phase: PlaybackTransferPhase = .playback) async throws -> Data {
+        guard let resource = seekableResource(id: id) else { throw CancellationError() }
+        let data = try await seekableBuffer.read(id: id, range: range, resource: resource, phase: phase)
+        guard seekableResource(id: id) != nil else { throw CancellationError() }
+        await enforceRemoteStreamBufferLimit()
+        return data
+    }
     private let recentErrorLock = NSLock()
     private var recentErrors: [String] = []
     private var cleanupTimer: DispatchSourceTimer?
@@ -283,6 +348,8 @@ public final class ProxyServer: @unchecked Sendable {
         localFileLock.lock()
         localFiles.removeAll()
         localFileLock.unlock()
+        let resourceIDs = seekableLock.withLock { let ids = Array(seekableResources.keys); seekableResources.removeAll(); return ids }
+        Task { for id in resourceIDs { await seekableBuffer.close(id: id) } }
         recentErrorLock.lock()
         recentErrors.removeAll()
         recentErrorLock.unlock()
@@ -316,6 +383,25 @@ public final class ProxyServer: @unchecked Sendable {
         cache.removeValue(forKey: key)
     }
 
+    /// Recovery masters are memory-only, bounded, and addressed by an opaque random key.
+    public func registerRecoveryPlaylist(_ playlist: String) -> (url: String, key: String)? {
+        let data = Data(playlist.utf8)
+        guard data.count < 256 * 1024 else { return nil }
+        let key = "hls-recovery-" + UUID().uuidString
+        cacheLock.lock()
+        recoveryPlaylistKeys.append(key)
+        cache[key] = data
+        while recoveryPlaylistKeys.count > 4 { cache.removeValue(forKey: recoveryPlaylistKeys.removeFirst()) }
+        cacheLock.unlock()
+        return (getAddress("/cache?key=" + key), key)
+    }
+
+    public func removeRecoveryPlaylist(_ key: String) {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        recoveryPlaylistKeys.removeAll { $0 == key }
+        cache.removeValue(forKey: key)
+    }
+
     public func registerRemoteStream(
         url: String,
         headers: [String: String],
@@ -325,25 +411,50 @@ public final class ProxyServer: @unchecked Sendable {
         continuousOpenEndedResponses: Bool = false,
         parallelSegmentedOpenEndedUpstream: Bool = false,
         parallelUpstreamUsesCurl: Bool = false,
+        parallelUpstreamUsesHTTP2Multiplexing: Bool = false,
         parallelUpstreamSegmentSize: Int64 = 5 * 1024 * 1024,
         parallelUpstreamConcurrency: Int = 3,
+        upstreamUsesDirectConnection: Bool = false,
+        preloadLayout: RemoteStreamPreloadLayout = .standard,
         bufferConfiguration: RemoteStreamBufferConfiguration = .default,
-        relayMode: RemoteStreamRelayMode = .buffered
+        relayMode: RemoteStreamRelayMode = .buffered,
+        transferProfile: PlaybackTransferProfile? = nil
     ) -> String {
         cleanupExpiredRemoteStreams()
         let id = UUID().uuidString
         let buffer = RemoteStreamBuffer(id: id, configuration: bufferConfiguration)
+        let normalizedParallelConcurrency = max(1, parallelUpstreamConcurrency)
+        let parallelConcurrencyController = RemoteStreamParallelConcurrencyController(
+            maximum: normalizedParallelConcurrency, adaptive: transferProfile?.adaptsConcurrency == true
+        )
         let now = Date()
         let normalizedSourceByteOffset = max(0, sourceByteOffset)
         let downstreamContentLength = contentLength.flatMap { length -> Int64? in
             let adjustedLength = length - normalizedSourceByteOffset
             return adjustedLength > 0 ? adjustedLength : nil
         }
+        let usesDirectUpstream = upstreamUsesDirectConnection || parallelUpstreamUsesHTTP2Multiplexing
+        let upstreamHTTPClient: HTTPClient
+        if remoteStreamHTTPClient === HTTPClient.shared {
+            if parallelUpstreamUsesHTTP2Multiplexing {
+                upstreamHTTPClient = multiplexedRemoteStreamHTTPClient
+            } else if parallelSegmentedOpenEndedUpstream && normalizedParallelConcurrency > 6 {
+                upstreamHTTPClient = usesDirectUpstream
+                    ? directParallelRemoteStreamHTTPClient : parallelRemoteStreamHTTPClient
+            } else {
+                upstreamHTTPClient = usesDirectUpstream ? directRemoteStreamHTTPClient : remoteStreamHTTPClient
+            }
+        } else {
+            upstreamHTTPClient = usesDirectUpstream
+                ? remoteStreamHTTPClient.withExplicitProxy(nil)
+                : remoteStreamHTTPClient
+        }
         streamLock.lock()
         streams[id] = RemoteStream(
             id: id,
             url: url,
             headers: headers,
+            upstreamHTTPClient: upstreamHTTPClient,
             contentType: contentType,
             buffer: buffer,
             bufferConfiguration: bufferConfiguration,
@@ -352,8 +463,11 @@ public final class ProxyServer: @unchecked Sendable {
             continuousOpenEndedResponses: continuousOpenEndedResponses,
             parallelSegmentedOpenEndedUpstream: parallelSegmentedOpenEndedUpstream,
             parallelUpstreamUsesCurl: parallelUpstreamUsesCurl,
+            parallelUpstreamUsesHTTP2Multiplexing: parallelUpstreamUsesHTTP2Multiplexing,
             parallelUpstreamSegmentSize: max(1, parallelUpstreamSegmentSize),
-            parallelUpstreamConcurrency: max(1, parallelUpstreamConcurrency),
+            parallelUpstreamConcurrency: normalizedParallelConcurrency,
+            parallelConcurrencyController: parallelConcurrencyController,
+            preloadLayout: preloadLayout,
             contentLength: downstreamContentLength,
             createdAt: now,
             lastAccessAt: now,
@@ -365,7 +479,11 @@ public final class ProxyServer: @unchecked Sendable {
 
         var components = URLComponents(string: getAddress("/stream"))!
         components.queryItems = [URLQueryItem(name: "id", value: id)]
-        DiagnosticLog.write("[REMOTE_STREAM_REGISTER] id=\(id), mode=\(relayMode.rawValue), sourceByteOffset=\(normalizedSourceByteOffset), continuousOpenEndedResponses=\(continuousOpenEndedResponses), parallelSegmentedOpenEndedUpstream=\(parallelSegmentedOpenEndedUpstream), parallelUpstreamUsesCurl=\(parallelUpstreamUsesCurl), parallelUpstreamSegmentSize=\(max(1, parallelUpstreamSegmentSize)), parallelUpstreamConcurrency=\(max(1, parallelUpstreamConcurrency)), url=\(Self.redactedURL(url)), headers=\(Self.redactedHeaders(headers))")
+        DiagnosticLog.write("[REMOTE_STREAM_NETWORK_ROUTE] id=\(id), route=\(usesDirectUpstream ? "direct" : "automatic")")
+        if let transferProfile {
+            DiagnosticLog.write("[PLAYBACK_TRANSFER_PROFILE] id=\(id) version=\(PlaybackTransferProfile.version) profile=\(transferProfile.diagnosticName) initialBytes=\(transferProfile.initialReadBytes) steadyBytes=\(transferProfile.steadyReadBytes) cacheLimit=\(transferProfile.maximumCachedBytes)")
+        }
+        DiagnosticLog.write("[REMOTE_STREAM_REGISTER] id=\(id), mode=\(relayMode.rawValue), sourceByteOffset=\(normalizedSourceByteOffset), continuousOpenEndedResponses=\(continuousOpenEndedResponses), parallelSegmentedOpenEndedUpstream=\(parallelSegmentedOpenEndedUpstream), parallelUpstreamUsesCurl=\(parallelUpstreamUsesCurl), parallelUpstreamUsesHTTP2Multiplexing=\(parallelUpstreamUsesHTTP2Multiplexing), parallelUpstreamSegmentSize=\(max(1, parallelUpstreamSegmentSize)), parallelUpstreamConcurrency=\(normalizedParallelConcurrency), url=\(Self.redactedURL(url)), headers=\(Self.redactedHeaders(headers))")
         return components.url?.absoluteString ?? getAddress("/stream?id=\(id)")
     }
 
@@ -422,6 +540,10 @@ public final class ProxyServer: @unchecked Sendable {
     }
 
     public func remoteStreamBufferSnapshot(forLocalURL urlString: String) async -> RemoteStreamBufferSnapshot? {
+        if isRegisteredSeekableResource(url: urlString),
+           let id = URLComponents(string: urlString)?.queryItems?.first?.value {
+            return await seekableBuffer.snapshot(id: id)
+        }
         guard let components = URLComponents(string: urlString),
               let host = components.host?.lowercased(),
               (host == "127.0.0.1" || host == "localhost"),
@@ -432,6 +554,187 @@ public final class ProxyServer: @unchecked Sendable {
         }
 
         return await stream.buffer.snapshot()
+    }
+
+    @discardableResult
+    public func setRemoteStreamParallelConcurrencyLimit(
+        forLocalURL urlString: String,
+        limit: Int
+    ) -> Int? {
+        guard let components = URLComponents(string: urlString),
+              let host = components.host?.lowercased(),
+              (host == "127.0.0.1" || host == "localhost"),
+              components.port == port,
+              components.path == "/stream",
+              let id = components.queryItems?.first(where: { $0.name == "id" })?.value,
+              let stream = stream(for: id),
+              stream.parallelSegmentedOpenEndedUpstream else {
+            return nil
+        }
+        let previous = stream.parallelConcurrencyController.setLimit(limit)
+        DiagnosticLog.write(
+            "[REMOTE_STREAM_CONCURRENCY] id=\(id) previous=\(previous) current=\(stream.parallelConcurrencyController.currentLimit) maximum=\(stream.parallelUpstreamConcurrency)"
+        )
+        return previous
+    }
+
+    public func prefetchRemoteStream(
+        forLocalURL urlString: String,
+        byteLimit: Int64 = 16 * 1024 * 1024,
+        mode: RemoteStreamPreloadMode = .full
+    ) async throws -> RemoteStreamBufferSnapshot? {
+        if isRegisteredSeekableResource(url: urlString), byteLimit > 0,
+           let id = URLComponents(string: urlString)?.queryItems?.first?.value,
+           let resource = seekableResource(id: id) {
+            let limit = min(resource.size, byteLimit, PlaybackTransferProfile.backgroundByteLimit,
+                mode == .essentials ? 512 * 1024 : 2 * 1024 * 1024)
+            var start: Int64 = 0
+            while start < limit {
+                try await PlaybackBackgroundBudget.shared.waitForBackgroundPermission()
+                let end = min(limit, start + 512 * 1024)
+                _ = try await readSeekableResource(id: id, range: start..<end, phase: .preload)
+                start = end
+            }
+            return await seekableBuffer.snapshot(id: id)
+        }
+        guard isRunning,
+              byteLimit > 0,
+              var components = URLComponents(string: urlString),
+              let host = components.host?.lowercased(),
+              host == "127.0.0.1" || host == "localhost",
+              components.port == port,
+              components.path == "/stream",
+              let id = components.queryItems?.first(where: { $0.name == "id" })?.value,
+              let stream = stream(for: id) else {
+            return nil
+        }
+
+        let cappedLimit = min(byteLimit, PlaybackTransferProfile.backgroundByteLimit)
+        var items = components.queryItems ?? []
+        items.removeAll { $0.name == "preload" }
+        items.append(URLQueryItem(name: "preload", value: "1"))
+        components.queryItems = items
+        guard let preloadURL = components.url?.absoluteString else { return nil }
+
+        if stream.parallelSegmentedOpenEndedUpstream {
+            let usesUCStartupLayout = stream.preloadLayout == .ucOriginal
+            let usesQuarkStartupLayout = stream.preloadLayout == .quarkOriginal
+            let usesAudioStartupLayout = stream.preloadLayout == .audioOriginal
+            let segmentSize = stream.parallelUpstreamUsesHTTP2Multiplexing
+                ? 512 * 1024
+                : max(1, stream.parallelUpstreamSegmentSize)
+            let concurrency = max(1, stream.parallelUpstreamConcurrency)
+            let plan = RemoteStreamPreloadPolicy.plan(
+                byteLimit: cappedLimit,
+                contentLength: stream.contentLength,
+                segmentSize: segmentSize,
+                concurrency: concurrency,
+                usesUCStartupLayout: usesUCStartupLayout,
+                usesQuarkStartupLayout: usesQuarkStartupLayout,
+                usesAudioStartupLayout: usesAudioStartupLayout,
+                essentialsOnly: mode == .essentials
+            )
+            let ranges = plan.ranges
+            let preloadConcurrency = usesAudioStartupLayout ? min(concurrency, 2)
+                : usesUCStartupLayout || usesQuarkStartupLayout
+                    ? min(concurrency, mode == .essentials ? 4 : 24) : concurrency
+            let activeConcurrency = min(ranges.count, preloadConcurrency)
+            let preloadClient: HTTPClient
+            if stream.parallelUpstreamUsesHTTP2Multiplexing,
+               remoteStreamHTTPClient === HTTPClient.shared {
+                preloadClient = multiplexedRemoteStreamHTTPClient
+            } else {
+                let sessionConfiguration = URLSessionConfiguration.ephemeral
+                sessionConfiguration.httpMaximumConnectionsPerHost = activeConcurrency
+                preloadClient = HTTPClient(session: URLSession(configuration: sessionConfiguration)).withExplicitProxy(nil)
+            }
+            await withTaskGroup(of: Void.self) { group in
+                var remaining = ranges.makeIterator()
+                func enqueue(_ range: RemoteStreamRange) {
+                    group.addTask {
+                        do {
+                            try await PlaybackBackgroundBudget.shared.waitForBackgroundPermission()
+                            _ = try await preloadClient.request(
+                            url: preloadURL,
+                            method: .get,
+                            headers: ["Range": range.headerValue],
+                            timeout: 20,
+                            allowsProxyFallback: false,
+                            redactsURLInLogs: true
+                            )
+                        } catch { }
+                    }
+                }
+                for _ in 0..<activeConcurrency {
+                    if let range = remaining.next() { enqueue(range) }
+                }
+                while await group.next() != nil {
+                    guard !Task.isCancelled else {
+                        group.cancelAll()
+                        break
+                    }
+                    if let range = remaining.next() { enqueue(range) }
+                }
+            }
+            try Task.checkCancellation()
+            let snapshot = await stream.buffer.snapshot()
+            guard snapshot.covers(ranges) else { throw ProxyServerError.emptyUpstreamResponse("preload-coverage") }
+            DiagnosticLog.write(
+                "[NEXT_PRELOAD_RANGE] id=\(id) mode=parallel phase=\(mode.rawValue) cachedBytes=\(snapshot.cachedBytes) headerBytes=\(plan.headerBytes) startupStart=\(plan.startupStart) startupBytes=\(plan.startupBytes) tailBytes=\(plan.tailBytes) segments=\(ranges.count) activeConcurrency=\(activeConcurrency)"
+            )
+            return snapshot
+        }
+
+        var start: Int64 = 0
+        let sequentialLimit = min(cappedLimit, stream.contentLength ?? cappedLimit, mode == .essentials ? stream.bufferConfiguration.initialChunkSize : cappedLimit)
+        while start < sequentialLimit {
+            try await PlaybackBackgroundBudget.shared.waitForBackgroundPermission()
+            let requestedSize = start == 0
+                ? stream.bufferConfiguration.initialChunkSize
+                : stream.bufferConfiguration.chunkSize
+            let size = max(1, min(requestedSize, sequentialLimit - start))
+            let end = start + size - 1
+            let response = try await directRemoteStreamHTTPClient.request(
+                url: preloadURL,
+                method: .get,
+                headers: ["Range": "bytes=\(start)-\(end)"],
+                timeout: Self.defaultStreamTimeout,
+                allowsProxyFallback: false,
+                redactsURLInLogs: true
+            )
+            guard (200..<300).contains(response.statusCode), !response.data.isEmpty else { break }
+            let parsedRange = parseRemoteStreamContentRange(response.headers)
+            start = parsedRange.map { $0.end + 1 }
+                ?? (start + Int64(response.data.count))
+            if let totalLength = parsedRange?.total, start >= totalLength {
+                break
+            }
+        }
+
+        try Task.checkCancellation()
+        let snapshot = await stream.buffer.snapshot()
+        guard sequentialLimit > 0, snapshot.covers([.init(start: 0, end: sequentialLimit - 1)]) else {
+            throw ProxyServerError.emptyUpstreamResponse("preload-coverage")
+        }
+        DiagnosticLog.write(
+            "[NEXT_PRELOAD_RANGE] id=\(id) cachedBytes=\(snapshot.cachedBytes) limit=\(cappedLimit)"
+        )
+        return snapshot
+    }
+
+    private func parseRemoteStreamContentRange(
+        _ headers: [String: String]
+    ) -> (end: Int64, total: Int64?)? {
+        guard let contentRange = headers.first(where: {
+            $0.key.caseInsensitiveCompare("Content-Range") == .orderedSame
+        })?.value,
+              let slash = contentRange.lastIndex(of: "/"),
+              let dash = contentRange[..<slash].lastIndex(of: "-"),
+              let end = Int64(contentRange[contentRange.index(after: dash)..<slash]) else {
+            return nil
+        }
+        let totalText = contentRange[contentRange.index(after: slash)...]
+        return (end, totalText == "*" ? nil : Int64(totalText))
     }
 
     func stream(for id: String) -> RemoteStream? {
@@ -523,7 +826,7 @@ public final class ProxyServer: @unchecked Sendable {
         let entries = currentRemoteStreamBufferEntries()
 
         var measured: [(id: String, lastAccessAt: Date, cachedBytes: Int64, buffer: RemoteStreamBuffer)] = []
-        var total: Int64 = 0
+        var total: Int64 = await seekableBuffer.totalCachedBytes
         for entry in entries {
             let snapshot = await entry.buffer.snapshot()
             total += snapshot.cachedBytes
@@ -636,6 +939,7 @@ public final class ProxyServer: @unchecked Sendable {
     }
 
     static func redactedURL(_ url: String) -> String {
+        let url = XtreamLogRedaction.redact(url)
         guard var components = URLComponents(string: url) else { return url }
         components.queryItems = components.queryItems?.map { item in
             switch item.name.lowercased() {
@@ -663,16 +967,99 @@ public enum RemoteStreamRelayMode: String, Codable, Sendable {
     case chunked
 }
 
+public enum RemoteStreamPreloadMode: String, Sendable {
+    case essentials
+    case full
+}
+
+public enum RemoteStreamPreloadLayout: Sendable {
+    case standard
+    case audioOriginal
+    case ucOriginal
+    case quarkOriginal
+}
+
 struct RegisteredLocalFile: Sendable {
     let id: String
     let url: URL
     let createdAt: Date
 }
 
+final class RemoteStreamParallelConcurrencyController: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximum: Int
+    private var limit: Int
+    private let adaptive: Bool
+    private var adaptiveLimit: Int
+    private var windowStarted: TimeInterval?
+    private var samples = 0
+    private var timeouts = 0
+    private var healthyWindows = 0
+
+    init(maximum: Int, adaptive: Bool = false) {
+        let normalized = max(1, maximum)
+        self.maximum = normalized
+        self.limit = normalized
+        self.adaptiveLimit = normalized
+        self.adaptive = adaptive
+    }
+
+    var currentLimit: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return min(limit, adaptiveLimit)
+    }
+
+    @discardableResult
+    func setLimit(_ requestedLimit: Int) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let previous = limit
+        limit = min(maximum, max(1, requestedLimit))
+        return previous
+    }
+
+    static func isTimeout(_ error: Error) -> Bool {
+        // UC/Quark's measured transport reports libcurl errors, while other
+        // requests use URLSession. Both must contribute to the same window.
+        if let curl = error as? CurlRangeTransportError { return curl.code == 28 } // CURLE_OPERATION_TIMEDOUT
+        let failure = error as NSError
+        return failure.domain == NSURLErrorDomain && failure.code == NSURLErrorTimedOut
+    }
+
+    /// Only UC/Quark video profiles opt in. Auth failures and cancellation never
+    /// count as congestion. Changes apply to newly scheduled requests.
+    @discardableResult
+    func record(timedOut: Bool, now: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                bufferedEnough: Bool = PlaybackBackgroundBudget.shared.permitsBackgroundWork) -> Bool {
+        guard adaptive else { return false }
+        return lock.withLock {
+            if windowStarted == nil { windowStarted = now }
+            samples += 1; if timedOut { timeouts += 1 }
+            guard now - (windowStarted ?? now) >= 5, samples >= 5 else { return false }
+            defer { windowStarted = now; samples = 0; timeouts = 0 }
+            if Double(timeouts) / Double(samples) >= 0.2 {
+                adaptiveLimit = max(min(2, maximum), adaptiveLimit / 2)
+                healthyWindows = 0
+                return true
+            }
+            if timeouts == 0, bufferedEnough {
+                healthyWindows += 1
+                if healthyWindows >= 3 {
+                    adaptiveLimit = min(maximum, adaptiveLimit * 2)
+                    healthyWindows = 0
+                }
+            } else { healthyWindows = 0 }
+            return false
+        }
+    }
+}
+
 struct RemoteStream: Sendable {
     let id: String
     let url: String
     let headers: [String: String]
+    let upstreamHTTPClient: HTTPClient
     let contentType: String
     let buffer: RemoteStreamBuffer
     let bufferConfiguration: RemoteStreamBufferConfiguration
@@ -681,8 +1068,11 @@ struct RemoteStream: Sendable {
     let continuousOpenEndedResponses: Bool
     let parallelSegmentedOpenEndedUpstream: Bool
     let parallelUpstreamUsesCurl: Bool
+    let parallelUpstreamUsesHTTP2Multiplexing: Bool
     let parallelUpstreamSegmentSize: Int64
     let parallelUpstreamConcurrency: Int
+    let parallelConcurrencyController: RemoteStreamParallelConcurrencyController
+    let preloadLayout: RemoteStreamPreloadLayout
     var contentLength: Int64?
     let createdAt: Date
     var lastAccessAt: Date
@@ -713,6 +1103,135 @@ public struct RemoteStreamRange: Sendable, Hashable {
     }
 }
 
+struct RemoteStreamPreloadPlan: Sendable, Equatable {
+    let ranges: [RemoteStreamRange]
+    let headerBytes: Int64
+    let startupStart: Int64
+    let startupBytes: Int64
+    let tailBytes: Int64
+}
+
+enum RemoteStreamPreloadPolicy {
+    static func plan(
+        byteLimit: Int64,
+        contentLength: Int64?,
+        segmentSize: Int64,
+        concurrency: Int,
+        usesUCStartupLayout: Bool = false,
+        usesQuarkStartupLayout: Bool = false,
+        usesAudioStartupLayout: Bool = false,
+        essentialsOnly: Bool = false
+    ) -> RemoteStreamPreloadPlan {
+        let safeLimit = max(0, byteLimit)
+        let safeSegmentSize = max(1, segmentSize)
+        let oneWaveLimit = safeSegmentSize * Int64(max(1, concurrency))
+        let knownLength = max(0, contentLength ?? safeLimit)
+        let usesCompactUCLayout = usesUCStartupLayout && knownLength > 32 * 1024 * 1024
+        let headerBytes: Int64
+        let startupStart: Int64
+        let startupBytes: Int64
+        let tailBytes: Int64
+        var ranges: [RemoteStreamRange]
+
+        if usesAudioStartupLayout {
+            headerBytes = min(essentialsOnly ? 64 * 1024 : 2 * 1024 * 1024, safeLimit, knownLength)
+            startupStart = 0
+            startupBytes = 0
+            tailBytes = 0
+            ranges = makeRanges(start: 0, byteCount: headerBytes, segmentSize: safeSegmentSize)
+        } else if usesQuarkStartupLayout {
+            // Quark MP4s start at the file head and can carry a multi-MiB moov at EOF.
+            let budget = min(safeLimit, knownLength)
+            headerBytes = min(essentialsOnly ? 512 * 1024 : 8 * 1024 * 1024, budget)
+            startupStart = 0
+            startupBytes = 0
+            tailBytes = contentLength == nil ? 0 : min(8 * 1024 * 1024, budget - headerBytes)
+            ranges = makeRanges(start: 0, byteCount: headerBytes, segmentSize: safeSegmentSize)
+            ranges.append(contentsOf: makeRanges(
+                start: knownLength - tailBytes,
+                byteCount: tailBytes,
+                segmentSize: safeSegmentSize
+            ))
+        } else if usesCompactUCLayout {
+            headerBytes = min(512 * 1024, safeLimit, knownLength)
+            tailBytes = min(
+                2 * 1024 * 1024,
+                max(0, safeLimit - headerBytes),
+                max(0, knownLength - headerBytes)
+            )
+            startupStart = essentialsOnly
+                ? 0
+                : min(5 * 1024 * 1024, max(headerBytes, knownLength - tailBytes))
+            startupBytes = essentialsOnly
+                ? 0
+                : min(
+                    19 * 512 * 1024,
+                    max(0, safeLimit - headerBytes - tailBytes),
+                    max(0, knownLength - tailBytes - startupStart)
+                )
+            ranges = makeRanges(start: 0, byteCount: headerBytes, segmentSize: safeSegmentSize)
+            ranges.append(contentsOf: makeRanges(
+                start: knownLength - tailBytes,
+                byteCount: tailBytes,
+                segmentSize: safeSegmentSize
+            ))
+            ranges.append(contentsOf: makeRanges(
+                start: startupStart,
+                byteCount: startupBytes,
+                segmentSize: safeSegmentSize
+            ))
+        } else {
+            headerBytes = min(safeLimit, oneWaveLimit, knownLength)
+            startupStart = 0
+            startupBytes = 0
+            let remainingBudget = max(0, safeLimit - headerBytes)
+            tailBytes = contentLength.map { totalLength in
+                min(3 * 1024 * 1024, remainingBudget, max(0, totalLength - headerBytes))
+            } ?? 0
+            ranges = makeRanges(start: 0, byteCount: headerBytes, segmentSize: safeSegmentSize)
+            if contentLength != nil {
+                ranges.append(contentsOf: makeRanges(
+                    start: knownLength - tailBytes,
+                    byteCount: tailBytes,
+                    segmentSize: safeSegmentSize
+                ))
+            }
+        }
+
+        return RemoteStreamPreloadPlan(
+            ranges: disjointRanges(ranges),
+            headerBytes: headerBytes,
+            startupStart: startupStart,
+            startupBytes: startupBytes,
+            tailBytes: tailBytes
+        )
+    }
+
+    private static func disjointRanges(_ ranges: [RemoteStreamRange]) -> [RemoteStreamRange] {
+        var result: [RemoteStreamRange] = []
+        for range in ranges.sorted(by: { $0.start == $1.start ? $0.end < $1.end : $0.start < $1.start }) {
+            let start = max(range.start, result.last.map { $0.end + 1 } ?? range.start)
+            if start <= range.end { result.append(.init(start: start, end: range.end)) }
+        }
+        return result
+    }
+
+    private static func makeRanges(
+        start: Int64,
+        byteCount: Int64,
+        segmentSize: Int64
+    ) -> [RemoteStreamRange] {
+        guard byteCount > 0 else { return [] }
+        let end = start + byteCount
+        return stride(from: start, to: end, by: Int(segmentSize)).map { rangeStart in
+            RemoteStreamRange(
+                start: rangeStart,
+                end: min(end - 1, rangeStart + segmentSize - 1)
+            )
+        }
+    }
+}
+
 struct RemoteStreamChunk: Sendable {
     let range: RemoteStreamRange
     let data: Data
@@ -726,6 +1245,21 @@ public struct RemoteStreamBufferSnapshot: Sendable {
     public let inFlightRanges: [RemoteStreamRange]
     public let cachedBytes: Int64
     public let deliveredBytes: Int64
+    public let receivedBytes: Int64
+
+    public func covers(_ ranges: [RemoteStreamRange]) -> Bool {
+        let sorted = chunkRanges.sorted { $0.start < $1.start }
+        return ranges.allSatisfy { target in
+            var cursor = target.start
+            for range in sorted {
+                if range.end < cursor { continue }
+                if range.start > cursor { break }
+                cursor = max(cursor, range.end + 1)
+                if cursor > target.end { return true }
+            }
+            return false
+        }
+    }
 }
 
 public struct ProxyHealthSnapshot: Codable, Sendable {
@@ -786,6 +1320,7 @@ public struct RemoteStreamBufferConfiguration: Sendable {
 enum RemoteStreamLoadKind: Sendable {
     case demand
     case prefetch
+    case prime
 }
 
 struct RemoteStreamInFlight: Sendable {
@@ -793,6 +1328,12 @@ struct RemoteStreamInFlight: Sendable {
     let generation: Int
     let kind: RemoteStreamLoadKind
     let task: Task<RemoteStreamChunk, Error>
+    let read: PlaybackSharedRead<RemoteStreamChunk>
+
+    init(id: UUID, generation: Int, kind: RemoteStreamLoadKind, task: Task<RemoteStreamChunk, Error>) {
+        self.id = id; self.generation = generation; self.kind = kind; self.task = task
+        self.read = PlaybackSharedRead(task: task)
+    }
 }
 
 actor RemoteStreamBuffer {
@@ -802,10 +1343,15 @@ actor RemoteStreamBuffer {
     private var inFlight: [RemoteStreamRange: RemoteStreamInFlight] = [:]
     private var cachedBytes: Int64 = 0
     private var deliveredBytes: Int64 = 0
+    private var receivedBytes: Int64 = 0
     private var activeStart: Int64 = 0
     private var generation = 0
+    private var closed = false
     private var prefetchTargetEnd: Int64 = -1
     private var nextPrefetchStart: Int64?
+    private var pendingEvictionChunks = 0
+    private var pendingEvictionBytes: Int64 = 0
+    private var lastEvictionLogAt = Date.distantPast
 
     init(id: String, configuration: RemoteStreamBufferConfiguration = .default) {
         self.id = id
@@ -814,10 +1360,13 @@ actor RemoteStreamBuffer {
 
     func snapshot() -> RemoteStreamBufferSnapshot {
         RemoteStreamBufferSnapshot(
-            chunkRanges: chunks.map(\.range).sorted { $0.start < $1.start },
+            chunkRanges: chunks.filter { !$0.data.isEmpty }.map {
+                RemoteStreamRange(start: $0.range.start, end: min($0.range.end, $0.range.start + Int64($0.data.count) - 1))
+            }.sorted { $0.start < $1.start },
             inFlightRanges: Array(inFlight.keys).sorted { $0.start < $1.start },
             cachedBytes: cachedBytes,
-            deliveredBytes: deliveredBytes
+            deliveredBytes: deliveredBytes,
+            receivedBytes: receivedBytes
         )
     }
 
@@ -826,9 +1375,15 @@ actor RemoteStreamBuffer {
         deliveredBytes += Int64(count)
     }
 
+    func recordReceivedBytes(_ count: Int) {
+        guard count > 0 else { return }
+        receivedBytes += Int64(count)
+    }
+
     func cancelAll() {
+        closed = true
         for marker in inFlight.values {
-            marker.task.cancel()
+            marker.read.cancel()
         }
         inFlight.removeAll()
         chunks.removeAll()
@@ -842,34 +1397,66 @@ actor RemoteStreamBuffer {
         for requestedRange: RemoteStreamRange,
         stream: RemoteStream,
         method: NIOHTTP1.HTTPMethod,
+        isPriming: Bool = false,
         fetch: @escaping @Sendable (RemoteStreamRange, RemoteStreamLoadKind) async throws -> RemoteStreamChunk
     ) async throws -> ProxyResponse {
-        if let cached = assembledCachedChunk(containing: requestedRange) {
+        try Task.checkCancellation()
+        guard !closed else { throw CancellationError() }
+        if let cached = assembledCachedChunk(containing: requestedRange),
+           !isPriming || cached.range.contains(requestedRange) {
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_HIT] id=\(id), range=\(requestedRange.headerValue)")
-            advancePlaybackStart(to: requestedRange.start)
-            schedulePrefetch(after: cached, stream: stream, fetch: fetch)
+            if !isPriming {
+                advancePlaybackStart(to: requestedRange.start)
+                schedulePrefetch(after: cached, stream: stream, fetch: fetch)
+            }
             return proxyResponse(from: cached, requestedRange: requestedRange, method: method)
         }
 
         if let marker = inFlightMarker(containing: requestedRange) {
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_WAIT] id=\(id), range=\(requestedRange.headerValue)")
-            let chunk = try await marker.task.value
-            if marker.kind == .demand {
-                processDemandChunk(chunk, requestedRange: requestedRange, markerGeneration: marker.generation, stream: stream, fetch: fetch)
+            let chunk = try await marker.read.value(phase: isPriming ? .preload : .playback)
+            try Task.checkCancellation()
+            guard !closed else { throw CancellationError() }
+            removeCompletedMarker(marker)
+            if marker.kind != .prefetch {
+                processDemandChunk(
+                    chunk,
+                    requestedRange: requestedRange,
+                    markerGeneration: marker.generation,
+                    stream: stream,
+                    isPriming: isPriming,
+                    fetch: fetch
+                )
             } else {
-                advancePlaybackStart(to: requestedRange.start)
-                schedulePrefetch(after: chunk, stream: stream, fetch: fetch)
+                store(chunk, prefetch: false)
+                if !isPriming {
+                    advancePlaybackStart(to: requestedRange.start)
+                    schedulePrefetch(after: chunk, stream: stream, fetch: fetch)
+                }
             }
             return proxyResponse(from: chunk, requestedRange: requestedRange, method: method)
         }
 
         DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_MISS] id=\(id), range=\(requestedRange.headerValue)")
-        let (chunk, markerGeneration) = try await loadDemand(range: requestedRange, fetch: fetch)
-        processDemandChunk(chunk, requestedRange: requestedRange, markerGeneration: markerGeneration, stream: stream, fetch: fetch)
+        let loadKind: RemoteStreamLoadKind = isPriming ? .prime : .demand
+        let (chunk, markerGeneration) = try await loadDemand(
+            range: requestedRange,
+            kind: loadKind,
+            fetch: fetch
+        )
+        processDemandChunk(
+            chunk,
+            requestedRange: requestedRange,
+            markerGeneration: markerGeneration,
+            stream: stream,
+            isPriming: isPriming,
+            fetch: fetch
+        )
         return proxyResponse(from: chunk, requestedRange: requestedRange, method: method)
     }
 
     func continuousResponse(for requestedRange: RemoteStreamRange) -> ProxyResponse? {
+        guard !closed else { return nil }
         guard let cached = assembledCachedChunk(containing: requestedRange) else {
             return nil
         }
@@ -882,14 +1469,19 @@ actor RemoteStreamBuffer {
         for requestedRange: RemoteStreamRange,
         fetch: @escaping @Sendable (RemoteStreamRange) async throws -> RemoteStreamChunk
     ) async throws -> RemoteStreamChunk {
+        try Task.checkCancellation()
+        guard !closed else { throw CancellationError() }
         if let cached = assembledCachedChunk(containing: requestedRange),
            cached.range.contains(requestedRange) {
             DiagnosticLog.write("[REMOTE_STREAM_CONTINUOUS_CACHE_HIT] id=\(id), range=\(requestedRange.headerValue)")
             return cached
         }
 
-        if let marker = inFlight[requestedRange] {
-            let chunk = try await marker.task.value
+        if let marker = inFlightMarker(containing: requestedRange) {
+            let chunk = try await marker.read.value()
+            try Task.checkCancellation()
+            guard !closed else { throw CancellationError() }
+            removeCompletedMarker(marker)
             store(chunk, prefetch: false)
             return assembledCachedChunk(containing: requestedRange) ?? chunk
         }
@@ -906,14 +1498,16 @@ actor RemoteStreamBuffer {
         inFlight[requestedRange] = marker
 
         do {
-            let chunk = try await task.value
+            let chunk = try await marker.read.value()
+            try Task.checkCancellation()
+            guard !closed else { throw CancellationError() }
             if inFlight[requestedRange]?.id == marker.id {
                 inFlight.removeValue(forKey: requestedRange)
             }
             store(chunk, prefetch: false)
             return assembledCachedChunk(containing: requestedRange) ?? chunk
         } catch {
-            if inFlight[requestedRange]?.id == marker.id {
+            if inFlight[requestedRange]?.id == marker.id, !marker.read.hasForegroundReaders {
                 inFlight.removeValue(forKey: requestedRange)
             }
             throw error
@@ -921,6 +1515,7 @@ actor RemoteStreamBuffer {
     }
 
     func storeContinuousChunk(_ chunk: RemoteStreamChunk) {
+        guard !closed else { return }
         if isSeek(from: activeStart, to: chunk.range.start) {
             cancelPrefetch(except: [])
             chunks.removeAll()
@@ -938,19 +1533,20 @@ actor RemoteStreamBuffer {
         requestedRange: RemoteStreamRange,
         markerGeneration: Int,
         stream: RemoteStream,
+        isPriming: Bool,
         fetch: @escaping @Sendable (RemoteStreamRange, RemoteStreamLoadKind) async throws -> RemoteStreamChunk
     ) {
-        guard markerGeneration == generation || requestedRange.start >= activeStart else {
+        guard !closed, markerGeneration == generation || requestedRange.start >= activeStart else {
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_CANCEL] id=\(id), range=\(requestedRange.headerValue), reason=stale-demand")
             return
         }
 
-        if isTailMetadataProbe(chunk) {
+        if !isPriming, isTailMetadataProbe(chunk) {
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_CANCEL] id=\(id), range=\(requestedRange.headerValue), reason=tail-metadata")
             return
         }
 
-        if isSeek(from: activeStart, to: requestedRange.start) {
+        if !isPriming, isSeek(from: activeStart, to: requestedRange.start) {
             cancelPrefetch(except: [])
             chunks.removeAll()
             cachedBytes = 0
@@ -958,9 +1554,13 @@ actor RemoteStreamBuffer {
             nextPrefetchStart = nil
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_CANCEL] id=\(id), reason=seek, start=\(requestedRange.start)")
         }
-        activeStart = requestedRange.start
+        if !isPriming {
+            activeStart = requestedRange.start
+        }
         store(chunk, prefetch: false)
-        if isInitialHeaderProbe(chunk, requestedRange: requestedRange) {
+        if isPriming {
+            DiagnosticLog.write("[REMOTE_STREAM_PRIME_STORE] id=\(id), range=\(chunk.range.headerValue), bytes=\(chunk.data.count)")
+        } else if isInitialHeaderProbe(chunk, requestedRange: requestedRange) {
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_CANCEL] id=\(id), range=\(requestedRange.headerValue), reason=initial-probe")
         } else {
             schedulePrefetch(after: chunk, stream: stream, fetch: fetch)
@@ -1032,30 +1632,37 @@ actor RemoteStreamBuffer {
     }
 
     private func inFlightMarker(containing range: RemoteStreamRange) -> RemoteStreamInFlight? {
-        inFlight.first { item in item.key.contains(range) }?.value
+        inFlight.first { item in item.key.contains(range) && !item.value.read.isCancelled }?.value
+    }
+
+    private func removeCompletedMarker(_ marker: RemoteStreamInFlight) {
+        inFlight = inFlight.filter { $0.value.id != marker.id }
     }
 
     private func loadDemand(
         range: RemoteStreamRange,
+        kind: RemoteStreamLoadKind = .demand,
         fetch: @escaping @Sendable (RemoteStreamRange, RemoteStreamLoadKind) async throws -> RemoteStreamChunk
     ) async throws -> (RemoteStreamChunk, Int) {
-        if let existing = inFlight[range] {
-            return (try await existing.task.value, existing.generation)
+        if let existing = inFlight[range], !existing.read.isCancelled {
+            return (try await existing.read.value(phase: kind == .prime ? .preload : .playback), existing.generation)
         }
 
         let task = Task<RemoteStreamChunk, Error> {
-            try await fetch(range, .demand)
+            try await fetch(range, kind)
         }
-        let marker = RemoteStreamInFlight(id: UUID(), generation: generation, kind: .demand, task: task)
+        let marker = RemoteStreamInFlight(id: UUID(), generation: generation, kind: kind, task: task)
         inFlight[range] = marker
         do {
-            let chunk = try await task.value
+            let chunk = try await marker.read.value(phase: kind == .prime ? .preload : .playback)
+            try Task.checkCancellation()
+            guard !closed else { throw CancellationError() }
             if inFlight[range]?.id == marker.id {
                 inFlight.removeValue(forKey: range)
             }
             return (chunk, marker.generation)
         } catch {
-            if inFlight[range]?.id == marker.id {
+            if inFlight[range]?.id == marker.id, !marker.read.hasForegroundReaders {
                 inFlight.removeValue(forKey: range)
             }
             throw error
@@ -1063,11 +1670,13 @@ actor RemoteStreamBuffer {
     }
 
     private func store(_ chunk: RemoteStreamChunk, prefetch: Bool) {
-        guard chunk.range.count > 0, !chunk.data.isEmpty else { return }
-        if let existingIndex = chunks.firstIndex(where: { $0.range == chunk.range }) {
-            cachedBytes -= Int64(chunks[existingIndex].data.count)
-            chunks.remove(at: existingIndex)
-        }
+        guard !closed, chunk.range.count > 0, !chunk.data.isEmpty else { return }
+        let actualCount = min(chunk.range.count, Int64(chunk.data.count))
+        let chunk = RemoteStreamChunk(range: .init(start: chunk.range.start, end: chunk.range.start + actualCount - 1),
+            data: Data(chunk.data.prefix(Int(actualCount))), headers: chunk.headers, contentType: chunk.contentType, totalLength: chunk.totalLength)
+        let replaced = chunks.filter { chunk.range.contains($0.range) }
+        cachedBytes -= replaced.reduce(Int64(0)) { $0 + Int64($1.data.count) }
+        chunks.removeAll { chunk.range.contains($0.range) }
         chunks.append(chunk)
         chunks.sort { $0.range.start < $1.range.start }
         cachedBytes += Int64(chunk.data.count)
@@ -1086,12 +1695,12 @@ actor RemoteStreamBuffer {
         chunks.removeAll { chunk in
             if chunk.range.end < activeStart {
                 removedBytes += Int64(chunk.data.count)
-                DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_EVICT] id=\(id), range=\(chunk.range.headerValue), reason=before-active")
                 return true
             }
             return false
         }
         cachedBytes -= removedBytes
+        recordEviction(chunkCount: removed.count, byteCount: removedBytes, reason: "before-active")
     }
 
     private func schedulePrefetch(
@@ -1122,7 +1731,8 @@ actor RemoteStreamBuffer {
             let nextRange = RemoteStreamRange(start: nextStart, end: nextEnd)
             nextPrefetchStart = nextEnd + 1
             nextStart = nextEnd + 1
-            if cachedChunk(containing: nextRange) == nil, inFlightMarker(containing: nextRange) == nil {
+            let isFullyCached = assembledCachedChunk(containing: nextRange)?.range.contains(nextRange) == true
+            if !isFullyCached, inFlightMarker(containing: nextRange) == nil {
                 let task = Task<RemoteStreamChunk, Error> {
                     try await fetch(nextRange, .prefetch)
                 }
@@ -1143,18 +1753,18 @@ actor RemoteStreamBuffer {
         fetch: @escaping @Sendable (RemoteStreamRange, RemoteStreamLoadKind) async throws -> RemoteStreamChunk
     ) async {
         do {
-            let chunk = try await marker.task.value
+            let chunk = try await marker.read.value(phase: .preload)
             if inFlight[range]?.id == marker.id {
                 inFlight.removeValue(forKey: range)
             }
-            guard marker.generation == generation else {
+            guard !closed, marker.generation == generation else {
                 DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_CANCEL] id=\(id), range=\(range.headerValue), reason=stale")
                 return
             }
             store(chunk, prefetch: true)
             fillPrefetchQueue(stream: stream, fetch: fetch)
         } catch {
-            if inFlight[range]?.id == marker.id {
+            if inFlight[range]?.id == marker.id, !marker.read.hasForegroundReaders {
                 inFlight.removeValue(forKey: range)
             }
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_ERROR] id=\(id), range=\(range.headerValue), error=\(error.localizedDescription)")
@@ -1198,20 +1808,42 @@ actor RemoteStreamBuffer {
         prefetchTargetEnd = -1
         nextPrefetchStart = nil
         for (range, marker) in inFlight where marker.kind == .prefetch && !keep.contains(range) {
-            marker.task.cancel()
+            marker.read.cancelBackgroundReaders()
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_CANCEL] id=\(id), range=\(range.headerValue)")
         }
         inFlight = inFlight.filter { range, marker in
-            marker.kind == .demand || keep.contains(range)
+            marker.kind == .demand || marker.read.hasForegroundReaders || keep.contains(range)
         }
     }
 
     private func evictIfNeeded() {
+        var removedChunks = 0
+        var removedBytes: Int64 = 0
         while cachedBytes > configuration.maxBytes, let first = chunks.first {
             chunks.removeFirst()
-            cachedBytes -= Int64(first.data.count)
-            DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_EVICT] id=\(id), range=\(first.range.headerValue), cachedBytes=\(cachedBytes)")
+            let byteCount = Int64(first.data.count)
+            cachedBytes -= byteCount
+            removedChunks += 1
+            removedBytes += byteCount
         }
+        recordEviction(chunkCount: removedChunks, byteCount: removedBytes, reason: "over-budget")
+    }
+
+    private func recordEviction(chunkCount: Int, byteCount: Int64, reason: String) {
+        guard chunkCount > 0, byteCount > 0 else { return }
+        pendingEvictionChunks += chunkCount
+        pendingEvictionBytes += byteCount
+        let now = Date()
+        guard pendingEvictionChunks >= 100
+                || now.timeIntervalSince(lastEvictionLogAt) >= 5 else {
+            return
+        }
+        DiagnosticLog.write(
+            "[REMOTE_STREAM_PREFETCH_EVICT] id=\(id), chunks=\(pendingEvictionChunks), bytes=\(pendingEvictionBytes), cachedBytes=\(cachedBytes), reason=\(reason)"
+        )
+        pendingEvictionChunks = 0
+        pendingEvictionBytes = 0
+        lastEvictionLogAt = now
     }
 
     private func isSeek(from currentStart: Int64, to nextStart: Int64) -> Bool {
@@ -1466,6 +2098,15 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             remoteStreamTask = Task {
                 do {
                     if method == .GET,
+                       let prefetchedHandler = self.server.prefetchedProxyHandler,
+                       let response = try await prefetchedHandler(params) {
+                        safeContext.context.eventLoop.execute {
+                            self.sendResponse(context: safeContext.context, version: version, response: response)
+                        }
+                        return
+                    }
+                    if method == .GET,
+                       params["preload"] != "1",
                        let streamingHandler = self.server.streamingProxyHandler {
                         let didStream = try await streamingHandler(
                             params,
@@ -1512,9 +2153,17 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                         }
                     }
                 } catch {
+                    guard let measurements = Self.requestFailureDiagnosticMeasurements(
+                        for: error,
+                        taskIsCancelled: Task.isCancelled,
+                        channelIsActive: channel.channel.isActive
+                    ) else { return }
                     let targetURL = self.targetURL(from: params) ?? ""
                     let errorValue = error as NSError
-                    let message = "[PROXY_SERVER_ERROR] 代理转发发生异常 url=\(ProxyServer.redactedURL(targetURL)) error=\(errorValue.localizedDescription) [\(errorValue.domain):\(errorValue.code)]"
+                    let fields = measurements.keys.sorted().map {
+                        "\($0)=\(measurements[$0]!)"
+                    }.joined(separator: " ")
+                    let message = "[PROXY_SERVER_ERROR] \(fields) 代理转发发生异常 url=\(ProxyServer.redactedURL(targetURL)) error=\(errorValue.localizedDescription) [\(errorValue.domain):\(errorValue.code)]"
                     print(message)
                     DiagnosticLog.write(message)
                     fflush(stdout)
@@ -1532,6 +2181,8 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
 
         switch true {
+        case path == "/resource":
+            handleSeekableResource(context: context, head: head, params: params)
         case path.hasPrefix("/parse"):
             sendTextResponse(
                 context: context,
@@ -1552,6 +2203,62 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             handleWebResource(context: context, version: head.version, head: head, params: params)
         default:
             sendErrorResponse(context: context, version: head.version, status: .notFound, message: "路由不存在")
+        }
+    }
+
+    private func handleSeekableResource(context: ChannelHandlerContext, head: HTTPRequestHead, params: [String: String]) {
+        guard head.method == .GET || head.method == .HEAD else {
+            sendErrorResponse(context: context, version: head.version, status: .methodNotAllowed, message: "只支持读取")
+            return
+        }
+        guard let id = params["id"], let resource = server.seekableResource(id: id) else {
+            sendErrorResponse(context: context, version: head.version, status: .notFound, message: "资源已释放")
+            return
+        }
+        let header = head.headers.first(name: "Range")
+        guard let range = SeekableRange.parse(header, size: resource.size) else {
+            sendResponse(context: context, version: head.version, response: ProxyResponse(statusCode: 416,
+                contentType: resource.contentType, data: Data(), headers: ["Content-Range": "bytes */\(resource.size)"]))
+            return
+        }
+        let channel = SendableChannel(channel: context.channel)
+        let state = ProxyStreamState()
+        remoteStreamTask?.cancel()
+        remoteStreamTask = Task {
+            do {
+                var headers = ["Accept-Ranges": "bytes"]
+                if header != nil { headers["Content-Range"] = "bytes \(range.lowerBound)-\(range.upperBound - 1)/\(resource.size)" }
+                try await self.sendProxyStreamHead(channel: channel, version: head.version,
+                    response: ProxyStreamingResponseHead(statusCode: header == nil ? 200 : 206,
+                        contentType: resource.contentType, contentLength: range.count, headers: headers, closeConnection: true), state: state)
+                if head.method == .GET {
+                    var offset = range.lowerBound
+                    var prefetched: Task<Data, Error>?
+                    defer { prefetched?.cancel() }
+                    while offset < range.upperBound {
+                        try Task.checkCancellation()
+                        guard self.server.seekableResource(id: id) != nil else { throw CancellationError() }
+                        let chunkSize = offset == range.lowerBound ? min(resource.readChunkSize, 512 * 1024) : resource.readChunkSize
+                        let end = min(range.upperBound, offset + chunkSize)
+                        let data: Data
+                        if let pending = prefetched { data = try await pending.value; prefetched = nil }
+                        else { data = try await self.server.readSeekableResource(id: id, range: offset..<end) }
+                        guard data.count == Int(end - offset) else { throw ProxyServerError.emptyUpstreamResponse("bytes=\(offset)-\(end - 1)") }
+                        try Task.checkCancellation()
+                        if end < range.upperBound {
+                            let nextRange = end..<min(range.upperBound, end + resource.readChunkSize)
+                            // One bounded read overlaps the local socket write, never the whole file.
+                            prefetched = Task {
+                                try Task.checkCancellation()
+                                return try await self.server.readSeekableResource(id: id, range: nextRange)
+                            }
+                        }
+                        try await self.writeOpenEndedRemoteStreamBody(channel: channel, data: data)
+                        offset = end
+                    }
+                }
+                try await self.finishProxyStream(channel: channel, state: state)
+            } catch { channel.channel.eventLoop.execute { channel.channel.close(promise: nil) } }
         }
     }
 
@@ -1670,7 +2377,8 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         DiagnosticLog.write("[REMOTE_STREAM_REQUEST] id=\(id), method=\(method.rawValue), range=\(range ?? "-"), ifRange=\(ifRange ?? "-")")
 
         remoteStreamTask?.cancel()
-        let usesContinuousResponse = shouldStreamOpenEndedRemoteStream(
+        let isPriming = params["preload"] == "1"
+        let usesContinuousResponse = !isPriming && shouldStreamOpenEndedRemoteStream(
             stream: stream,
             range: range,
             method: method
@@ -1685,17 +2393,26 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                         range: range
                     )
                 } else {
-                    let response = try await self.forwardRemoteStream(stream: stream, range: range, ifRange: ifRange, method: method)
+                    let response = try await self.forwardRemoteStream(
+                        stream: stream,
+                        range: range,
+                        ifRange: ifRange,
+                        method: method,
+                        isPriming: isPriming
+                    )
                     safeContext.context.eventLoop.execute {
                         self.sendResponse(context: safeContext.context, version: version, response: response)
                     }
                 }
             } catch {
-                if Task.isCancelled || !safeChannel.channel.isActive {
+                guard let measurements = Self.requestFailureDiagnosticMeasurements(
+                    for: error,
+                    taskIsCancelled: Task.isCancelled,
+                    channelIsActive: safeChannel.channel.isActive
+                ) else {
                     DiagnosticLog.write("[REMOTE_STREAM_CONTINUOUS_CANCEL] id=\(id), range=\(range ?? "-")")
                     return
                 }
-                let measurements = Self.remoteDiagnosticMeasurements(for: error)
                 let fields = measurements.keys.sorted().map {
                     "\($0)=\(measurements[$0]!)"
                 }.joined(separator: " ")
@@ -1714,6 +2431,16 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    static func requestFailureDiagnosticMeasurements(
+        for error: Error,
+        taskIsCancelled: Bool,
+        channelIsActive: Bool
+    ) -> [String: Int]? {
+        // Exiting playback cancels the upstream task and closes its downstream channel.
+        guard !taskIsCancelled, channelIsActive else { return nil }
+        return remoteDiagnosticMeasurements(for: error)
     }
 
     static func remoteDiagnosticMeasurements(for error: Error) -> [String: Int] {
@@ -1738,7 +2465,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             if nsError.domain == NSURLErrorDomain {
                 return ["code": nsError.code, "errorKind": 4]
             }
-            return ["errorKind": 0]
+            return ["errorKind": 0, "errorCode": nsError.code]
         }
     }
 
@@ -1824,8 +2551,8 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         range: String?,
         method: NIOHTTP1.HTTPMethod
     ) -> Bool {
-        guard stream.relayMode == .buffered,
-              stream.continuousOpenEndedResponses,
+        guard (stream.relayMode == .buffered && stream.continuousOpenEndedResponses)
+                || stream.parallelSegmentedOpenEndedUpstream,
               method == .GET,
               let contentLength = stream.contentLength,
               contentLength > 0,
@@ -1925,15 +2652,19 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     ) async throws {
         let segmentSize = stream.parallelUpstreamSegmentSize
         let startupSegmentSize = min(segmentSize, 64 * 1024)
-        let concurrency = stream.parallelUpstreamConcurrency
         let startedAt = Date()
         var deliveredBytes: Int64 = 0
         var completedSegments = 0
         var nextWriteStart = requestedStart
         var nextScheduleStart = requestedStart
         var inFlight: [Int64: Task<RemoteStreamChunk, Error>] = [:]
+        defer { for task in inFlight.values { task.cancel() } }
 
         func scheduleAvailableSegments(totalLength: Int64) {
+            // Bound startup to the probe-sized head and its immediate successor.
+            // Distant data can use the throughput window once the head is delivered.
+            let limit = stream.parallelConcurrencyController.currentLimit
+            let concurrency = completedSegments == 0 ? min(2, limit) : limit
             while inFlight.count < concurrency, nextScheduleStart < totalLength {
                 let start = nextScheduleStart
                 let scheduledSegmentSize = start == requestedStart ? startupSegmentSize : segmentSize
@@ -1961,6 +2692,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                 throw ProxyServerError.emptyUpstreamResponse("bytes=\(nextWriteStart)-")
             }
             let chunk = try await task.value
+            try Task.checkCancellation()
             inFlight.removeValue(forKey: nextWriteStart)
             guard !chunk.data.isEmpty else {
                 throw ProxyServerError.emptyUpstreamResponse(chunk.range.headerValue)
@@ -1989,10 +2721,12 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             let totalLength = await responseState.currentTotalLength()
             scheduleAvailableSegments(totalLength: totalLength)
 
-            if completedSegments.isMultiple(of: concurrency) || nextWriteStart >= totalLength {
+            let activeConcurrency = stream.parallelConcurrencyController.currentLimit
+            if completedSegments.isMultiple(of: max(1, stream.parallelUpstreamConcurrency))
+                || nextWriteStart >= totalLength {
                 let elapsed = max(0.001, Date().timeIntervalSince(startedAt))
                 let throughput = Double(deliveredBytes) / elapsed / 1_048_576
-                DiagnosticLog.write("[REMOTE_STREAM_THROUGHPUT] id=\(stream.id), deliveredBytes=\(deliveredBytes), segments=\(completedSegments), concurrency=\(concurrency), segmentSize=\(segmentSize), MiBps=\(String(format: "%.2f", throughput))")
+                DiagnosticLog.write("[REMOTE_STREAM_THROUGHPUT] id=\(stream.id), deliveredBytes=\(deliveredBytes), segments=\(completedSegments), concurrency=\(activeConcurrency), segmentSize=\(segmentSize), MiBps=\(String(format: "%.2f", throughput))")
             }
         }
 
@@ -2024,7 +2758,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             headers["Range"] = upstreamRange
 
             do {
-                let response = try await server.remoteStreamHTTPClient.stream(
+                let response = try await stream.upstreamHTTPClient.stream(
                     url: stream.url,
                     headers: headers,
                     timeout: ProxyServer.continuousStreamTimeout,
@@ -2079,6 +2813,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                         return true
                     },
                     receive: { data in
+                        await stream.buffer.recordReceivedBytes(data.count)
                         let accepted = await accumulator.append(data)
                         if !accepted.isEmpty {
                             try await self.writeOpenEndedRemoteStreamBody(
@@ -2160,19 +2895,22 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     private func bufferedRemoteStreamResponse(
         stream: RemoteStream,
         range: RemoteStreamRange,
-        method: NIOHTTP1.HTTPMethod
+        method: NIOHTTP1.HTTPMethod,
+        isPriming: Bool = false
     ) async throws -> ProxyResponse {
         try await stream.buffer.response(
             for: range,
             stream: stream,
-            method: method
+            method: method,
+            isPriming: isPriming
         ) { bufferedRange, kind in
             do {
                 return try await self.fetchRemoteStreamChunkWithRetry(
                     stream: stream,
                     range: bufferedRange,
                     ifRange: nil,
-                    kind: kind
+                    kind: kind,
+                    useCurl: kind == .prime && stream.parallelUpstreamUsesCurl
                 )
             } catch {
                 if kind == .prefetch {
@@ -2184,7 +2922,13 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
     }
 
-    private func forwardRemoteStream(stream: RemoteStream, range: String?, ifRange: String?, method: NIOHTTP1.HTTPMethod) async throws -> ProxyResponse {
+    private func forwardRemoteStream(
+        stream: RemoteStream,
+        range: String?,
+        ifRange: String?,
+        method: NIOHTTP1.HTTPMethod,
+        isPriming: Bool = false
+    ) async throws -> ProxyResponse {
         _ = try ProxyAccessPolicy.validateTargetURL(stream.url)
         if let response = rangeNotSatisfiableResponse(range: range, contentLength: stream.contentLength) {
             return response
@@ -2192,9 +2936,15 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         let requestedRange = remoteStreamRange(from: boundedRangeHeader(
             from: range,
             configuration: stream.bufferConfiguration,
-            contentLength: stream.contentLength
+            contentLength: stream.contentLength,
+            useFullChunkSize: isPriming && stream.preloadLayout == .audioOriginal
         ))
-        guard shouldUseRemoteStreamBuffer(range: requestedRange, stream: stream, originalRange: range, method: method) else {
+        guard isPriming || shouldUseRemoteStreamBuffer(
+            range: requestedRange,
+            stream: stream,
+            originalRange: range,
+            method: method
+        ) else {
             let upstreamRange = passthroughRemoteStreamRange(from: range, fallback: requestedRange)
             return try await fetchRemoteStreamResponse(stream: stream, range: upstreamRange, ifRange: ifRange, method: method)
         }
@@ -2202,7 +2952,8 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         return try await bufferedRemoteStreamResponse(
             stream: stream,
             range: requestedRange,
-            method: method
+            method: method,
+            isPriming: isPriming
         )
     }
 
@@ -2245,7 +2996,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             DiagnosticLog.write("[REMOTE_STREAM_CURL] id=\(stream.id), range=\(upstreamRange), protocol=\(result.protocolName), ip=\(result.primaryIP), seconds=\(String(format: "%.3f", result.totalTime)), bytes=\(result.response.data.count), MiBps=\(String(format: "%.2f", throughput))")
             response = result.response
         } else {
-            response = try await server.remoteStreamHTTPClient.request(
+            response = try await stream.upstreamHTTPClient.request(
                 url: stream.url,
                 method: .get,
                 headers: headers,
@@ -2255,6 +3006,9 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
         try ProxyAccessPolicy.validateFinalURL(response.finalURL)
         try validateUpstreamRange(response: response, requestedRange: upstreamRange)
+        if (200..<300).contains(response.statusCode) {
+            await stream.buffer.recordReceivedBytes(response.data.count)
+        }
         let upstreamContentRange = parseContentRange(headerValue(response.headers, "Content-Range"))
         let leadingByteCount = upstreamContentRange.map {
             max(0, min(stream.sourceByteOffset - $0.start, Int64(response.data.count)))
@@ -2280,7 +3034,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             let bodyPrefix = String(data: response.data.prefix(256), encoding: .utf8) ?? ""
             DiagnosticLog.write("[REMOTE_STREAM_UPSTREAM_ERROR] status=\(response.statusCode), range=\(upstreamRange), contentType=\(headerValue(response.headers, "Content-Type") ?? ""), bodyPrefix=\(bodyPrefix)")
             throw ProxyServerError.upstreamHTTPStatus(response.statusCode)
-        } else {
+        } else if !stream.parallelUpstreamUsesHTTP2Multiplexing || range.start == 0 {
             DiagnosticLog.write("[REMOTE_STREAM_RESPONSE] status=\(response.statusCode), range=\(upstreamRange), sourceByteOffset=\(stream.sourceByteOffset), bytes=\(response.data.count), contentLength=\(headerValue(response.headers, "Content-Length") ?? "-"), contentRange=\(headerValue(response.headers, "Content-Range") ?? "-"), contentType=\(headerValue(response.headers, "Content-Type") ?? stream.contentType)")
         }
 
@@ -2303,23 +3057,37 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         kind: RemoteStreamLoadKind,
         useCurl: Bool = false
     ) async throws -> RemoteStreamChunk {
-        let maxRetries = kind == .demand ? 2 : 1
+        let maxRetries: Int
+        switch kind {
+        case .demand: maxRetries = 2
+        case .prefetch: maxRetries = 1
+        case .prime: maxRetries = 0
+        }
         var attempt = 0
         while true {
             do {
-                return try await fetchRemoteStreamChunk(
+                try Task.checkCancellation()
+                let chunk = try await fetchRemoteStreamChunk(
                     stream: stream,
                     range: range,
                     ifRange: ifRange,
                     useCurl: useCurl
                 )
+                if kind == .demand { stream.parallelConcurrencyController.record(timedOut: false) }
+                return chunk
             } catch {
+                if kind == .demand, !Task.isCancelled, RemoteStreamParallelConcurrencyController.isTimeout(error) {
+                    if stream.parallelConcurrencyController.record(timedOut: true) {
+                        PlaybackBackgroundBudget.shared.suspendBackgroundWork(for: 5)
+                        DiagnosticLog.write("[PLAYBACK_CONGESTION] id=\(stream.id) concurrency=\(stream.parallelConcurrencyController.currentLimit) backgroundPauseSeconds=5")
+                    }
+                }
                 if Task.isCancelled || attempt >= maxRetries || !shouldRetryRemoteStreamError(error) {
                     throw error
                 }
                 attempt += 1
                 DiagnosticLog.write("[REMOTE_STREAM_RETRY] id=\(stream.id), kind=\(kind), attempt=\(attempt), range=\(range.headerValue), error=\(error.localizedDescription)")
-                try? await Task.sleep(nanoseconds: UInt64(attempt) * 150_000_000)
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 150_000_000)
             }
         }
     }
@@ -2400,7 +3168,8 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     private func boundedRangeHeader(
         from range: String?,
         configuration: RemoteStreamBufferConfiguration = .default,
-        contentLength: Int64? = nil
+        contentLength: Int64? = nil,
+        useFullChunkSize: Bool = false
     ) -> String {
         if let range,
            range.lowercased().hasPrefix("bytes=-") {
@@ -2411,7 +3180,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             return "bytes=0-\(configuration.initialChunkSize - 1)"
         }
 
-        let chunkSize = parsed.end == nil && parsed.start > 0
+        let chunkSize = useFullChunkSize || (parsed.end == nil && parsed.start > 0)
             ? configuration.chunkSize
             : configuration.initialChunkSize
         let windowEnd = parsed.start + chunkSize - 1

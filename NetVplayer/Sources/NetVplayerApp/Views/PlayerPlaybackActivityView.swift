@@ -1,3 +1,4 @@
+import Models
 import Foundation
 import SwiftUI
 
@@ -37,14 +38,14 @@ enum PlayerPlaybackActivityPolicy {
     ) -> PlayerPlaybackActivityPhase {
         phase(
             isSourceLoading: isSourceLoading,
-            sourceLoadingTitle: "正在加载视频",
+            sourceLoadingTitle: L10n.text("正在加载视频"),
             sourceLoadingMessage: sourceLoadingMessage,
             isMediaLoading: isMediaLoading,
-            mediaLoadingTitle: isSeeking ? "正在跳转" : "正在加载视频",
-            mediaLoadingMessage: isSeeking ? "正在读取目标位置的画面。" : "正在等待画面开始播放。",
+            mediaLoadingTitle: isSeeking ? L10n.text("正在跳转") : L10n.text("正在加载视频"),
+            mediaLoadingMessage: isSeeking ? L10n.text("正在读取目标位置的画面。") : L10n.text("正在等待画面开始播放。"),
             isBuffering: isBuffering,
-            bufferingTitle: "播放中缓冲",
-            bufferingMessage: "当前线路供给不足，正在补充播放缓存。",
+            bufferingTitle: L10n.text("播放中缓冲"),
+            bufferingMessage: L10n.text("当前线路供给不足，正在补充播放缓存。"),
             hasBlockingUI: hasBlockingUI
         )
     }
@@ -58,14 +59,14 @@ enum PlayerPlaybackActivityPolicy {
     ) -> PlayerPlaybackActivityPhase {
         phase(
             isSourceLoading: isSourceLoading,
-            sourceLoadingTitle: "正在连接直播",
+            sourceLoadingTitle: L10n.text("正在连接直播"),
             sourceLoadingMessage: sourceLoadingMessage,
             isMediaLoading: isMediaLoading,
-            mediaLoadingTitle: "正在连接直播",
-            mediaLoadingMessage: "线路已就绪，正在等待直播画面。",
+            mediaLoadingTitle: L10n.text("正在连接直播"),
+            mediaLoadingMessage: L10n.text("线路已就绪，正在等待直播画面。"),
             isBuffering: isBuffering,
-            bufferingTitle: "正在缓冲",
-            bufferingMessage: "当前线路供给不足，正在补充播放缓存。",
+            bufferingTitle: L10n.text("正在缓冲"),
+            bufferingMessage: L10n.text("当前线路供给不足，正在补充播放缓存。"),
             hasBlockingUI: hasBlockingUI
         )
     }
@@ -75,7 +76,7 @@ enum PlayerPlaybackActivityPolicy {
     }
 
     static func speedText(bytesPerSecond: Int64?) -> String? {
-        guard let bytesPerSecond, bytesPerSecond > 0 else { return nil }
+        guard let bytesPerSecond, bytesPerSecond >= 0 else { return nil }
         if bytesPerSecond >= 1_048_576 {
             return fixedDecimal(Double(bytesPerSecond) / 1_048_576) + " MB/s"
         }
@@ -88,12 +89,12 @@ enum PlayerPlaybackActivityPolicy {
     static func transferredText(bytes: Int64?) -> String? {
         guard let bytes, bytes > 0 else { return nil }
         if bytes >= 1_048_576 {
-            return "已接收 " + fixedDecimal(Double(bytes) / 1_048_576) + " MB"
+            return L10n.text("已接收 ") + fixedDecimal(Double(bytes) / 1_048_576) + " MB"
         }
         if bytes >= 1_024 {
-            return "已接收 " + fixedDecimal(Double(bytes) / 1_024) + " KB"
+            return L10n.text("已接收 ") + fixedDecimal(Double(bytes) / 1_024) + " KB"
         }
-        return "已接收 \(bytes) B"
+        return L10n.text("已接收 {0} B", ["\(bytes)"])
     }
 
     static func progressText(_ progress: Double?) -> String? {
@@ -105,9 +106,9 @@ enum PlayerPlaybackActivityPolicy {
     static func bufferedAheadText(_ duration: Double) -> String? {
         guard duration.isFinite, duration > 0 else { return nil }
         if duration < 10 {
-            return "已缓冲 \(fixedDecimal(duration)) 秒"
+            return L10n.text("已缓冲 {0} 秒", ["\(fixedDecimal(duration))"])
         }
-        return "已缓冲 \(Int(duration.rounded())) 秒"
+        return L10n.text("已缓冲 {0} 秒", ["\(Int(duration.rounded()))"])
     }
 
     private static func phase(
@@ -315,7 +316,6 @@ struct PlayerPlaybackActivityView: View {
             return [
                 PlayerPlaybackActivityPolicy.transferredText(bytes: transferredBytes),
                 PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: speedBytesPerSecond)
-                    .map { "平均 \($0)" },
             ].compactMap { $0 }
         }
         return [

@@ -3,6 +3,7 @@
 
 import Foundation
 import Models
+import Storage
 import ProviderRuntime
 import ProviderSDK
 
@@ -43,7 +44,8 @@ public actor SpiderReplacementRegistry {
 
     /// Registers utility providers that are present in both the public shell and
     /// the private legacy build. Their aliases remain shell-owned even when a
-    /// signed site package declares the same binding.
+    /// signed site package declares the same binding, while a compiled-in native
+    /// implementation may replace this public fallback.
     public func registerPublicUtilityProviders(
         myDrive: any SiteContentProvider,
         configurationCenter: any SiteContentProvider
@@ -110,8 +112,33 @@ public actor SpiderReplacementRegistry {
     }
 
     public func nativeProvider(for site: Site) -> (any SiteContentProvider)? {
-        if let provider = nativeKeyedProviders[normalizeKeyed(site.key, site.api)] {
+        if site.api.hasPrefix("netvplayer-files://"),
+           let id = UUID(uuidString: String(site.api.dropFirst("netvplayer-files://".count))),
+           let configuration = FileServiceStore.shared.load().services.first(where: { $0.id == id }),
+           configuration.siteKey == site.key {
+            return FileServiceNativeProvider(serviceID: id)
+        }
+        let keyedIdentity = normalizeKeyed(site.key, site.api)
+        if let existing = nativeKeyedProviders[keyedIdentity],
+           !(existing is XtreamSiteProvider) {
+            return existing
+        }
+        if site.api.hasPrefix("netvplayer-xtream://"),
+           let data = site.ext.data(using: .utf8),
+           let account = try? JSONDecoder().decode(XtreamConfiguration.self, from: data),
+           account.url == site.api {
+            if let existing = nativeKeyedProviders[keyedIdentity] as? XtreamSiteProvider,
+               existing.configuration == account { return existing }
+            if let provider = try? XtreamSiteProvider(configuration: account) {
+                nativeKeyedProviders[keyedIdentity] = provider
+                return provider
+            }
+        }
+        if let provider = nativeKeyedProviders[keyedIdentity] {
             return provider
+        }
+        for key in lookupKeys(for: site) where publicUtilityProviders[key] != nil {
+            if let provider = nativeProviders[key] { return provider }
         }
         for key in lookupKeys(for: site) {
             if let provider = publicUtilityProviders[key] { return provider }
@@ -177,7 +204,7 @@ public actor SpiderReplacementRegistry {
         remoteProxyRoutes.removeAll()
     }
 
-    private func removeRemoteBindings(providerID: String) {
+    public func removeRemoteBindings(providerID: String) {
         remoteProxyProviderIDs.remove(providerID)
         remoteProxyRoutes = remoteProxyRoutes.filter { $0.value.providerID != providerID }
         for key in remoteBindingKeys.removeValue(forKey: providerID) ?? [] {

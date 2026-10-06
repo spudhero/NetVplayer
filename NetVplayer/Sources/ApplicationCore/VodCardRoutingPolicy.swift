@@ -13,5 +13,6 @@ public enum VodCardRoutingPolicy {
         return globalSearchAPIs.contains(api)
             || site.key == "点我切源"
             || vod.vodId.lowercased().hasPrefix("msearch:")
+            || vod.vodId.lowercased().hasSuffix("/@folder")
     }
 }

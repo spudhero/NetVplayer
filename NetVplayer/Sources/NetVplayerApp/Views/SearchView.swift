@@ -106,9 +106,9 @@ struct SearchView: View {
         let query = trimmedSearchText
         guard !query.isEmpty else { return [] }
 
-        var candidates = [SearchSuggestion(query: query, kind: "精确搜索")]
-        let knownQueries = searchHistory.map { ($0.query, "历史") }
-            + hotSearches.map { ($0.title, "热搜") }
+        var candidates = [SearchSuggestion(query: query, kind: L10n.text("精确搜索"))]
+        let knownQueries = searchHistory.map { ($0.query, L10n.text("历史")) }
+            + hotSearches.map { ($0.title, L10n.text("热搜")) }
 
         for candidate in knownQueries where candidate.0.localizedCaseInsensitiveContains(query) {
             candidates.append(SearchSuggestion(query: candidate.0, kind: candidate.1))
@@ -116,10 +116,10 @@ struct SearchView: View {
 
         if !query.contains("://") {
             candidates.append(contentsOf: [
-                SearchSuggestion(query: "\(query) 电影", kind: "影视"),
-                SearchSuggestion(query: "\(query) 电视剧", kind: "剧集"),
-                SearchSuggestion(query: "\(query) 4K", kind: "高清"),
-                SearchSuggestion(query: "\(query) 纪录片", kind: "纪录片")
+                SearchSuggestion(query: L10n.text("{0} 电影", ["\(query)"]), kind: L10n.text("影视")),
+                SearchSuggestion(query: L10n.text("{0} 电视剧", ["\(query)"]), kind: L10n.text("剧集")),
+                SearchSuggestion(query: "\(query) 4K", kind: L10n.text("高清")),
+                SearchSuggestion(query: L10n.text("{0} 纪录片", ["\(query)"]), kind: L10n.text("纪录片"))
             ])
         }
 
@@ -136,9 +136,9 @@ struct SearchView: View {
         }
 
         return [
-            SearchHistorySection(title: "今天", entries: today),
-            SearchHistorySection(title: "昨天", entries: yesterday),
-            SearchHistorySection(title: "更早", entries: earlier)
+            SearchHistorySection(title: L10n.text("今天"), entries: today),
+            SearchHistorySection(title: L10n.text("昨天"), entries: yesterday),
+            SearchHistorySection(title: L10n.text("更早"), entries: earlier)
         ].filter { !$0.entries.isEmpty }
     }
 
@@ -190,19 +190,15 @@ struct SearchView: View {
                     .zIndex(200)
             }
         }
-        .confirmationDialog(
-            "清空全部搜索记录？",
+        .themedConfirmation(
+            L10n.text("清空全部搜索记录？"),
             isPresented: $showsClearHistoryConfirmation,
-            titleVisibility: .visible
+            confirmTitle: L10n.text("清空记录"),
+            message: L10n.text("这会移除当前显示的 {0} 条历史搜索，不会影响播放历史或收藏。", ["\(searchHistory.count)"])
         ) {
-            Button("清空记录", role: .destructive) {
-                SearchHistoryStore.shared.clear()
-                searchHistory = []
-                showToast("搜索历史已清空")
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("这会移除当前显示的 \(searchHistory.count) 条历史搜索，不会影响播放历史或收藏。")
+            SearchHistoryStore.shared.clear()
+            searchHistory = []
+            showToast(L10n.text("搜索历史已清空"))
         }
         .onAppear {
             searchHistory = SearchHistoryStore.shared.load()
@@ -211,14 +207,24 @@ struct SearchView: View {
             refreshPresentationSnapshot(immediate: true)
             loadHotSearches()
         }
+        .onChange(of: appState.searchKeyword) { _, keyword in
+            guard !keyword.isEmpty else { return }
+            localSearchText = keyword
+            showsHistory = false
+            selectedSuggestionIndex = nil
+        }
         .onChange(of: presentationRevision) { _, revision in
-            refreshPresentationSnapshot(immediate: !revision.isLoading)
+            refreshPresentationSnapshot(immediate: !revision.isLoading || presentationSnapshot.successfulResults.isEmpty)
         }
         .onDisappear {
+            // Playback can temporarily replace this view while the search route stays active.
+            // AppState resets the search when navigation actually leaves that route.
+            searchTask?.cancel()
+            searchTask = nil
             toastDismissTask?.cancel()
             hotSearchTask?.cancel()
             presentationUpdateTask?.cancel()
-            resetSearchWorkspace(focusSearchField: false)
+            isSearchFocused = false
         }
     }
 
@@ -235,10 +241,10 @@ struct SearchView: View {
             .foregroundStyle(palette.muted)
             .background(controlBackground)
             .buttonStyle(.plain)
-            .help("粘贴分享文本")
+            .help(L10n.text("粘贴分享文本"))
 
             Button(action: submitSearch) {
-                Label("搜索", systemImage: "magnifyingglass")
+                Label(L10n.text("搜索"), systemImage: "magnifyingglass")
                     .font(.system(size: 13, weight: .semibold))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -253,7 +259,7 @@ struct SearchView: View {
 
             ViewThatFits(in: .horizontal) {
                 Label(
-                    "\(appState.sites.filter(\.isSearchable).count) 个搜索源",
+                    L10n.text("{0} 个搜索源", ["\(appState.sites.filter(\.isSearchable).count)"]),
                     systemImage: "dot.radiowaves.left.and.right"
                 )
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -263,7 +269,7 @@ struct SearchView: View {
                 Image(systemName: "dot.radiowaves.left.and.right")
                     .foregroundStyle(palette.muted)
                     .frame(width: 30, height: 30)
-                    .help("\(appState.sites.filter(\.isSearchable).count) 个搜索源可用")
+                    .help(L10n.text("{0} 个搜索源可用", ["\(appState.sites.filter(\.isSearchable).count)"]))
             }
         }
         .padding(.horizontal, 18)
@@ -283,7 +289,7 @@ struct SearchView: View {
                 .foregroundStyle(palette.muted)
                 .frame(width: SearchHeaderMetrics.iconWidth)
 
-            TextField("搜索电影、剧集、演员或粘贴网盘分享", text: $localSearchText)
+            TextField(L10n.text("搜索电影、剧集、演员或粘贴网盘分享"), text: $localSearchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 16))
                 .foregroundStyle(palette.foreground)
@@ -311,7 +317,7 @@ struct SearchView: View {
             .foregroundStyle(palette.muted)
             .opacity(trimmedSearchText.isEmpty ? 0 : 1)
             .allowsHitTesting(!trimmedSearchText.isEmpty)
-            .help("清空输入")
+            .help(L10n.text("清空输入"))
         }
         .padding(.horizontal, 14)
         .frame(height: SearchHeaderMetrics.controlHeight)
@@ -343,7 +349,7 @@ struct SearchView: View {
 
     private var suggestionPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("搜索联想")
+            Text(L10n.text("搜索联想"))
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(palette.muted)
                 .padding(.horizontal, 14)
@@ -405,10 +411,10 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("历史搜索")
+                    Text(L10n.text("历史搜索"))
                         .font(.title2.weight(.bold))
                         .foregroundStyle(palette.foreground)
-                    Text("\(searchHistory.count) 条记录，点击即可再次搜索。")
+                    Text(L10n.text("{0} 条记录，点击即可再次搜索。", ["\(searchHistory.count)"]))
                         .font(.subheadline)
                         .foregroundStyle(palette.muted)
                 }
@@ -418,7 +424,7 @@ struct SearchView: View {
                 Button {
                     showsClearHistoryConfirmation = true
                 } label: {
-                    Label("清空", systemImage: "trash")
+                    Label(L10n.text("清空"), systemImage: "trash")
                         .font(.subheadline.weight(.medium))
                 }
                 .buttonStyle(.plain)
@@ -430,10 +436,10 @@ struct SearchView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 28, weight: .light))
-                    Text("暂无历史搜索")
+                    Text(L10n.text("暂无历史搜索"))
                         .font(.headline)
                         .foregroundStyle(palette.foreground)
-                    Text("从下方热搜榜选择一个关键词开始。")
+                    Text(L10n.text("从下方热搜榜选择一个关键词开始。"))
                         .font(.subheadline)
                 }
                 .foregroundStyle(palette.muted)
@@ -442,7 +448,7 @@ struct SearchView: View {
             } else {
                 ForEach(historySections) { section in
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("\(section.title) · \(section.entries.count) 条")
+                        Text(L10n.text("{0} · {1} 条", ["\(section.title)", "\(section.entries.count)"]))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(palette.muted)
 
@@ -465,10 +471,10 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("正在热搜")
+                    Text(L10n.text("正在热搜"))
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(palette.foreground)
-                    Text("360 视频榜单 · 自动更新")
+                    Text(L10n.text("360 视频榜单 · 自动更新"))
                         .font(.caption)
                         .foregroundStyle(palette.muted)
                 }
@@ -490,7 +496,7 @@ struct SearchView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(palette.muted)
                 .disabled(isRefreshingHotSearches)
-                .help("刷新热搜")
+                .help(L10n.text("刷新热搜"))
             }
             .padding(.bottom, 16)
 
@@ -498,7 +504,7 @@ struct SearchView: View {
                 VStack(spacing: 8) {
                     Image(systemName: hotSearchLoadFailed ? "wifi.exclamationmark" : "chart.line.uptrend.xyaxis")
                         .font(.system(size: 22, weight: .light))
-                    Text(hotSearchLoadFailed ? "暂时无法加载热搜" : "正在获取热搜")
+                    Text(hotSearchLoadFailed ? L10n.text("暂时无法加载热搜") : L10n.text("正在获取热搜"))
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(palette.foreground)
                 }
@@ -579,7 +585,7 @@ struct SearchView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(palette.muted)
-            .help("返回历史搜索")
+            .help(L10n.text("返回历史搜索"))
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -587,7 +593,7 @@ struct SearchView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(palette.foreground)
                         .lineLimit(1)
-                    Text("\(displayedResultCount) 条结果")
+                    Text(L10n.text("{0} 条结果", ["\(displayedResultCount)"]))
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(palette.muted)
                         .fixedSize()
@@ -618,7 +624,7 @@ struct SearchView: View {
             .buttonStyle(.plain)
             .foregroundStyle(palette.muted)
             .disabled(appState.isSearching)
-            .help("重新搜索全部来源")
+            .help(L10n.text("重新搜索全部来源"))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
@@ -629,11 +635,11 @@ struct SearchView: View {
     private func sourceSidebar(layout: SearchResultRowLayout) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text("来源")
+                Text(L10n.text("来源"))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(palette.muted)
                 Spacer()
-                Text("\(sourceOptions.count) 个来源")
+                Text(L10n.text("{0} 个来源", ["\(sourceOptions.count)"]))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(palette.muted.opacity(0.74))
             }
@@ -645,7 +651,7 @@ struct SearchView: View {
                 LazyVStack(spacing: 2) {
                     sourceFilterButton(
                         siteKey: nil,
-                        title: "全部来源",
+                        title: L10n.text("全部来源"),
                         count: presentationSnapshot.itemCount(sourceKey: nil),
                         isDriveOnly: false
                     )
@@ -744,6 +750,7 @@ struct SearchView: View {
                 ThemedScrollView(theme: .subtle) {
                     Color.clear.frame(height: 1).id("searchTop")
                     resultContent(layout: layout)
+                    continuationControls
                 }
                 .onChange(of: appState.searchKeyword) { _, _ in
                     proxy.scrollTo("searchTop", anchor: .top)
@@ -763,17 +770,17 @@ struct SearchView: View {
         } else if appState.searchResults.isEmpty {
             centeredEmptyState {
                 ContentUnavailableView(
-                    "没有搜索到结果",
+                    L10n.text("没有搜索到结果"),
                     systemImage: "magnifyingglass",
-                    description: Text("换个关键词，或检查已启用的搜索站点。")
+                    description: Text(L10n.text("换个关键词，或检查已启用的搜索站点。"))
                 )
             }
         } else if displayedResultCount == 0 {
             centeredEmptyState {
                 ContentUnavailableView(
-                    selectedSourceKey == nil ? "没有可显示的结果" : "此来源暂无结果",
+                    selectedSourceKey == nil ? L10n.text("没有可显示的结果") : L10n.text("此来源暂无结果"),
                     systemImage: "magnifyingglass",
-                    description: Text(selectedSourceKey == nil ? "已返回的来源没有匹配内容。" : "切换其它来源继续查看。")
+                    description: Text(selectedSourceKey == nil ? L10n.text("已返回的来源没有匹配内容。") : L10n.text("切换其它来源继续查看。"))
                 )
             }
         } else {
@@ -783,7 +790,7 @@ struct SearchView: View {
                 HStack(spacing: 10) {
                     Spacer()
                     ProgressView().controlSize(.small)
-                    Text("正在拉取剩余站点…")
+                    Text(L10n.text("正在拉取剩余站点…"))
                         .font(.subheadline)
                         .foregroundStyle(palette.muted)
                     Spacer()
@@ -793,15 +800,39 @@ struct SearchView: View {
         }
     }
 
+    private var continuationControls: some View {
+        LazyVStack(alignment: .leading, spacing: 12) {
+            ForEach(appState.searchResults.filter { selectedSourceKey == nil || $0.siteKey == selectedSourceKey }) { result in
+                if let cursor = appState.contentSearchState.cursors[result.siteKey], cursor.status != .exhausted {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(result.siteName).font(.subheadline)
+                            if let message = cursor.message {
+                                Text(message).font(.caption).foregroundStyle(palette.muted).lineLimit(2)
+                            }
+                        }
+                        Spacer()
+                        if cursor.status == .loading { ProgressView().controlSize(.small) }
+                        Button(cursor.status == .retryable ? L10n.text("重试此来源") : L10n.text("加载下一页")) {
+                            appState.loadMoreSearchResults(siteKey: result.siteKey)
+                        }
+                        .disabled(!cursor.canRequest || appState.isSearching)
+                    }
+                }
+            }
+        }
+        .padding(16)
+    }
+
     private func resultColumnHeader(layout: SearchResultRowLayout) -> some View {
         HStack(spacing: layout.columnSpacing) {
-            Text(selectedSourceKey == nil ? "结果" : selectedSourceTitle)
+            Text(selectedSourceKey == nil ? L10n.text("结果") : selectedSourceTitle)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if !layout.isCompact {
-                Text("来源 / 类型")
+                Text(L10n.text("来源 / 类型"))
                     .frame(width: layout.sourceWidth, alignment: .leading)
-                Text("更新 / 状态")
+                Text(L10n.text("更新 / 状态"))
                     .frame(width: layout.statusWidth, alignment: .leading)
             }
 
@@ -821,7 +852,7 @@ struct SearchView: View {
                 Section {
                     searchResultRows(exactDisplayItems, layout: layout, exact: true)
                 } header: {
-                    resultSectionHeader("精确匹配", count: exactDisplayItems.count)
+                    resultSectionHeader(L10n.text("精确匹配"), count: exactDisplayItems.count)
                 }
             }
 
@@ -829,7 +860,7 @@ struct SearchView: View {
                 Section {
                     searchResultRows(relatedDisplayItems, layout: layout, exact: false)
                 } header: {
-                    resultSectionHeader("相关结果", count: relatedDisplayItems.count)
+                    resultSectionHeader(L10n.text("相关结果"), count: relatedDisplayItems.count)
                 }
             }
         }
@@ -860,7 +891,7 @@ struct SearchView: View {
             .onHover { hovering in
                 appState.updateDetailPrefetch(vod: item.vod, site: site, hovering: hovering)
             }
-            .help(openingResultID == item.id ? "正在打开 \(item.vod.vodName)" : "打开 \(item.vod.vodName)")
+            .help(openingResultID == item.id ? L10n.text("正在打开 {0}", ["\(item.vod.vodName)"]) : L10n.text("打开 {0}", ["\(item.vod.vodName)"]))
         }
     }
 
@@ -883,7 +914,7 @@ struct SearchView: View {
     private var selectedSourceTitle: String {
         guard let selectedSourceKey,
               let option = sourceOptions.first(where: { $0.siteKey == selectedSourceKey })
-        else { return "全部来源" }
+        else { return L10n.text("全部来源") }
         return option.siteName
     }
 
@@ -903,10 +934,10 @@ struct SearchView: View {
     private var resultStatusText: String {
         if appState.isSearching {
             return appState.searchResults.isEmpty
-                ? "正在向多个站点发起搜索"
-                : "已返回 \(appState.searchResults.count) 个来源，继续加载中"
+                ? L10n.text("正在向多个站点发起搜索")
+                : L10n.text("已返回 {0} 个来源，继续加载中", ["\(appState.searchResults.count)"])
         }
-        return "已完成 \(appState.searchResults.count) 个来源的搜索"
+        return L10n.text("已完成 {0} 个来源的搜索", ["\(appState.searchResults.count)"])
     }
 
     private func submitSearch() {
@@ -944,7 +975,7 @@ struct SearchView: View {
         clearPresentationSnapshot()
         searchTask?.cancel()
         searchTask = Task {
-            await appState.search(keyword: query)
+            await appState.search(keyword: query, forceRefresh: true)
         }
     }
 
@@ -1025,7 +1056,7 @@ struct SearchView: View {
         guard let text = NSPasteboard.general.string(forType: .string)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty else {
-            showToast("剪贴板中没有可搜索的文本")
+            showToast(L10n.text("剪贴板中没有可搜索的文本"))
             return
         }
         localSearchText = text
@@ -1035,7 +1066,7 @@ struct SearchView: View {
 
     private func removeHistoryEntry(_ entry: SearchHistoryEntry) {
         searchHistory = SearchHistoryStore.shared.remove(id: entry.id)
-        showToast("已删除“\(entry.query)”")
+        showToast(L10n.text("已删除“{0}”", ["\(entry.query)"]))
     }
 
     private func open(_ item: SearchDisplayItem) {
@@ -1108,7 +1139,7 @@ private struct SearchHistoryChip: View {
             .foregroundStyle(palette.muted)
             .opacity(isHovered ? 1 : 0)
             .allowsHitTesting(isHovered)
-            .help("删除 \(entry.query)")
+            .help(L10n.text("删除 {0}", ["\(entry.query)"]))
         }
         .background(
             Capsule()
@@ -1179,7 +1210,7 @@ private struct SearchResultRow: View {
         .animation(.easeOut(duration: 0.14), value: isHighlighted)
         .onHover { isHovered = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(vod.vodName)，来源 \(badge)，\(remarkText)")
+        .accessibilityLabel(L10n.text("{0}，来源 {1}，{2}", ["\(vod.vodName)", "\(badge)", "\(remarkText)"]))
     }
 
     private var isHighlighted: Bool {
@@ -1217,7 +1248,7 @@ private struct SearchResultRow: View {
                         .foregroundStyle(palette.foreground)
                         .lineLimit(1)
                     if isExactMatch {
-                        Text("精确匹配")
+                        Text(L10n.text("精确匹配"))
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(palette.lavender)
                             .fixedSize()
@@ -1255,7 +1286,7 @@ private struct SearchResultRow: View {
                     .foregroundStyle(palette.foreground)
                     .lineLimit(1)
             }
-            Text(isDrive ? "网盘资源" : "站点影视")
+            Text(isDrive ? L10n.text("网盘资源") : L10n.text("站点影视"))
                 .font(.system(size: 10))
                 .foregroundStyle(palette.muted.opacity(0.72))
         }
@@ -1273,7 +1304,7 @@ private struct SearchResultRow: View {
                         isDrive ? palette.lavender : palette.color(for: .success)
                     )
                     .frame(width: 6, height: 6)
-                Text(isDrive ? "打开查看网盘资源" : "打开查看详情")
+                Text(isDrive ? L10n.text("打开查看网盘资源") : L10n.text("打开查看详情"))
                     .font(.system(size: 10))
                     .foregroundStyle(palette.muted.opacity(0.72))
                     .lineLimit(1)
@@ -1299,17 +1330,17 @@ private struct SearchResultRow: View {
 
     private var supportingText: String {
         if !vod.vodActor.isEmpty { return vod.vodActor }
-        if !vod.vodDirector.isEmpty { return "导演：\(vod.vodDirector)" }
-        return "暂无演职员信息"
+        if !vod.vodDirector.isEmpty { return L10n.text("导演：{0}", ["\(vod.vodDirector)"]) }
+        return L10n.text("暂无演职员信息")
     }
 
     private var metadataText: String {
         let values = [vod.vodYear, vod.vodArea, vod.typeName].filter { !$0.isEmpty }
-        return values.isEmpty ? "暂无年代与地区信息" : values.joined(separator: " · ")
+        return values.isEmpty ? L10n.text("暂无年代与地区信息") : values.joined(separator: " · ")
     }
 
     private var remarkText: String {
-        vod.vodRemarks.isEmpty ? "暂无更新信息" : vod.vodRemarks
+        vod.vodRemarks.isEmpty ? L10n.text("暂无更新信息") : vod.vodRemarks
     }
 }
 

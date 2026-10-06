@@ -47,7 +47,12 @@ public struct LivePlaybackProbe: Sendable {
 
     public func probe(spec: PlaySpec, timeout: TimeInterval = 10) async -> LiveProbeResult {
         do {
-            let response = try await httpClient.get(url: spec.url, headers: spec.headers, timeout: timeout)
+            let response = try await httpClient.get(
+                url: spec.url,
+                headers: spec.headers,
+                timeout: timeout,
+                redactsURLInLogs: true
+            )
             return Self.evaluate(
                 url: spec.url,
                 statusCode: response.statusCode,

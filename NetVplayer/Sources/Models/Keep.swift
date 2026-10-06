@@ -22,6 +22,7 @@ public struct Keep: Codable, Identifiable, Sendable {
     public var driveReferenceURL: String
     public var driveRoute: String
     public var configId: Int
+    public var sourceFingerprint: String
     public var createTime: Date
 
     public var id: String { key }
@@ -43,6 +44,7 @@ public struct Keep: Codable, Identifiable, Sendable {
         driveReferenceURL: String = "",
         driveRoute: String = "",
         configId: Int = 0,
+        sourceFingerprint: String = "",
         createTime: Date = Date()
     ) {
         self.key = key
@@ -56,12 +58,13 @@ public struct Keep: Codable, Identifiable, Sendable {
         self.driveReferenceURL = driveReferenceURL
         self.driveRoute = driveRoute
         self.configId = configId
+        self.sourceFingerprint = sourceFingerprint
         self.createTime = createTime
     }
 
     enum CodingKeys: String, CodingKey {
         case key, siteName, vodName, vodPic, vodRemarks, latestRemarks, type
-        case driveProvider, driveReferenceURL, driveRoute, configId, createTime
+        case driveProvider, driveReferenceURL, driveRoute, configId, sourceFingerprint, createTime
     }
 
     public init(from decoder: Decoder) throws {
@@ -77,6 +80,7 @@ public struct Keep: Codable, Identifiable, Sendable {
         self.driveReferenceURL = try container.decodeIfPresent(String.self, forKey: .driveReferenceURL) ?? ""
         self.driveRoute = try container.decodeIfPresent(String.self, forKey: .driveRoute) ?? ""
         self.configId = try container.decodeIfPresent(Int.self, forKey: .configId) ?? 0
+        self.sourceFingerprint = try container.decodeIfPresent(String.self, forKey: .sourceFingerprint) ?? ""
         self.createTime = try container.decodeIfPresent(Date.self, forKey: .createTime) ?? Date()
     }
 }

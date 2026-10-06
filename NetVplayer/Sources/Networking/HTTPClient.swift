@@ -1,3 +1,4 @@
+import Models
 // Networking/HTTPClient.swift
 // 基于 URLSession 的网络请求封装
 
@@ -77,6 +78,22 @@ final class UnsafeURLSessionDelegate: NSObject, URLSessionDelegate, URLSessionTa
     }
 }
 
+/// Refuse cross-origin redirects before sending credentials to another server.
+final class OriginRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    let origin: URL
+    init(origin: URL) { self.origin = origin }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        guard let target = request.url,
+              target.scheme?.lowercased() == origin.scheme?.lowercased(),
+              target.host?.lowercased() == origin.host?.lowercased(),
+              (target.port ?? (target.scheme == "https" ? 443 : 80)) == (origin.port ?? (origin.scheme == "https" ? 443 : 80)) else {
+            completionHandler(nil); return
+        }
+        completionHandler(request)
+    }
+}
+
 /// HTTP 客户端
 public final class HTTPClient: @unchecked Sendable {
 
@@ -84,6 +101,7 @@ public final class HTTPClient: @unchecked Sendable {
 
     private let session: URLSession
     private let allowedOrigin: URL?
+    private let hasExplicitProxyRoute: Bool
     private let sessionLock = NSLock()
     private var cachedSessions: [Int: URLSession] = [:]
 
@@ -94,6 +112,7 @@ public final class HTTPClient: @unchecked Sendable {
 
     public init(session: URLSession? = nil, allowedOrigin: URL? = nil) {
         self.allowedOrigin = allowedOrigin
+        self.hasExplicitProxyRoute = false
         if let session = session {
             self.session = session
         } else {
@@ -105,9 +124,32 @@ public final class HTTPClient: @unchecked Sendable {
         }
     }
 
+    private init(session: URLSession, allowedOrigin: URL?, hasExplicitProxyRoute: Bool) {
+        self.session = session
+        self.allowedOrigin = allowedOrigin
+        self.hasExplicitProxyRoute = hasExplicitProxyRoute
+    }
+
+    /// Pins the network route, including disabling automatic fallback for direct requests.
+    public func withExplicitProxy(_ proxy: URL?) -> HTTPClient {
+        let configuration = session.configuration
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.connectionProxyDictionary = [:]
+        if let proxy, let host = proxy.host, proxy.scheme?.lowercased() == "http" {
+            let port = proxy.port ?? 80
+            configuration.connectionProxyDictionary = [
+                "HTTPEnable": 1, "HTTPProxy": host, "HTTPPort": port,
+                "HTTPSEnable": 1, "HTTPSProxy": host, "HTTPSPort": port,
+                "ExceptionsList": ["localhost", "127.*", "::1", "[::1]"]
+            ]
+        }
+        return HTTPClient(session: URLSession(configuration: configuration, delegate: UnsafeURLSessionDelegate(), delegateQueue: nil),
+                          allowedOrigin: allowedOrigin, hasExplicitProxyRoute: true)
+    }
+
     /// Returns a client sharing this session while rejecting cross-origin redirects.
     public func constrained(to origin: URL) -> HTTPClient {
-        HTTPClient(session: session, allowedOrigin: origin)
+        HTTPClient(session: session, allowedOrigin: origin, hasExplicitProxyRoute: hasExplicitProxyRoute)
     }
 
     @discardableResult
@@ -181,7 +223,8 @@ public final class HTTPClient: @unchecked Sendable {
             "HTTPPort": port,
             "HTTPSEnable": 1,
             "HTTPSProxy": "127.0.0.1",
-            "HTTPSPort": port
+            "HTTPSPort": port,
+            "ExceptionsList": ["localhost", "127.*", "::1", "[::1]"]
         ]
         
         let delegate = UnsafeURLSessionDelegate()
@@ -274,6 +317,7 @@ public final class HTTPClient: @unchecked Sendable {
         guard let requestURL = URL(string: url), !requestURL.isFileURL else {
             throw HTTPError.invalidURL(url)
         }
+        try validateFinalURL(requestURL)
 
         var request = URLRequest(url: requestURL)
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -303,7 +347,7 @@ public final class HTTPClient: @unchecked Sendable {
             let loggedError = redactsURLInLogs
                 ? Self.redactedErrorForLog(error)
                 : "\(error.localizedDescription) (\(error))"
-            guard allowsProxyFallback, isNetworkFailureWarrantingProxy(error) else {
+            guard allowsProxyFallback, !hasExplicitProxyRoute, !HTTPRedirectPolicy.isLoopback(requestURL), isNetworkFailureWarrantingProxy(error) else {
                 throw error
             }
 
@@ -347,6 +391,7 @@ public final class HTTPClient: @unchecked Sendable {
         guard let requestURL = URL(string: url) else {
             throw HTTPError.invalidURL(url)
         }
+        try validateFinalURL(requestURL)
 
         if requestURL.isFileURL {
             let data = try Data(contentsOf: requestURL)
@@ -369,7 +414,7 @@ public final class HTTPClient: @unchecked Sendable {
 
         // 1. 尝试使用默认 Session 进行直连访问
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request, delegate: HTTPRedirectDelegate(initialRequest: request, allowedOrigin: allowedOrigin))
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw HTTPError.invalidResponse
             }
@@ -389,16 +434,22 @@ public final class HTTPClient: @unchecked Sendable {
                 finalURL: httpResponse.url
             )
         } catch {
+            if Task.isCancelled
+                || error is CancellationError
+                || (error as? URLError)?.code == .cancelled {
+                throw error
+            }
             let loggedURL = redactsURLInLogs ? Self.redactedURLForLog(url) : url
             let loggedError = redactsURLInLogs ? Self.redactedErrorForLog(error) : "\(error.localizedDescription) (\(error))"
-            if allowsProxyFallback {
+            let shouldRetryThroughProxy = allowsProxyFallback && !hasExplicitProxyRoute && !HTTPRedirectPolicy.isLoopback(requestURL) && isNetworkFailureWarrantingProxy(error)
+            if shouldRetryThroughProxy {
                 print("[HTTPClient] 直连请求失败：\(loggedURL)，错误：\(loggedError)。准备检测本地代理并重试。")
             } else {
-                print("[HTTPClient] 直连请求失败：\(loggedURL)，错误：\(loggedError)。本次请求未启用代理重试。")
+                print("[HTTPClient] 请求失败：\(loggedURL)，错误：\(loggedError)。本次请求不进行代理重试。")
             }
-            
+
             // 2. 判断该错误是否为网络阻断，若是则通过代理重试
-            guard allowsProxyFallback, isNetworkFailureWarrantingProxy(error) else {
+            guard shouldRetryThroughProxy else {
                 throw error
             }
             
@@ -412,7 +463,7 @@ public final class HTTPClient: @unchecked Sendable {
             let proxySession = getSession(forPort: activePort)
             
             do {
-                let (data, response) = try await proxySession.data(for: request)
+                let (data, response) = try await proxySession.data(for: request, delegate: HTTPRedirectDelegate(initialRequest: request, allowedOrigin: allowedOrigin))
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw HTTPError.invalidResponse
                 }
@@ -455,6 +506,7 @@ public final class HTTPClient: @unchecked Sendable {
         guard let requestURL = URL(string: url) else {
             throw HTTPError.invalidURL(url)
         }
+        try validateFinalURL(requestURL)
         guard !requestURL.isFileURL else {
             throw HTTPError.invalidURL(url)
         }
@@ -483,7 +535,7 @@ public final class HTTPClient: @unchecked Sendable {
                 ? Self.redactedErrorForLog(error)
                 : "\(error.localizedDescription) (\(error))"
             guard !failure.responseAccepted,
-                  allowsProxyFallback,
+                  allowsProxyFallback, !hasExplicitProxyRoute, !HTTPRedirectPolicy.isLoopback(requestURL),
                   isNetworkFailureWarrantingProxy(error) else {
                 throw error
             }
@@ -527,7 +579,7 @@ public final class HTTPClient: @unchecked Sendable {
         var responseAccepted = false
         var chunk = Data()
         do {
-            let (bytes, response) = try await session.bytes(for: request)
+            let (bytes, response) = try await session.bytes(for: request, delegate: HTTPRedirectDelegate(initialRequest: request, allowedOrigin: allowedOrigin))
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw HTTPError.invalidResponse
             }
@@ -581,7 +633,10 @@ public final class HTTPClient: @unchecked Sendable {
         request: URLRequest,
         destinationURL: URL
     ) async throws -> HTTPStreamResponse {
-        let (temporaryURL, response) = try await session.download(for: request)
+        let (temporaryURL, response) = try await session.download(
+            for: request,
+            delegate: HTTPRedirectDelegate(initialRequest: request, allowedOrigin: allowedOrigin)
+        )
         guard let httpResponse = response as? HTTPURLResponse else {
             throw HTTPError.invalidResponse
         }
@@ -591,6 +646,7 @@ public final class HTTPClient: @unchecked Sendable {
                 HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode)
             )
         }
+        try validateFinalURL(httpResponse.url)
 
         var responseHeaders: [String: String] = [:]
         for (key, value) in httpResponse.allHeaderFields {
@@ -657,10 +713,10 @@ public enum HTTPError: Error, LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .invalidURL(let url): return "无效的 URL: \(url)"
-        case .invalidResponse: return "无效的 HTTP 响应"
-        case .originMismatch: return "响应重定向到未授权的来源"
-        case .httpError(let code, let msg): return "HTTP 错误 \(code): \(msg)"
+        case .invalidURL(let url): return L10n.text("无效的 URL: {0}", ["\(url)"])
+        case .invalidResponse: return L10n.text("无效的 HTTP 响应")
+        case .originMismatch: return L10n.text("响应重定向到未授权的来源")
+        case .httpError(let code, let msg): return L10n.text("HTTP 错误 {0}: {1}", ["\(code)", "\(msg)"])
         }
     }
 }

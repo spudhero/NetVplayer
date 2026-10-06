@@ -43,8 +43,16 @@ public final class VodConfig: @unchecked Sendable {
 
     /// 解析配置，并先按 FongMi fetchArray 语义拉取/合并外部数组字段。
     public func parseResolvingExternalArrays(json: String, config: Config) async throws {
+        let mergedJSON = try await resolveConfigurationSnapshot(json: json, config: config)
+        preservesAggregationSnapshotForMergedParse = true
+        defer { preservesAggregationSnapshotForMergedParse = false }
+        try parse(json: mergedJSON, config: config)
+    }
+
+    /// Merges external arrays without changing parsed sites or the shared live configuration.
+    func resolveConfigurationSnapshot(json: String, config: Config) async throws -> String {
         guard let data = json.data(using: .utf8),
-              var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ConfigError.invalidJSON
         }
 
@@ -55,9 +63,7 @@ public final class VodConfig: @unchecked Sendable {
               let mergedJSON = String(data: mergedData, encoding: .utf8) else {
             throw ConfigError.invalidJSON
         }
-        preservesAggregationSnapshotForMergedParse = true
-        defer { preservesAggregationSnapshotForMergedParse = false }
-        try parse(json: mergedJSON, config: config)
+        return mergedJSON
     }
 
     /// 从 JSON 字符串解析配置

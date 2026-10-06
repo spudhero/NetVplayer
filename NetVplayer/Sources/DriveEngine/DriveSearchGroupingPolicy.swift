@@ -12,10 +12,10 @@ public enum DriveSearchValidity: String, Codable, Sendable, Equatable {
 
     public var displayName: String {
         switch self {
-        case .available: return "可用"
-        case .requiresAuth: return "需要登录"
-        case .suspectedInvalid: return "疑似失效"
-        case .unknown: return "未知"
+        case .available: return L10n.text("可用")
+        case .requiresAuth: return L10n.text("需要登录")
+        case .suspectedInvalid: return L10n.text("疑似失效")
+        case .unknown: return L10n.text("未知")
         }
     }
 }
@@ -149,7 +149,7 @@ public enum DriveSearchGroupingPolicy {
             let descriptors = items.map { DriveSearchDescriptor.infer(from: $0, sourceName: sourceName) }
             return DriveSearchVodGroup(
                 provider: provider,
-                title: provider == .unknown ? "其它" : provider.displayName,
+                title: provider == .unknown ? L10n.text("其它") : provider.localizedDisplayName,
                 validity: summarizedValidity(descriptors),
                 vods: items
             )

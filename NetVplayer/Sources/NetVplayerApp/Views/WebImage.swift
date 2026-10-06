@@ -8,6 +8,7 @@ import ImageIO
 import Models
 import Networking
 import Storage
+import ProxyServer
 
 /// 自定义网络图片视图
 public struct WebImage: View {
@@ -60,6 +61,9 @@ public struct WebImage: View {
         }
         .onAppear {
             loader.load(from: urlString, headers: siteHeader, timeout: timeout, maxPixelSize: maxPixelSize)
+        }
+        .onDisappear {
+            loader.cancel()
         }
         .onChange(of: urlString) { _, newValue in
             loader.load(from: newValue, headers: siteHeader, timeout: timeout, maxPixelSize: maxPixelSize)
@@ -204,10 +208,12 @@ private actor PosterDownloadLimiter {
     }
 
     func acquire() async throws {
+        try Task.checkCancellation()
         while active >= limit {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(20))
         }
+        try Task.checkCancellation()
         active += 1
     }
 
@@ -222,10 +228,14 @@ actor PosterImagePipeline {
     private struct ImageInFlight: Sendable {
         let id: UUID
         let generation: UInt64
-        let task: Task<DecodedPosterImage, Error>
+        let dataKey: String
+        let dataID: UUID
+        let task: Task<Void, Never>
+        var waiters: [UUID: CheckedContinuation<DecodedPosterImage, Error>]
     }
 
     private struct DataInFlight: Sendable {
+        let id: UUID
         let generation: UInt64
         let task: Task<Data, Error>
         var consumers: Int
@@ -273,36 +283,64 @@ actor PosterImagePipeline {
         key: String,
         maxPixelSize: CGFloat
     ) async throws -> DecodedPosterImage {
+        try Task.checkCancellation()
         let sizedKey = "\(key)-\(Int(maxPixelSize.rounded()))"
         let requestGeneration = generation
-        if let existing = inFlight[sizedKey], existing.generation == generation {
-            let image = try await existing.task.value
+        let waiterID = UUID()
+        return try await withTaskCancellationHandler {
+            let image: DecodedPosterImage = try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled, requestGeneration == generation else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                addWaiter(
+                    continuation, id: waiterID, sizedKey: sizedKey,
+                    request: request, key: key, maxPixelSize: maxPixelSize
+                )
+            }
             try Task.checkCancellation()
             guard requestGeneration == generation else { throw CancellationError() }
             return image
+        } onCancel: {
+            Task { await self.cancelWaiter(id: waiterID, sizedKey: sizedKey) }
+        }
+    }
+
+    private func addWaiter(
+        _ continuation: CheckedContinuation<DecodedPosterImage, Error>,
+        id waiterID: UUID,
+        sizedKey: String,
+        request: URLRequest,
+        key: String,
+        maxPixelSize: CGFloat
+    ) {
+        let requestGeneration = generation
+        if var existing = inFlight[sizedKey], existing.generation == requestGeneration {
+            existing.waiters[waiterID] = continuation
+            inFlight[sizedKey] = existing
+            return
         }
 
+        let dataID: UUID
         let dataTask: Task<Data, Error>
         if var existing = dataInFlight[key], existing.generation == requestGeneration {
             existing.consumers += 1
             dataInFlight[key] = existing
+            dataID = existing.id
             dataTask = existing.task
         } else {
-            let created = Task { try await data(request: request, key: key, generation: requestGeneration) }
-            dataInFlight[key] = DataInFlight(generation: requestGeneration, task: created, consumers: 1)
-            dataTask = created
+            dataID = UUID()
+            dataTask = Task { try await data(request: request, key: key, generation: requestGeneration) }
+            dataInFlight[key] = DataInFlight(
+                id: dataID, generation: requestGeneration, task: dataTask, consumers: 1
+            )
         }
         let requestID = UUID()
         let decodeTask = Task {
-            defer {
-                if var existing = dataInFlight[key], existing.generation == requestGeneration {
-                    existing.consumers -= 1
-                    dataInFlight[key] = existing.consumers == 0 ? nil : existing
-                }
-                if inFlight[sizedKey]?.id == requestID { inFlight[sizedKey] = nil }
-            }
             do {
                 let data = try await dataTask.value
+                try Task.checkCancellation()
+                guard requestGeneration == generation else { throw CancellationError() }
                 let image = try await Task.detached(priority: .utility) {
                     try Self.decode(data: data, maxPixelSize: maxPixelSize)
                 }.value
@@ -314,19 +352,55 @@ actor PosterImagePipeline {
                 } catch {
                     DiagnosticLog.write("[POSTER_CACHE_WRITE_FAILED] error=\(error.localizedDescription)")
                 }
-                return image
+                finishRequest(id: requestID, sizedKey: sizedKey, result: .success(image))
             } catch {
-                if requestGeneration == generation, error is PosterImageError {
+                if inFlight[sizedKey]?.id == requestID, requestGeneration == generation,
+                   error is PosterImageError {
                     try? fileManager.removeItem(at: cacheFileURL(for: key))
                 }
-                throw error
+                finishRequest(id: requestID, sizedKey: sizedKey, result: .failure(error))
             }
         }
-        inFlight[sizedKey] = ImageInFlight(id: requestID, generation: requestGeneration, task: decodeTask)
-        let image = try await decodeTask.value
-        try Task.checkCancellation()
-        guard requestGeneration == generation else { throw CancellationError() }
-        return image
+        inFlight[sizedKey] = ImageInFlight(
+            id: requestID, generation: requestGeneration, dataKey: key, dataID: dataID,
+            task: decodeTask, waiters: [waiterID: continuation]
+        )
+    }
+
+    private func cancelWaiter(id: UUID, sizedKey: String) {
+        guard var request = inFlight[sizedKey],
+              let continuation = request.waiters.removeValue(forKey: id) else { return }
+        if request.waiters.isEmpty {
+            inFlight[sizedKey] = nil
+            request.task.cancel()
+            releaseDataConsumer(key: request.dataKey, id: request.dataID)
+        } else {
+            inFlight[sizedKey] = request
+        }
+        continuation.resume(throwing: CancellationError())
+    }
+
+    private func finishRequest(
+        id: UUID,
+        sizedKey: String,
+        result: Swift.Result<DecodedPosterImage, Error>
+    ) {
+        guard let request = inFlight[sizedKey], request.id == id else { return }
+        inFlight[sizedKey] = nil
+        releaseDataConsumer(key: request.dataKey, id: request.dataID)
+        for continuation in request.waiters.values { continuation.resume(with: result) }
+    }
+
+    private func releaseDataConsumer(key: String, id: UUID) {
+        // A cancelled decode may finish after the same key has started a new download.
+        guard var request = dataInFlight[key], request.id == id else { return }
+        request.consumers -= 1
+        if request.consumers == 0 {
+            dataInFlight[key] = nil
+            request.task.cancel()
+        } else {
+            dataInFlight[key] = request
+        }
     }
 
     func diskUsage() -> Int64 {
@@ -347,7 +421,12 @@ actor PosterImagePipeline {
 
     func clearDiskCache() throws {
         generation &+= 1
-        for request in inFlight.values { request.task.cancel() }
+        for request in inFlight.values {
+            request.task.cancel()
+            for continuation in request.waiters.values {
+                continuation.resume(throwing: CancellationError())
+            }
+        }
         for request in dataInFlight.values { request.task.cancel() }
         inFlight.removeAll()
         dataInFlight.removeAll()
@@ -359,6 +438,14 @@ actor PosterImagePipeline {
     }
 
     private func data(request: URLRequest, key: String, generation requestGeneration: UInt64) async throws -> Data {
+        try Task.checkCancellation()
+        guard requestGeneration == generation else { throw CancellationError() }
+        if let url = request.url, url.isFileURL {
+            let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
+            let data = try handle.read(upToCount: 4 * 1024 * 1024 + 1) ?? Data()
+            guard !data.isEmpty, data.count <= 4 * 1024 * 1024 else { throw PosterImageError.invalidData(data.count) }
+            return data
+        }
         let fileURL = cacheFileURL(for: key)
         if let values = try? fileURL.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey]),
            let storedAt = values.creationDate ?? values.contentModificationDate,
@@ -375,9 +462,22 @@ actor PosterImagePipeline {
         let responseData: Data
         let response: URLResponse
         do {
+            try Task.checkCancellation()
+            guard requestGeneration == generation else { throw CancellationError() }
             var uncachedRequest = request
             uncachedRequest.cachePolicy = .reloadIgnoringLocalCacheData
-            (responseData, response) = try await session.data(for: uncachedRequest)
+            if let url = uncachedRequest.url, SourceResourceTransport.supportsPoster(url) {
+                let resource = try await SourceResourceTransport.response(
+                    for: url, headers: uncachedRequest.allHTTPHeaderFields ?? [:],
+                    timeout: uncachedRequest.timeoutInterval
+                )
+                guard let httpResponse = HTTPURLResponse(
+                    url: url, statusCode: resource.statusCode, httpVersion: "HTTP/1.1", headerFields: nil
+                ) else { throw URLError(.badServerResponse) }
+                (responseData, response) = (resource.data, httpResponse)
+            } else {
+                (responseData, response) = try await session.data(for: uncachedRequest)
+            }
             await limiter.release()
         } catch {
             await limiter.release()
@@ -483,6 +583,18 @@ final class ImageLoader: ObservableObject {
         self.pipeline = pipeline
     }
 
+    deinit {
+        currentTask?.cancel()
+    }
+
+    func cancel() {
+        currentRequestID = UUID()
+        currentTask?.cancel()
+        currentTask = nil
+        currentKey = ""
+        isLoading = false
+    }
+
     func load(
         from urlString: String,
         headers: [String: String]? = nil,
@@ -490,10 +602,8 @@ final class ImageLoader: ObservableObject {
         maxPixelSize: CGFloat = 1_200
     ) {
         guard let source = EmbeddedImageSource.parse(urlString) else {
-            currentTask?.cancel()
-            currentKey = ""
+            cancel()
             self.image = nil
-            self.isLoading = false
             return
         }
 
@@ -648,7 +758,7 @@ final class ImageLoader: ObservableObject {
         return request
     }
 
-    private static func mergedHeaders(
+    static func mergedHeaders(
         siteHeaders: [String: String]?,
         embeddedHeaders: [String: String]
     ) -> [String: String] {
@@ -662,7 +772,7 @@ final class ImageLoader: ObservableObject {
         return result
     }
 
-    nonisolated private static func cacheKey(url: URL, headers: [String: String]?) -> String {
+    nonisolated static func cacheKey(url: URL, headers: [String: String]?) -> String {
         var canonical = url.absoluteString
         for (key, value) in (headers ?? [:]).sorted(by: { $0.key.lowercased() < $1.key.lowercased() }) {
             canonical += "\n\(key.lowercased()):\(value)"

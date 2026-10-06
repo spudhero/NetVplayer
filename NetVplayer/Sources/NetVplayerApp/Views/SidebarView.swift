@@ -1,3 +1,4 @@
+import Models
 // NetVplayerApp/Views/SidebarView.swift
 // Immersive library navigation for the macOS main window.
 
@@ -64,7 +65,7 @@ struct SidebarView: View {
             VStack(alignment: .leading, spacing: HomeVisualPolicy.sidebarBrandCopySpacing) {
                 Text("NetVplayer")
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
-                Text("媒体中心")
+                Text(L10n.text("媒体中心"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(
                         palette.muted.opacity(HomeVisualPolicy.sidebarBrandSubtitleOpacity)

@@ -1,3 +1,4 @@
+import Models
 import AppKit
 import Combine
 import Foundation
@@ -34,7 +35,7 @@ private enum AppUpdateError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .versionChanged: "发布版本已变化，请重新检查更新。"
+        case .versionChanged: L10n.text("发布版本已变化，请重新检查更新。")
         }
     }
 }
@@ -149,7 +150,7 @@ final class AppUpdateCoordinator: NSObject, ObservableObject, SPUUpdaterDelegate
             if phase == .checking { phase = .idle }
             if case .downloading = phase {
                 approvedBuildVersion = nil
-                phase = .failed("后台更新未完成，请重试。")
+                phase = .failed(L10n.text("后台更新未完成，请重试。"))
             }
             return
         }
@@ -168,9 +169,9 @@ final class AppUpdateCoordinator: NSObject, ObservableObject, SPUUpdaterDelegate
         if error.domain == SUSparkleErrorDomain {
             switch error.code {
             case 1003, 1005:
-                return "请先将 NetVplayer 移到“应用程序”文件夹，再检查更新。"
+                return L10n.text("请先将 NetVplayer 移到“应用程序”文件夹，再检查更新。")
             case 4001, 4007, 4012:
-                return "安装需要系统授权。授权未完成，当前版本保持不变，可稍后重试。"
+                return L10n.text("安装需要系统授权。授权未完成，当前版本保持不变，可稍后重试。")
             default:
                 break
             }

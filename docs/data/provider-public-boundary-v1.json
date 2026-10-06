@@ -63,7 +63,8 @@
     "private_provider_detection": "SpiderEngine Swift filename containing NativeProvider, except reviewed public adapters",
     "private_provider_staging_prefix": "private-providers/",
     "public_provider_sources": [
-      "NetVplayer/Sources/SpiderEngine/NativeProviders.swift"
+      "NetVplayer/Sources/SpiderEngine/NativeProviders.swift",
+      "NetVplayer/Sources/SpiderEngine/FileServiceNativeProvider.swift"
     ],
     "target": "clean-public-shell-repository"
   },

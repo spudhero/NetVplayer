@@ -1,3 +1,4 @@
+import Models
 import SwiftUI
 
 struct AppUpdateVersionButton: View {
@@ -18,7 +19,7 @@ struct AppUpdateVersionButton: View {
             HStack(spacing: 7) {
                 if placement == .sidebar {
                     Image(systemName: "info.circle")
-                    Text("关于 \(AppVersionDisplay.label())")
+                    Text(L10n.text("关于 {0}", ["\(AppVersionDisplay.label())"]))
                         .lineLimit(1)
                 } else {
                     Text(AppVersionDisplay.label())
@@ -27,7 +28,7 @@ struct AppUpdateVersionButton: View {
                     Circle()
                         .fill(.orange)
                         .frame(width: 7, height: 7)
-                        .accessibilityLabel("有新版本")
+                        .accessibilityLabel(L10n.text("有新版本"))
                 }
                 if placement == .sidebar {
                     Spacer(minLength: 0)
@@ -39,11 +40,12 @@ struct AppUpdateVersionButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("应用版本与更新")
+        .help(L10n.text("应用版本与更新"))
         .popover(isPresented: $showingUpdate, arrowEdge: .trailing) {
             AppUpdateStatusView()
                 .frame(width: 300)
                 .padding(16)
+                .themedPresentation()
         }
     }
 }
@@ -58,34 +60,34 @@ private struct AppUpdateStatusView: View {
 
             switch updates.phase {
             case .idle:
-                Text("当前没有可用更新")
+                Text(L10n.text("当前没有可用更新"))
                     .foregroundStyle(.secondary)
-                Button("检查更新") { updates.checkForUpdateInformation() }
+                Button(L10n.text("检查更新")) { updates.checkForUpdateInformation() }
             case .checking:
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("正在检查更新")
+                    Text(L10n.text("正在检查更新"))
                 }
             case let .available(info):
-                Text("新版本 v\(info.displayVersion)")
+                Text(L10n.text("新版本 v{0}", ["\(info.displayVersion)"]))
                     .font(.subheadline.weight(.semibold))
                 releaseNotesLink(for: info)
                 if !info.isInformationalOnly {
-                    Button("更新") { updates.beginUpdate() }
+                    Button(L10n.text("更新")) { updates.beginUpdate() }
                         .buttonStyle(.borderedProminent)
                         .disabled(updates.isCheckingInformation)
                 }
             case let .downloading(info):
-                Text("正在后台下载并验证 v\(info.displayVersion)")
+                Text(L10n.text("正在后台下载并验证 v{0}", ["\(info.displayVersion)"]))
                 ProgressView()
                 releaseNotesLink(for: info)
             case let .ready(info):
-                Text("v\(info.displayVersion) 已准备好，退出应用后安装")
+                Text(L10n.text("v{0} 已准备好，退出应用后安装", ["\(info.displayVersion)"]))
                 releaseNotesLink(for: info)
             case let .failed(message):
                 Text(message)
                     .foregroundStyle(.red)
-                Button("重试") { updates.checkForUpdateInformation() }
+                Button(L10n.text("重试")) { updates.checkForUpdateInformation() }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -94,7 +96,7 @@ private struct AppUpdateStatusView: View {
     @ViewBuilder
     private func releaseNotesLink(for info: AppUpdateInfo) -> some View {
         if let releaseURL = info.releaseURL {
-            Link("查看更新说明", destination: releaseURL)
+            Link(L10n.text("查看更新说明"), destination: releaseURL)
                 .font(.caption)
         }
     }

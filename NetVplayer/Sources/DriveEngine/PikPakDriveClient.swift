@@ -43,6 +43,10 @@ public struct PikPakShareFile: Sendable {
     public let downloadURL: String
     public let isDirectory: Bool
 
+    public var isPlayableMedia: Bool {
+        DriveMediaClassifier.isPlayableMedia(name: name, formatType: kind, isDirectory: isDirectory, isFile: !isDirectory)
+    }
+
     public var isPlayableVideo: Bool {
         DriveMediaClassifier.isPlayableVideo(name: name, formatType: kind, isDirectory: isDirectory, isFile: !isDirectory)
     }
@@ -168,7 +172,7 @@ public final class PikPakDriveClient: @unchecked Sendable {
                     directoryQueue.append(detail.fileID)
                     continue
                 }
-                if detail.isPlayableVideo {
+                if detail.isPlayableMedia {
                     playableFiles.append(PikPakPlayableFile(file: detail))
                 } else if detail.isKnownNonVideoAsset {
                     filteredAssetNames.append(detail.name)
@@ -182,7 +186,7 @@ public final class PikPakDriveClient: @unchecked Sendable {
                 for item in page.files {
                     if item.isDirectory {
                         directoryQueue.append(item.fileID)
-                    } else if item.isPlayableVideo {
+                    } else if item.isPlayableMedia {
                         playableFiles.append(PikPakPlayableFile(file: item))
                     } else if item.isKnownNonVideoAsset {
                         filteredAssetNames.append(item.name)

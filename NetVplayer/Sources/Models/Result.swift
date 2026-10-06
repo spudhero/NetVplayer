@@ -95,6 +95,8 @@ public struct Result: Codable, Sendable {
 
     /// 外挂字幕列表
     public var subs: [Sub]
+    /// Session-only ownership of file-service connections and local directory authorization.
+    public var fileResourceLeaseID: String?
     /// DRM 配置
     public var drm: Drm?
     /// 可供用户选择的播放候选；旧 Provider 默认留空
@@ -103,8 +105,10 @@ public struct Result: Codable, Sendable {
     public var interaction: PlaybackInteraction?
 
     // MARK: - 分页
-    public var page: Int
-    public var pagecount: Int
+    public var page: Int { didSet { pageIsKnown = page > 0 } }
+    public var pageIsKnown: Bool
+    public var pagecount: Int { didSet { pageCountIsKnown = pagecount > 0 } }
+    public var pageCountIsKnown: Bool
     public var total: Int
 
     // MARK: - 错误
@@ -129,11 +133,12 @@ public struct Result: Codable, Sendable {
         jxFrom: String = "",
         key: String = "",
         subs: [Sub] = [],
+        fileResourceLeaseID: String? = nil,
         drm: Drm? = nil,
         playbackCandidates: [PlaybackCandidate] = [],
         interaction: PlaybackInteraction? = nil,
-        page: Int = 1,
-        pagecount: Int = 1,
+        page: Int? = nil,
+        pagecount: Int? = nil,
         total: Int = 0,
         msg: String = "",
         code: Int = 0
@@ -155,17 +160,22 @@ public struct Result: Codable, Sendable {
         self.jxFrom = jxFrom
         self.key = key
         self.subs = subs
+        self.fileResourceLeaseID = fileResourceLeaseID
         self.drm = drm
         self.playbackCandidates = playbackCandidates
         self.interaction = interaction
-        self.page = page
-        self.pagecount = pagecount
+        self.page = page ?? 1
+        self.pageIsKnown = (page ?? 0) > 0
+        self.pagecount = pagecount ?? 1
+        self.pageCountIsKnown = (pagecount ?? 0) > 0
         self.total = total
         self.msg = msg
         self.code = code
     }
 
     enum CodingKeys: String, CodingKey {
+        case pageCountIsKnown, pageIsKnown
+        case fileResourceLeaseID
         case types, list, filters, url, parse, jx, flag, header, playUrl, externalAudioURL, contentLength, format, artwork, click, jxFrom, key, subs, drm, playbackCandidates, interaction, page, pagecount, total, msg, code
     }
 
@@ -174,6 +184,10 @@ public struct Result: Codable, Sendable {
         init?(stringValue: String) { self.stringValue = stringValue }
         var intValue: Int? { nil }
         init?(intValue: Int) { nil }
+    }
+
+    private enum LegacyPlayerKeys: String, CodingKey {
+        case sub
     }
 
     public init(from decoder: Decoder) throws {
@@ -209,12 +223,20 @@ public struct Result: Codable, Sendable {
         self.click = (try? container.decode(String.self, forKey: .click)) ?? ""
         self.jxFrom = (try? container.decode(String.self, forKey: .jxFrom)) ?? ""
         self.key = (try? container.decode(String.self, forKey: .key)) ?? ""
-        self.subs = (try? container.decode([Sub].self, forKey: .subs)) ?? []
+        let legacyPlayer = try decoder.container(keyedBy: LegacyPlayerKeys.self)
+        self.subs = (try? container.decode([Sub].self, forKey: .subs))
+            ?? (try? legacyPlayer.decode([Sub].self, forKey: .sub))
+            ?? []
         self.drm = try? container.decode(Drm.self, forKey: .drm)
+        self.fileResourceLeaseID = try? container.decode(String.self, forKey: .fileResourceLeaseID)
         self.playbackCandidates = (try? container.decode([PlaybackCandidate].self, forKey: .playbackCandidates)) ?? []
         self.interaction = try? container.decode(PlaybackInteraction.self, forKey: .interaction)
         self.page = (try? container.decodeIfPresent(JSONDynamicValue.self, forKey: .page))?.intValue ?? 1
+        self.pageIsKnown = (try? container.decode(Bool.self, forKey: .pageIsKnown))
+            ?? (container.contains(.page) && self.page > 0)
         self.pagecount = (try? container.decodeIfPresent(JSONDynamicValue.self, forKey: .pagecount))?.intValue ?? 1
+        self.pageCountIsKnown = (try? container.decode(Bool.self, forKey: .pageCountIsKnown))
+            ?? (container.contains(.pagecount) && self.pagecount > 0)
         self.total = (try? container.decodeIfPresent(JSONDynamicValue.self, forKey: .total))?.intValue ?? 0
         self.msg = (try? container.decode(String.self, forKey: .msg)) ?? ""
         self.code = (try? container.decodeIfPresent(JSONDynamicValue.self, forKey: .code))?.intValue ?? 0

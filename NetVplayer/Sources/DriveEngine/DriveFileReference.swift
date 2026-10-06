@@ -17,6 +17,8 @@ public struct DriveFileReference: Equatable, Sendable {
     public let personalFileID: String
     public let pickCode: String
     public let size: Int64
+    public let formatType: String
+    public let filePath: String
 
     public init(
         provider: DriveProvider,
@@ -30,7 +32,9 @@ public struct DriveFileReference: Equatable, Sendable {
         personalDriveID: String = "",
         personalFileID: String = "",
         pickCode: String = "",
-        size: Int64 = 0
+        size: Int64 = 0,
+        formatType: String = "",
+        filePath: String = ""
     ) {
         self.provider = provider
         self.shareURL = shareURL
@@ -44,6 +48,8 @@ public struct DriveFileReference: Equatable, Sendable {
         self.personalFileID = personalFileID
         self.pickCode = pickCode
         self.size = max(0, size)
+        self.formatType = formatType
+        self.filePath = filePath
     }
 
     public var encodedURL: String {
@@ -70,6 +76,12 @@ public struct DriveFileReference: Equatable, Sendable {
         }
         if !pickCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             components.queryItems?.append(URLQueryItem(name: "pick_code", value: pickCode))
+        }
+        if !formatType.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "format_type", value: formatType))
+        }
+        if !filePath.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "file_path", value: filePath))
         }
         if size > 0 {
             components.queryItems?.append(URLQueryItem(name: "size", value: String(size)))
@@ -107,7 +119,9 @@ public struct DriveFileReference: Equatable, Sendable {
             personalDriveID: query["personal_drive_id"] ?? "",
             personalFileID: query["personal_file_id"] ?? "",
             pickCode: query["pick_code"] ?? "",
-            size: Int64(query["size"] ?? "") ?? 0
+            size: Int64(query["size"] ?? "") ?? 0,
+            formatType: query["format_type"] ?? "",
+            filePath: query["file_path"] ?? ""
         )
     }
 

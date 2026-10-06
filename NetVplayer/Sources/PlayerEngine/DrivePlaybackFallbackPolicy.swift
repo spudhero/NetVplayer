@@ -50,7 +50,7 @@ public enum DrivePlaybackRoutePolicy {
                 id: candidate.id,
                 kind: kind,
                 title: title(provider: plan.provider, kind: kind),
-                detail: kind == .original ? "原文件 · 本地 Range 代理" : "智能转码 · 兼容播放",
+                detail: kind == .original ? L10n.text("原文件 · 本地 Range 代理") : L10n.text("智能转码 · 兼容播放"),
                 spec: routedSpec
             )
         }
@@ -95,6 +95,17 @@ public enum DrivePlaybackRoutePolicy {
     ) -> PlaySpec {
         guard let plan = spec.drivePlaybackPlan else { return spec }
         var routed = spec
+        // A route owns its size and transfer policy, even when two candidates
+        // happen to share a URL. Never carry original-file settings into HLS.
+        routed.transferProfile = nil
+        if candidate.expectedSize > 0 {
+            routed.contentLength = candidate.expectedSize
+            routed.metadata[DrivePlaybackMetadataKey.size] = String(candidate.expectedSize)
+        } else if candidate.url != spec.url
+                    || candidate.providerRoute != spec.metadata[DrivePlaybackMetadataKey.route] {
+            routed.contentLength = nil
+            routed.metadata[DrivePlaybackMetadataKey.size] = nil
+        }
         routed.url = candidate.url
         routed.headers = candidate.headers
         routed.fallbackHeaders = [:]
@@ -129,12 +140,12 @@ public enum DrivePlaybackRoutePolicy {
 
     private static func providerLabel(_ provider: DriveProvider) -> String {
         switch provider {
-        case .quark: return "夸克"
+        case .quark: return L10n.text("夸克")
         case .uc: return "UC"
-        case .ali: return "阿里"
+        case .ali: return L10n.text("阿里")
         case .p115: return "115"
         case .pikpak: return "PikPak"
-        default: return provider.displayName
+        default: return provider.localizedDisplayName
         }
     }
 }

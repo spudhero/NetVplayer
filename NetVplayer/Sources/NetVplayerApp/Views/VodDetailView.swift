@@ -44,10 +44,7 @@ struct VodDetailView: View {
     @Environment(\.appThemePalette) private var palette
     let vod: Vod
     let layout: VodDetailLayout
-
-    // 当前选中的线路
-    @State private var localSelectedFlag: String = ""
-    @State private var episodeSortOrder: EpisodeSortOrder = .ascending
+    @State private var authorizeAfterErrorDismissal = false
 
     private var columns: [GridItem] {
         Array(
@@ -106,8 +103,8 @@ struct VodDetailView: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.cancelAction)
-            .help("关闭详情")
-            .accessibilityLabel("关闭")
+            .help(L10n.text("关闭详情"))
+            .accessibilityLabel(L10n.text("关闭"))
             .padding(layout.closeButtonInset)
             .zIndex(10)
 
@@ -129,7 +126,7 @@ struct VodDetailView: View {
                                     await appState.cancelLoading()
                                 }
                             }) {
-                                Text("取消")
+                                Text(L10n.text("取消"))
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 8)
                                     .background(Color.white.opacity(0.2))
@@ -147,28 +144,25 @@ struct VodDetailView: View {
         .clipped()
         .foregroundStyle(palette.foreground)
         .tint(palette.accent)
-        .onAppear {
-            // 初始化选中线路
-            if localSelectedFlag.isEmpty {
-                localSelectedFlag = appState.selectedPlayFlag
+        .sheet(isPresented: $appState.isPlaybackErrorPresented, onDismiss: {
+            if authorizeAfterErrorDismissal {
+                authorizeAfterErrorDismissal = false
+                appState.openCloudAuthFromPlaybackError()
             }
-        }
-        .onChange(of: appState.selectedPlayFlag) { _, newValue in
-            localSelectedFlag = newValue
-        }
-        .alert("播放失败", isPresented: $appState.isPlaybackErrorPresented) {
-            if appState.playbackErrorAuthProvider != nil {
-                Button {
-                    appState.openCloudAuthFromPlaybackError()
-                } label: {
-                    Label("扫码授权", systemImage: "qrcode.viewfinder")
+        }) {
+            SettingsEditorContainer(title: L10n.text("播放失败"), width: 500) {
+                Text(appState.playbackErrorMessage ?? L10n.text("当前集数暂时无法播放"))
+                    .font(.callout).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            } actions: {
+                Spacer()
+                Button(L10n.text("知道了")) { appState.clearPlaybackError() }.keyboardShortcut(.cancelAction)
+                if appState.playbackErrorAuthProvider != nil {
+                    Button(L10n.text("扫码授权")) {
+                        authorizeAfterErrorDismissal = true
+                        appState.isPlaybackErrorPresented = false
+                    }.buttonStyle(.borderedProminent)
                 }
             }
-            Button("知道了", role: .cancel) {
-                appState.clearPlaybackError()
-            }
-        } message: {
-            Text(appState.playbackErrorMessage ?? "当前集数暂时无法播放")
         }
         .sheet(item: $appState.pendingPlaybackSelection) { request in
             PlaybackSourcePicker(request: request)
@@ -219,7 +213,7 @@ struct VodDetailView: View {
                             .shadow(radius: 3)
                     }
                     .buttonStyle(.plain)
-                    .help(appState.isKept(vodId: detail.vodId) ? "取消收藏" : "加入收藏")
+                    .help(appState.isKept(vodId: detail.vodId) ? L10n.text("取消收藏") : L10n.text("加入收藏"))
                     .padding(10)
                 }
 
@@ -256,16 +250,16 @@ struct VodDetailView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     if !vod.vodDirector.isEmpty {
-                        Text("导演：").bold().foregroundColor(palette.muted) + Text(vod.vodDirector)
+                        Text(L10n.text("导演：")).bold().foregroundColor(palette.muted) + Text(vod.vodDirector)
                     }
                     if !vod.vodActor.isEmpty {
-                        Text("主演：").bold().foregroundColor(palette.muted) + Text(vod.vodActor)
+                        Text(L10n.text("主演：")).bold().foregroundColor(palette.muted) + Text(vod.vodActor)
                     }
                     if !vod.typeName.isEmpty {
-                        Text("类型：").bold().foregroundColor(palette.muted) + Text(vod.typeName)
+                        Text(L10n.text("类型：")).bold().foregroundColor(palette.muted) + Text(vod.typeName)
                     }
                     if !areaAndYearText.isEmpty {
-                        Text("地区/年份：").bold().foregroundColor(palette.muted)
+                        Text(L10n.text("地区/年份：")).bold().foregroundColor(palette.muted)
                             + Text(areaAndYearText)
                     }
                 }
@@ -274,7 +268,7 @@ struct VodDetailView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("简介")
+                    Text(L10n.text("简介"))
                         .font(.headline)
                     Text(vodDescription)
                         .font(.body)
@@ -299,9 +293,9 @@ struct VodDetailView: View {
                     ProgressView()
                         .controlSize(.large)
                         .tint(palette.accent)
-                    Text("正在加载详情...")
+                    Text(L10n.text("正在加载详情..."))
                         .font(.headline)
-                    Text("正在获取播放线路与选集")
+                    Text(L10n.text("正在获取播放线路与选集"))
                         .font(.caption)
                         .foregroundStyle(palette.muted)
                     Spacer()
@@ -311,8 +305,8 @@ struct VodDetailView: View {
                 VStack {
                     Spacer()
                     AppUnavailableState(
-                        title: "暂无可播放资源",
-                        message: "当前来源的播放地址已全部失效或未解析出可播放视频",
+                        title: L10n.text("暂无可播放资源"),
+                        message: L10n.text("当前来源的播放地址已全部失效或未解析出可播放视频"),
                         systemImage: "play.slash.fill"
                     )
                     Spacer()
@@ -341,7 +335,7 @@ struct VodDetailView: View {
 
     private var playbackLineSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("播放线路")
+            Text(L10n.text("播放线路"))
                 .font(.headline)
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -349,27 +343,26 @@ struct VodDetailView: View {
                     ForEach(appState.playFlags, id: \.self) { flag in
                         let status = flagStatus(for: flag)
                         Button {
-                            localSelectedFlag = flag
                             appState.selectPlayFlag(flag)
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: status.icon)
                                     .font(.caption)
-                                Text(flag)
+                                Text(PlaybackFlagPresentation.title(flag))
                                     .lineLimit(1)
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
                             .background(
-                                localSelectedFlag == flag
+                                appState.selectedPlayFlag == flag
                                     ? palette.lavender.opacity(0.18)
                                     : palette.foreground.opacity(0.06)
                             )
-                            .foregroundStyle(localSelectedFlag == flag ? palette.foreground : palette.muted)
+                            .foregroundStyle(appState.selectedPlayFlag == flag ? palette.foreground : palette.muted)
                             .overlay {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .stroke(
-                                        localSelectedFlag == flag
+                                        appState.selectedPlayFlag == flag
                                             ? palette.accent.opacity(0.52)
                                             : status.color.opacity(0.35),
                                         lineWidth: 1
@@ -397,7 +390,7 @@ struct VodDetailView: View {
                 VStack {
                     Spacer()
                     AppUnavailableState(
-                        title: "暂无集数",
+                        title: L10n.text("暂无集数"),
                         message: selectedFlagStatus.description,
                         systemImage: "play.slash.fill"
                     )
@@ -436,7 +429,7 @@ struct VodDetailView: View {
 
     private func episodeHeading(status: FlagStatus) -> some View {
         HStack(spacing: 10) {
-            Text("播放选集")
+            Text(L10n.text("播放选集"))
                 .font(.headline)
             Label(status.label, systemImage: status.icon)
                 .font(.caption)
@@ -446,7 +439,7 @@ struct VodDetailView: View {
 
     private func episodeControls(status: FlagStatus) -> some View {
         HStack(spacing: 10) {
-            EpisodeSortOrderButton(selection: $episodeSortOrder)
+            EpisodeSortOrderButton(selection: $appState.episodeSortOrder)
                 .tint(palette.accent)
             EpisodeDisplayModePicker(selection: $appState.episodeDisplayMode)
                 .tint(palette.accent)
@@ -454,7 +447,7 @@ struct VodDetailView: View {
                 Button {
                     appState.requestCloudAuth(provider)
                 } label: {
-                    Label("扫码授权", systemImage: "qrcode.viewfinder")
+                    Label(L10n.text("扫码授权"), systemImage: "qrcode.viewfinder")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -475,9 +468,8 @@ struct VodDetailView: View {
 
             if selectedFlagStatus.isUnsupported,
                let quarkFlag = firstQuarkFlag,
-               quarkFlag != localSelectedFlag {
-                Button("切换夸克") {
-                    localSelectedFlag = quarkFlag
+               quarkFlag != appState.selectedPlayFlag {
+                Button(L10n.text("切换夸克")) {
                     appState.selectPlayFlag(quarkFlag)
                 }
                 .buttonStyle(.bordered)
@@ -495,7 +487,7 @@ struct VodDetailView: View {
 
     private var vodDescription: String {
         let content = VodDescriptionPresentation.text(from: detail.vodContent)
-        return content.isEmpty ? "暂无简介" : content
+        return content.isEmpty ? L10n.text("暂无简介") : content
     }
 
     private var areaAndYearText: String {
@@ -542,7 +534,7 @@ private struct PlaybackSourcePicker: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("选择播放源")
+                    Text(L10n.text("选择播放源"))
                         .font(.title3.weight(.semibold))
                     Text(request.episode.name)
                         .font(.caption)
@@ -557,7 +549,7 @@ private struct PlaybackSourcePicker: View {
                     Image(systemName: "xmark")
                 }
                 .buttonStyle(.plain)
-                .help("关闭")
+                .help(L10n.text("关闭"))
             }
             .padding(16)
 
@@ -582,7 +574,7 @@ private struct PlaybackSourcePicker: View {
         }
         .frame(width: 620, height: 480)
         .background(.ultraThinMaterial)
-        .background(palette.surface.opacity(0.74))
+        .themedPresentation()
         .foregroundStyle(palette.foreground)
     }
 
@@ -604,7 +596,7 @@ private struct PlaybackSourcePicker: View {
                             .lineLimit(2)
 
                         if isPreferred {
-                            Label("上次选择", systemImage: "bookmark.fill")
+                            Label(L10n.text("上次选择"), systemImage: "bookmark.fill")
                                 .font(.caption2)
                                 .foregroundStyle(palette.accent)
                         }
@@ -624,7 +616,7 @@ private struct PlaybackSourcePicker: View {
                     }
 
                     if !candidate.isPlayable {
-                        Text(candidate.unavailableReason.isEmpty ? "当前播放方式不可用" : candidate.unavailableReason)
+                        Text(candidate.unavailableReason.isEmpty ? L10n.text("当前播放方式不可用") : candidate.unavailableReason)
                             .font(.caption)
                             .foregroundStyle(palette.color(for: .warning))
                             .fixedSize(horizontal: false, vertical: true)
@@ -669,7 +661,7 @@ private extension VodDetailView {
     }
 
     var selectedFlagStatus: FlagStatus {
-        flagStatus(for: localSelectedFlag.isEmpty ? appState.selectedPlayFlag : localSelectedFlag)
+        flagStatus(for: appState.selectedPlayFlag)
     }
 
     var firstQuarkFlag: String? {
@@ -682,12 +674,12 @@ private extension VodDetailView {
 
     func flagStatus(for flagName: String) -> FlagStatus {
         guard appState.playFlags.contains(flagName) else {
-            return .empty("当前线路未解析出有效的视频集数")
+            return .empty(L10n.text("当前线路未解析出有效的视频集数"))
         }
 
         let episodes = appState.playbackEpisodes(for: flagName)
         let providers = episodes.map { DriveFileReference.provider(for: $0.url) }
-        let sourceStatuses = episodes.map { SourceManager.shared.support(for: $0.url) }
+        let sourceStatuses = episodes.map { episodeSupport(for: $0) }
         if !sourceStatuses.isEmpty,
            sourceStatuses.allSatisfy({ $0.status == .unsupported }),
            let reason = sourceStatuses.first?.reason,
@@ -695,53 +687,77 @@ private extension VodDetailView {
             return .unsupported(reason)
         }
         if providers.contains(.quark) {
-            let hasCookie = !UserPreferences.shared.quarkCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            return hasCookie
-                ? .ready("夸克目录已展开，可尝试播放")
-                : .needsAuth(.quark, "夸克目录已展开，完整播放需要扫码授权；Token 用于个人网盘，Cookie 用于分享播放")
+            return credentialFlagStatus(
+                provider: .quark,
+                keys: ["quarkCookie"],
+                readyMessage: L10n.text("夸克目录已展开，可尝试播放"),
+                needsAuthMessage: L10n.text("夸克目录已展开，完整播放需要扫码授权；Token 用于个人网盘，Cookie 用于分享播放")
+            )
         }
         if providers.contains(.uc) {
-            let hasCookie = !UserPreferences.shared.ucCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            return hasCookie
-                ? .ready("UC 目录已展开，可尝试播放")
-                : .needsAuth(.uc, "UC 目录已展开，Wogg 分享播放需要 UC Cookie；扫码 Token 暂不支持分享直链")
+            return credentialFlagStatus(
+                provider: .uc,
+                keys: ["ucCookie"],
+                readyMessage: L10n.text("UC 目录已展开，可尝试播放"),
+                needsAuthMessage: L10n.text("UC 目录已展开，Wogg 分享播放需要 UC Cookie；扫码 Token 暂不支持分享直链")
+            )
         }
         if providers.contains(.ali) {
-            let hasToken = !UserPreferences.shared.aliRefreshToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !UserPreferences.shared.aliAccessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !UserPreferences.shared.aliOpenToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            return hasToken
-                ? .ready("阿里云盘目录已展开，可尝试播放")
-                : .needsAuth(.ali, "阿里云盘目录已展开，完整播放需要 refresh_token / access_token")
+            return credentialFlagStatus(
+                provider: .ali,
+                keys: ["aliRefreshToken", "aliAccessToken", "aliOpenToken"],
+                readyMessage: L10n.text("阿里云盘目录已展开，可尝试播放"),
+                needsAuthMessage: L10n.text("阿里云盘目录已展开，完整播放需要 refresh_token / access_token")
+            )
         }
         if providers.contains(.p115) {
-            let hasCookie = !UserPreferences.shared.p115Cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            return hasCookie
-                ? .ready("115 目录已展开，可尝试播放")
-                : .needsAuth(.p115, "115 目录已展开，完整播放需要 115 Cookie")
+            return credentialFlagStatus(
+                provider: .p115,
+                keys: ["p115Cookie"],
+                readyMessage: L10n.text("115 目录已展开，可尝试播放"),
+                needsAuthMessage: L10n.text("115 目录已展开，完整播放需要 115 Cookie")
+            )
         }
         if providers.contains(.baidu) {
-            let hasCookie = !UserPreferences.shared.baiduCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            return hasCookie
-                ? .ready("百度网盘目录已展开，可转存原画播放")
-                : .needsAuth(.baidu, "百度网盘目录已展开，播放前需要扫码登录")
+            return credentialFlagStatus(
+                provider: .baidu,
+                keys: ["baiduCookie"],
+                readyMessage: L10n.text("百度网盘目录已展开，可转存原画播放"),
+                needsAuthMessage: L10n.text("百度网盘目录已展开，播放前需要扫码登录")
+            )
         }
         if episodes.isEmpty {
             if flagName.contains("网盘") {
-                return .empty("未找到可播放视频，已过滤图片、字幕截图、海报等附件")
+                return .empty(L10n.text("未找到可播放视频，已过滤图片、字幕截图、海报等附件"))
             }
-            return .empty("当前线路未解析出有效的视频集数")
+            return .empty(L10n.text("当前线路未解析出有效的视频集数"))
         }
-        return .ready("当前线路可尝试播放")
+        return .ready(L10n.text("当前线路可尝试播放"))
+    }
+
+    func credentialFlagStatus(
+        provider: DriveProvider,
+        keys: [String],
+        readyMessage: String,
+        needsAuthMessage: String
+    ) -> FlagStatus {
+        let states = keys.map { UserPreferences.shared.cachedCredentialAvailability($0) }
+        if states.contains(.available) {
+            return .ready(readyMessage)
+        }
+        if states.allSatisfy({ $0 == .unavailable }) {
+            return .needsAuth(provider, needsAuthMessage)
+        }
+        return .authDeferred(L10n.text("当前线路可尝试播放"))
     }
 
     func episodeSupport(for episode: Episode) -> SourceSupport {
-        SourceManager.shared.support(for: episode.url)
+        VodPlaybackAvailabilityPolicy.episodeSupport(for: episode, site: appState.activeSite)
     }
 
     @ViewBuilder
     var episodeCollection: some View {
-        let episodes = episodeSortOrder.ordered(appState.episodes)
+        let episodes = appState.displayedPlaybackEpisodes
 
         switch appState.episodeDisplayMode {
         case .grid:
@@ -815,7 +831,7 @@ private extension VodDetailView {
                     .multilineTextAlignment(.center)
             }
             if isHistoryEpisode {
-                Label("上次", systemImage: "clock")
+                Label(L10n.text("上次"), systemImage: "clock")
                     .font(.caption2.weight(.semibold))
                     .labelStyle(.titleAndIcon)
             }
@@ -863,7 +879,7 @@ private extension VodDetailView {
                 }
 
                 if isHistoryEpisode {
-                    Label("上次", systemImage: "clock")
+                    Label(L10n.text("上次"), systemImage: "clock")
                         .font(.caption2.weight(.semibold))
                         .labelStyle(.titleAndIcon)
                 }
@@ -895,6 +911,7 @@ private extension VodDetailView {
 
 private enum FlagStatus {
     case ready(String)
+    case authDeferred(String)
     case needsAuth(DriveProvider, String)
     case unsupported(String)
     case empty(String)
@@ -902,6 +919,7 @@ private enum FlagStatus {
     var icon: String {
         switch self {
         case .ready: return "checkmark.circle.fill"
+        case .authDeferred: return "key.horizontal"
         case .needsAuth: return "qrcode.viewfinder"
         case .unsupported: return "exclamationmark.triangle.fill"
         case .empty: return "play.slash.fill"
@@ -910,16 +928,16 @@ private enum FlagStatus {
 
     var label: String {
         switch self {
-        case .ready: return "可展开"
-        case .needsAuth: return "需授权"
-        case .unsupported: return "暂不支持"
-        case .empty: return "无集数"
+        case .ready, .authDeferred: return L10n.text("可展开")
+        case .needsAuth: return L10n.text("需授权")
+        case .unsupported: return L10n.text("暂不支持")
+        case .empty: return L10n.text("无集数")
         }
     }
 
     var description: String {
         switch self {
-        case .ready(let message), .needsAuth(_, let message), .unsupported(let message), .empty(let message):
+        case .ready(let message), .authDeferred(let message), .needsAuth(_, let message), .unsupported(let message), .empty(let message):
             return message
         }
     }
@@ -931,6 +949,7 @@ private enum FlagStatus {
     var color: Color {
         switch self {
         case .ready: return .green
+        case .authDeferred: return .secondary
         case .needsAuth: return .orange
         case .unsupported, .empty: return .secondary
         }
@@ -950,7 +969,7 @@ private enum FlagStatus {
 
     var shouldShowBanner: Bool {
         switch self {
-        case .ready:
+        case .ready, .authDeferred:
             return false
         case .needsAuth, .unsupported, .empty:
             return true

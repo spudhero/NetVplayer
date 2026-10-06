@@ -1,8 +1,16 @@
 import Foundation
+import Models
 import NodeBundleRuntime
 
 protocol SixVMagnetPlaybackResolving: Sendable {
     func playbackURL(for magnetURI: String) async throws -> URL
+}
+
+struct SixVMagnetPlaybackFile: Decodable, Sendable {
+    let index: Int
+    let name: String
+    let length: Int64
+    let url: URL
 }
 
 enum WebTorrentMagnetPlaybackError: LocalizedError, Equatable {
@@ -37,11 +45,13 @@ actor WebTorrentMagnetPlaybackResolver: SixVMagnetPlaybackResolving {
     private struct BridgeReady: Decodable {
         var url: String?
         var error: String?
+        var files: [SixVMagnetPlaybackFile]?
     }
 
     private struct Session {
         let process: Process
         let playbackURL: URL
+        let files: [SixVMagnetPlaybackFile]
         let startedAt: Date
     }
 
@@ -61,7 +71,7 @@ actor WebTorrentMagnetPlaybackResolver: SixVMagnetPlaybackResolving {
         let infoHash = try Self.infoHash(in: magnetURI)
         discardFinishedSessions()
         if let session = sessions[infoHash], session.process.isRunning {
-            return session.playbackURL
+            return try Self.selectedPlaybackURL(in: session, magnetURI: magnetURI)
         }
         trimSessionsIfNeeded()
 
@@ -102,20 +112,38 @@ actor WebTorrentMagnetPlaybackResolver: SixVMagnetPlaybackResolving {
         }
 
         do {
-            let playbackURL = try await waitForReadyFile(readyURL, process: process)
-            sessions[infoHash] = Session(
+            let ready = try await waitForReadyFile(readyURL, process: process)
+            let session = Session(
                 process: process,
-                playbackURL: playbackURL,
+                playbackURL: ready.url,
+                files: ready.files,
                 startedAt: Date()
             )
-            return playbackURL
+            sessions[infoHash] = session
+            return try Self.selectedPlaybackURL(in: session, magnetURI: magnetURI)
         } catch {
             if process.isRunning { process.terminate() }
             throw error
         }
     }
 
-    private func waitForReadyFile(_ readyURL: URL, process: Process) async throws -> URL {
+    func playbackFiles(for magnetURI: String) async throws -> [SixVMagnetPlaybackFile] {
+        _ = try await playbackURL(for: magnetURI)
+        return sessions[try Self.infoHash(in: magnetURI)]?.files ?? []
+    }
+
+    private static func selectedPlaybackURL(in session: Session, magnetURI: String) throws -> URL {
+        guard let selection = URLComponents(string: magnetURI)?.queryItems?.first(where: {
+            $0.name == "netvplayer_file"
+        }) else { return session.playbackURL }
+        guard let value = selection.value, let index = Int(value), index >= 0,
+              let file = session.files.first(where: { $0.index == index }) else {
+            throw WebTorrentMagnetPlaybackError.bridgeFailed("种子中的所选视频文件已不存在")
+        }
+        return file.url
+    }
+
+    private func waitForReadyFile(_ readyURL: URL, process: Process) async throws -> (url: URL, files: [SixVMagnetPlaybackFile]) {
         for _ in 0..<360 {
             try Task.checkCancellation()
             if let data = try? Data(contentsOf: readyURL),
@@ -125,8 +153,9 @@ actor WebTorrentMagnetPlaybackResolver: SixVMagnetPlaybackResolving {
                 }
                 if let value = ready.url,
                    let url = URL(string: value),
-                   url.host == "127.0.0.1" || url.host == "localhost" {
-                    return url
+                   Self.isLocalPlaybackURL(url),
+                   (ready.files ?? []).allSatisfy({ Self.isLocalPlaybackURL($0.url) && $0.index >= 0 }) {
+                    return (url, ready.files ?? [])
                 }
                 throw WebTorrentMagnetPlaybackError.bridgeFailed("WebTorrent 返回了无效播放地址")
             }
@@ -136,6 +165,11 @@ actor WebTorrentMagnetPlaybackResolver: SixVMagnetPlaybackResolving {
             try await Task.sleep(for: .milliseconds(250))
         }
         throw WebTorrentMagnetPlaybackError.timedOut
+    }
+
+    private static func isLocalPlaybackURL(_ url: URL) -> Bool {
+        url.scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost")
+            && url.user == nil && url.password == nil
     }
 
     private func bridgeRootURL() throws -> URL {
@@ -219,6 +253,29 @@ actor WebTorrentMagnetPlaybackResolver: SixVMagnetPlaybackResolving {
             return bytes.allSatisfy { (65...90).contains($0) || (50...55).contains($0) }
         default:
             return false
+        }
+    }
+}
+
+/// Public magnet episode expansion, independent of any site-specific provider.
+public enum MagnetPlaybackEpisodes {
+    public static func resolve(for magnetURI: String) async throws -> [Episode] {
+        let files = try await WebTorrentMagnetPlaybackResolver.shared.playbackFiles(for: magnetURI)
+        return episodes(for: magnetURI, files: files)
+    }
+
+    static func episodes(for magnetURI: String, files: [SixVMagnetPlaybackFile]) -> [Episode] {
+        files.compactMap { file in
+            guard var components = URLComponents(string: magnetURI) else { return nil }
+            var items = components.queryItems ?? []
+            items.removeAll { $0.name == "netvplayer_file" }
+            items.append(URLQueryItem(name: "netvplayer_file", value: String(file.index)))
+            components.queryItems = items
+            guard let url = components.string else { return nil }
+            let name = file.name.replacingOccurrences(of: "$", with: " ")
+                .replacingOccurrences(of: "#", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Episode(name: name, url: url)
         }
     }
 }

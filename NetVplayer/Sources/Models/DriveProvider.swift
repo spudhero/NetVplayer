@@ -1,6 +1,6 @@
 import Foundation
 
-public enum DriveProvider: String, Codable, Sendable {
+public enum DriveProvider: String, Codable, CaseIterable, Sendable {
     case quark
     case uc
     case ali
@@ -33,6 +33,17 @@ public enum DriveProvider: String, Codable, Sendable {
         case .bilibili: return "Bilibili"
         case .unknown: return "网盘"
         }
+    }
+
+    public var localizedDisplayName: String { localizedDisplayName() }
+
+    public func localizedDisplayName(language: String? = nil) -> String {
+        L10n.text(displayName, language: language)
+    }
+
+    public static func localizedFlagName(_ value: String, language: String? = nil) -> String {
+        allCases.first(where: { $0.displayName == value })?
+            .localizedDisplayName(language: language) ?? value
     }
 
     public var authURL: URL? {

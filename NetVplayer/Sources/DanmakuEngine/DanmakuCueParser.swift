@@ -45,6 +45,7 @@ public enum DanmakuPayloadFailureCategory: String, Codable, Sendable, Equatable 
     case invalidEncoding
     case invalidXML
     case invalidJSON
+    case payloadTooLarge
 }
 
 public struct DanmakuPayloadParseDiagnostic: Codable, Sendable, Equatable {
@@ -84,6 +85,7 @@ public struct DanmakuPayloadParseResult: Sendable, Equatable {
 
 public enum DanmakuPayloadParser {
     public static let maxCueCount = 5_000
+    public static let maximumPayloadBytes = 4 * 1_024 * 1_024
 
     public static func parse(payload: String, format: DanmakuTrackFormat, limit: Int = maxCueCount) -> [DanmakuCue] {
         parseWithDiagnostic(payload: payload, format: format, limit: limit).cues
@@ -95,7 +97,10 @@ public enum DanmakuPayloadParser {
         limit: Int = maxCueCount
     ) -> DanmakuPayloadParseResult {
         let cappedLimit = max(0, min(maxCueCount, limit))
-        let rawSize = payload.data(using: .utf8)?.count ?? payload.utf8.count
+        let rawSize = payload.utf8.count
+        guard rawSize <= maximumPayloadBytes else {
+            return emptyResult(format: format, rawSize: rawSize, failure: .payloadTooLarge)
+        }
         guard !payload.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return emptyResult(format: format, rawSize: rawSize, failure: .emptyPayload)
         }
@@ -104,17 +109,22 @@ public enum DanmakuPayloadParser {
         }
         let cues: [DanmakuCue]
         let failureCategory: DanmakuPayloadFailureCategory?
+        let parsedCount: Int
         switch format {
         case .xml:
             let result = parseXML(payload)
             cues = result.cues
             failureCategory = result.failureCategory
+            parsedCount = result.parsedCount
         case .json:
             let result = parseJSON(payload)
             cues = result.cues
             failureCategory = result.failureCategory
+            parsedCount = result.parsedCount
         case .text:
-            cues = parseText(payload)
+            let result = parseText(payload)
+            cues = result.cues
+            parsedCount = result.total
             failureCategory = nil
         }
         let sorted = cues.sorted { $0.timeMs < $1.timeMs }
@@ -122,29 +132,35 @@ public enum DanmakuPayloadParser {
         let diagnostic = DanmakuPayloadParseDiagnostic(
             format: format,
             rawSizeBytes: rawSize,
-            parsedCount: sorted.count,
+            parsedCount: parsedCount,
             returnedCount: returned.count,
-            truncatedCount: max(0, sorted.count - returned.count),
+            truncatedCount: max(0, parsedCount - returned.count),
             failureCategory: failureCategory
         )
         return DanmakuPayloadParseResult(cues: returned, diagnostic: diagnostic)
     }
 
-    private static func parseXML(_ payload: String) -> (cues: [DanmakuCue], failureCategory: DanmakuPayloadFailureCategory?) {
-        guard let data = payload.data(using: .utf8) else { return ([], .invalidEncoding) }
+    private static func parseXML(_ payload: String) -> (cues: [DanmakuCue], failureCategory: DanmakuPayloadFailureCategory?, parsedCount: Int) {
+        guard let data = payload.data(using: .utf8) else { return ([], .invalidEncoding, 0) }
         let delegate = XMLDanmakuDelegate()
+        guard !payload.localizedCaseInsensitiveContains("<!ENTITY"), !payload.localizedCaseInsensitiveContains("<!DOCTYPE") else { return ([], .invalidXML, 0) }
         let parser = XMLParser(data: data)
+        parser.shouldResolveExternalEntities = false
         parser.delegate = delegate
-        guard parser.parse() else { return ([], .invalidXML) }
-        return (delegate.cues, nil)
+        guard parser.parse() else { return ([], .invalidXML, 0) }
+        return (delegate.accumulator.cues, nil, delegate.accumulator.total)
     }
 
-    private static func parseJSON(_ payload: String) -> (cues: [DanmakuCue], failureCategory: DanmakuPayloadFailureCategory?) {
+    private static func parseJSON(_ payload: String) -> (cues: [DanmakuCue], failureCategory: DanmakuPayloadFailureCategory?, parsedCount: Int) {
         guard let data = payload.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) else {
-            return ([], .invalidJSON)
+            return ([], .invalidJSON, 0)
         }
-        return (cueObjects(in: root).compactMap(cueFromJSONObject), nil)
+        var accumulator = DanmakuCueAccumulator()
+        for object in cueObjects(in: root) {
+            if let cue = cueFromJSONObject(object) { accumulator.append(cue) }
+        }
+        return (accumulator.cues, nil, accumulator.total)
     }
 
     private static func cueObjects(in root: Any) -> [Any] {
@@ -169,33 +185,33 @@ public enum DanmakuPayloadParser {
             ?? doubleValue(object["at"])
         let millis = intValue(object["timeMs"])
             ?? intValue(object["progress"])
-            ?? seconds.map { Int(($0 * 1000).rounded()) }
+            ?? seconds.map { milliseconds($0) }
             ?? 0
         let mode = modeValue(object["mode"])
         let color = colorValue(object["color"])
         return DanmakuCue(timeMs: millis, text: text, mode: mode, color: color)
     }
 
-    private static func parseText(_ payload: String) -> [DanmakuCue] {
-        payload
-            .components(separatedBy: .newlines)
-            .compactMap { line -> DanmakuCue? in
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return nil }
-                let separators: [Character] = ["|", ",", "\t"]
-                for separator in separators {
-                    guard let index = trimmed.firstIndex(of: separator) else { continue }
-                    let timePart = String(trimmed[..<index])
+    private static func parseText(_ payload: String) -> DanmakuCueAccumulator {
+        var accumulator = DanmakuCueAccumulator()
+        payload.enumerateLines { line, _ in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            for separator: Character in ["|", ",", "\t"] {
+                if let index = trimmed.firstIndex(of: separator) {
                     let text = String(trimmed[trimmed.index(after: index)...])
-                    return DanmakuCue(timeMs: parseTimeMillis(timePart), text: text)
+                    accumulator.append(DanmakuCue(timeMs: parseTimeMillis(String(trimmed[..<index])), text: text))
+                    return
                 }
-                return DanmakuCue(timeMs: 0, text: trimmed)
             }
+            accumulator.append(DanmakuCue(timeMs: 0, text: trimmed))
+        }
+        return accumulator
     }
 
     fileprivate static func cueFromBilibili(attributes: [String: String], text: String) -> DanmakuCue? {
         let values = (attributes["p"] ?? "").split(separator: ",").map(String.init)
-        let timeMs = values.first.flatMap { Double($0) }.map { Int(($0 * 1000).rounded()) } ?? 0
+        let timeMs = values.first.flatMap { Double($0) }.map { milliseconds($0) } ?? 0
         let mode = values.count > 1 ? modeValue(values[1]) : .scroll
         let color = values.count > 3 ? colorValue(values[3]) : "#FFFFFF"
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -205,7 +221,7 @@ public enum DanmakuPayloadParser {
     fileprivate static func parseTimeMillis(_ value: String) -> Int {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if let seconds = Double(trimmed) {
-            return Int((seconds * 1000).rounded())
+            return milliseconds(seconds)
         }
         let parts = trimmed.split(separator: ":").compactMap { Double($0) }
         guard !parts.isEmpty else { return 0 }
@@ -217,7 +233,12 @@ public enum DanmakuPayloadParser {
         } else {
             seconds = parts[0]
         }
-        return Int((seconds * 1000).rounded())
+        return milliseconds(seconds)
+    }
+
+    private static func milliseconds(_ seconds: Double) -> Int {
+        guard seconds.isFinite else { return 0 }
+        return Int(min(86_400_000, max(0, seconds * 1_000)).rounded())
     }
 
     private static func stringValue(_ value: Any?) -> String? {
@@ -281,7 +302,7 @@ public enum DanmakuPayloadParser {
 }
 
 private final class XMLDanmakuDelegate: NSObject, XMLParserDelegate {
-    private(set) var cues: [DanmakuCue] = []
+    private(set) var accumulator = DanmakuCueAccumulator()
     private var currentAttributes: [String: String]?
     private var currentText = ""
 
@@ -299,7 +320,7 @@ private final class XMLDanmakuDelegate: NSObject, XMLParserDelegate {
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
         if currentAttributes != nil {
-            currentText += string
+            currentText += string.prefix(max(0, 1_024 - currentText.count))
         }
     }
 
@@ -311,9 +332,38 @@ private final class XMLDanmakuDelegate: NSObject, XMLParserDelegate {
     ) {
         guard elementName == "d", let attributes = currentAttributes else { return }
         if let cue = DanmakuPayloadParser.cueFromBilibili(attributes: attributes, text: currentText) {
-            cues.append(cue)
+            accumulator.append(cue)
         }
         currentAttributes = nil
         currentText = ""
+    }
+}
+
+// Keep the earliest cues with a bounded max-heap, even when the payload is unsorted.
+private struct DanmakuCueAccumulator {
+    var cues: [DanmakuCue] = []
+    var total = 0
+    mutating func append(_ cue: DanmakuCue) {
+        total += 1
+        if cues.count < DanmakuPayloadParser.maxCueCount {
+            cues.append(cue)
+            var child = cues.count - 1
+            while child > 0 {
+                let parent = (child - 1) / 2
+                guard cues[child].timeMs > cues[parent].timeMs else { break }
+                cues.swapAt(child, parent)
+                child = parent
+            }
+        } else if let latest = cues.first, cue.timeMs < latest.timeMs {
+            cues[0] = cue
+            var parent = 0
+            while parent * 2 + 1 < cues.count {
+                var child = parent * 2 + 1
+                if child + 1 < cues.count, cues[child + 1].timeMs > cues[child].timeMs { child += 1 }
+                guard cues[child].timeMs > cues[parent].timeMs else { break }
+                cues.swapAt(parent, child)
+                parent = child
+            }
+        }
     }
 }

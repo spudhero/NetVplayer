@@ -17,8 +17,8 @@ struct BuildRunPackagingTests {
             contentsOf: packageRoot.appendingPathComponent("script/build_and_run.sh"), encoding: .utf8
         )
 
-        #expect(info["CFBundleShortVersionString"] as? String == "1.0.12")
-        #expect(info["CFBundleVersion"] as? String == "13")
+        #expect(info["CFBundleShortVersionString"] as? String == "1.1.0")
+        #expect(info["CFBundleVersion"] as? String == "14")
         #expect(info["SUFeedURL"] as? String == "https://github.com/spudhero/NetVplayer/releases/latest/download/appcast.xml")
         #expect(info["SURequireSignedFeed"] as? Bool == true)
         #expect(info["SUVerifyUpdateBeforeExtraction"] as? Bool == true)
@@ -372,7 +372,7 @@ struct BuildRunPackagingTests {
         #expect(buildScript.contains("<key>NetVplayerFeedbackRepositoryURL</key>"))
         #expect(buildScript.contains("APP_DIAGNOSTIC_LOG=\"$HOME/Library/Logs/NetVplayer/current.log\""))
         #expect(buildScript.contains("tail -F \"$LOG_FILE\" \"$APP_DIAGNOSTIC_LOG\""))
-        #expect(appSource.contains("Button(\"报告问题…\")"))
+        #expect(appSource.contains("Button(L10n.text(\"报告问题…\"))"))
         #expect(appSource.contains("if visualRegressionConfiguration == nil"))
         let visualGuardRange = try #require(appSource.range(of: "if visualRegressionConfiguration == nil"))
         let diagnosticStartRange = try #require(
@@ -406,5 +406,25 @@ struct BuildRunPackagingTests {
         try yamlValidation.run()
         yamlValidation.waitUntilExit()
         #expect(yamlValidation.terminationStatus == 0)
+    }
+
+    @Test
+    func xunleiSDKIsPrivateOptionalAndPinned() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let buildScript = try String(
+            contentsOf: packageRoot.appendingPathComponent("script/build_and_run.sh"),
+            encoding: .utf8
+        )
+
+        #expect(buildScript.contains("if [[ \"$PACKAGE_PUBLIC\" != true && -f \"$XUNLEI_SDK_SOURCE\" ]]; then"))
+        #expect(buildScript.contains("XUNLEI_SDK_SHA256=\"b4215fedabffd3bf65d0707725806b041b38dc34f4a88cfa15490872dfc3189f\""))
+        #expect(buildScript.contains("/usr/bin/lipo -archs \"$XUNLEI_SDK_SOURCE\""))
+        #expect(buildScript.contains("XUNLEI_SDK_DESTINATION=\"$APP_RESOURCES/ThunderDownloadSDK/libdk.dylib\""))
+        #expect(buildScript.contains("cp \"$XUNLEI_SDK_SOURCE\" \"$XUNLEI_SDK_DESTINATION\""))
+        #expect(buildScript.contains("codesign --force --sign - \"$XUNLEI_SDK_DESTINATION\""))
+        #expect(buildScript.contains("codesign --verify --strict --verbose=2 \"$XUNLEI_SDK_DESTINATION\""))
     }
 }

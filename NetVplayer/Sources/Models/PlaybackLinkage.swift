@@ -29,11 +29,14 @@ public enum PlaybackLinkage {
     public static let liveFavoritesGroupName = "我的收藏"
     public static let disabledSubtitleTrackID = "no"
 
-    public static func vodKey(siteKey: String, vodId: String) -> String {
-        "\(siteKey)_\(vodId)"
+    public static func vodKey(siteKey: String, vodId: String, sourceFingerprint: String = "") -> String {
+        LibrarySourceIdentity.key(source: sourceFingerprint, siteKey: siteKey, vodID: vodId)
     }
 
     public static func vodIdentity(from key: String) -> (siteKey: String, vodId: String) {
+        if let identity = LibrarySourceIdentity.components(of: key) {
+            return (identity.siteKey, identity.vodID)
+        }
         guard let separator = key.firstIndex(of: "_") else {
             return ("", "")
         }
@@ -45,11 +48,14 @@ public enum PlaybackLinkage {
     public static func history(
         for vod: Vod,
         activeSiteKey: String,
-        items: [History]
+        items: [History],
+        sourceFingerprint: String = ""
     ) -> History? {
         let siteKey = vod.siteKey.isEmpty ? activeSiteKey : vod.siteKey
-        let key = vodKey(siteKey: siteKey, vodId: vod.vodId)
-        return items.first { $0.key == key || ($0.siteKey == siteKey && $0.vodId == vod.vodId) }
+        let key = vodKey(siteKey: siteKey, vodId: vod.vodId, sourceFingerprint: sourceFingerprint)
+        return items.first {
+            $0.sourceFingerprint == sourceFingerprint && ($0.key == key || ($0.siteKey == siteKey && $0.vodId == vod.vodId))
+        }
     }
 
     public static func preferredFlag(from history: History?, availableFlags: [String]) -> String? {
@@ -60,11 +66,11 @@ public enum PlaybackLinkage {
     public static func preferredEpisode(from history: History?, episodes: [Episode]) -> Episode? {
         guard let history else { return nil }
         if !history.episodeUrl.isEmpty,
-           let exact = episodes.first(where: { $0.url == history.episodeUrl }) {
+          let exact = unique(episodes.filter { $0.url == history.episodeUrl }) {
             return exact
         }
         if !history.episodeKey.isEmpty {
-            if let keyed = episodes.first(where: { episode in
+            if let keyed = unique(episodes.filter { episode in
                 HistoryPersistencePolicy.episodeKey(
                     siteKey: history.siteKey,
                     vodId: history.vodId,
@@ -77,9 +83,13 @@ public enum PlaybackLinkage {
         }
         let episodeName = history.episodeName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !episodeName.isEmpty else { return nil }
-        return episodes.first {
+        return unique(episodes.filter {
             $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == episodeName
-        }
+        })
+    }
+
+    private static func unique(_ episodes: [Episode]) -> Episode? {
+        episodes.count == 1 ? episodes.first : nil
     }
 
     public static func progressText(for history: History?) -> String? {
@@ -113,6 +123,7 @@ public enum PlaybackLinkage {
     }
 
     public static func trackPreferenceKey(for spec: PlaySpec) -> String {
+        if let identity = SubtitleMediaIdentity.key(for: spec) { return "media:" + identity }
         let source = spec.siteKey.isEmpty ? "unknown" : spec.siteKey
         let title = spec.title.isEmpty ? spec.url : spec.title
         return "\(source)_\(title)"

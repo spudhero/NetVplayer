@@ -7,11 +7,11 @@ public final class SentryDiagnostics: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private let defaults: UserDefaults
     private let budget: DiagnosticEventBudget
-    private let environment: String
+    private let environment: String?
     private var started = false
     private var playbackSpan: (id: UUID, span: any Span)?
 
-    public init(defaults: UserDefaults = .standard, environment: String = "production") {
+    public init(defaults: UserDefaults = .standard, environment: String? = nil) {
         self.defaults = defaults
         self.budget = DiagnosticEventBudget(defaults: defaults)
         self.environment = environment
@@ -33,7 +33,7 @@ public final class SentryDiagnostics: @unchecked Sendable {
               ) else { return }
         SentrySDK.start { options in
             Self.configure(options, dsn: dsn, bundle: Bundle.main)
-            options.environment = self.environment
+            if let environment = self.environment { options.environment = environment }
         }
         started = SentrySDK.isEnabled
         guard started else { return }
@@ -91,11 +91,10 @@ public final class SentryDiagnostics: @unchecked Sendable {
         options.maxBreadcrumbs = 40
         options.maxCacheItems = 30
         options.tracesSampleRate = NSNumber(value: DiagnosticReportingConfiguration.tracesSampleRate)
-        options.environment = "production"
-        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
-        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
-        options.releaseName = "com.netvplayer.app@\(version)+\(build)"
-        options.dist = build
+        let identity = DiagnosticReportingConfiguration.identity(info: bundle.infoDictionary ?? [:])
+        options.environment = identity.environment
+        options.releaseName = identity.release
+        options.dist = identity.dist
         options.beforeSend = { event in sanitize(event) }
         options.tracePropagationTargets = []
         options.beforeSendSpan = { span in
@@ -123,7 +122,7 @@ public final class SentryDiagnostics: @unchecked Sendable {
             "device": ["family", "model", "model_id", "arch", "memory_size", "free_memory"],
             "runtime": ["name", "version"],
             "trace": ["trace_id", "span_id", "parent_span_id", "op", "status", "origin"],
-            "diagnostic": ["status", "code", "errorCode", "attempt", "elapsedMs", "durationMs"],
+            "diagnostic": RemoteDiagnosticRecord.measurementKeys,
         ]
         event.context = event.context?.reduce(into: [:]) { result, pair in
             if let allowed = allowedContexts[pair.key] {
@@ -181,7 +180,7 @@ public final class SentryDiagnostics: @unchecked Sendable {
         guard record.isError, budget.admit(code: record.code) else { return }
         let event = Event(level: .error)
         event.message = SentryMessage(formatted: record.code)
-        event.fingerprint = ["netvplayer", record.code]
+        event.fingerprint = record.fingerprint
         event.tags = ["diagnostic.code": record.code]
         event.context = ["diagnostic": record.measurements]
         SentrySDK.capture(event: event)

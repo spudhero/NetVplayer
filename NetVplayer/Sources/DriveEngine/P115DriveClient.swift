@@ -40,6 +40,10 @@ public struct P115ShareFile: Sendable {
     public let downloadURL: String
     public let isDirectory: Bool
 
+    public var isPlayableMedia: Bool {
+        DriveMediaClassifier.isPlayableMedia(name: name, formatType: category, isDirectory: isDirectory, isFile: !isDirectory)
+    }
+
     public var isPlayableVideo: Bool {
         DriveMediaClassifier.isPlayableVideo(name: name, formatType: category, isDirectory: isDirectory, isFile: !isDirectory)
     }
@@ -163,7 +167,7 @@ public final class P115DriveClient: @unchecked Sendable {
                 for item in files {
                     if item.isDirectory {
                         directoryQueue.append(item.fileID)
-                    } else if item.isPlayableVideo {
+                    } else if item.isPlayableMedia {
                         playableFiles.append(P115PlayableFile(file: item))
                     } else if item.isKnownNonVideoAsset {
                         filteredAssetNames.append(item.name)

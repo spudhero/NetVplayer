@@ -26,8 +26,8 @@ struct FavoritesView: View {
 
                 if appState.keepItems.isEmpty {
                     AppUnavailableState(
-                        title: "暂无收藏",
-                        message: "收藏的点播内容和直播频道会集中显示在这里。",
+                        title: L10n.text("暂无收藏"),
+                        message: L10n.text("收藏的点播内容和直播频道会集中显示在这里。"),
                         systemImage: "star.slash"
                     )
                 } else {
@@ -64,9 +64,9 @@ struct FavoritesView: View {
     private var pageHeader: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("我的收藏")
+                Text(L10n.text("我的收藏"))
                     .font(.system(size: 22, weight: .bold))
-                Text(appState.keepItems.isEmpty ? "把常看的内容留在手边" : "共 \(appState.keepItems.count) 个收藏")
+                Text(appState.keepItems.isEmpty ? L10n.text("把常看的内容留在手边") : L10n.text("共 {0} 个收藏", ["\(appState.keepItems.count)"]))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(palette.muted)
             }
@@ -100,7 +100,7 @@ private struct FavoritePosterCard: View {
         }
         .contextMenu {
             Button(role: .destructive, action: onRemove) {
-                Label("取消收藏", systemImage: "trash")
+                Label(L10n.text("取消收藏"), systemImage: "trash")
             }
         }
         .scaleEffect(isHovered ? 1.018 : 1)
@@ -122,7 +122,7 @@ private struct FavoritePosterCard: View {
                         .background(AppGlassSurface(cornerRadius: 15, role: .panel))
 
                     if item.hasUpdate {
-                        Text("有更新")
+                        Text(L10n.text("有更新"))
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(palette.color(for: .onAccent))
                             .padding(.horizontal, 7)
@@ -157,7 +157,7 @@ private struct FavoritePosterCard: View {
                 .lineLimit(1)
 
             HStack(spacing: 6) {
-                Text(item.type == .live ? "直播" : "点播")
+                Text(item.type == .live ? L10n.text("直播") : L10n.text("点播"))
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(item.type == .live ? palette.accent : palette.lavender)
                     .padding(.horizontal, 6)
@@ -186,8 +186,8 @@ private struct FavoritePosterCard: View {
         }
         .buttonStyle(.plain)
         .contentShape(Circle())
-        .help("取消收藏 \(item.vodName)")
-        .accessibilityLabel("取消收藏 \(item.vodName)")
+        .help(L10n.text("取消收藏 {0}", ["\(item.vodName)"]))
+        .accessibilityLabel(L10n.text("取消收藏 {0}", ["\(item.vodName)"]))
     }
 
     @ViewBuilder

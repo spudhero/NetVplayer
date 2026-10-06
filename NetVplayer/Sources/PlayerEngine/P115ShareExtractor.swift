@@ -2,6 +2,7 @@
 // 115 share/file references to playable links.
 
 import Foundation
+import Storage
 import Models
 import Networking
 import DriveEngine
@@ -22,7 +23,7 @@ public final class P115ShareExtractor: SourceExtractorProtocol {
             let cookie = [
                 env["NETVPLAYER_115_COOKIE"] ?? "",
                 env["NETVPLAYER_P115_COOKIE"] ?? "",
-                UserDefaults.standard.string(forKey: P115ShareExtractor.cookieDefaultsKey) ?? ""
+                UserPreferences.shared.p115Cookie
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             return cookie.isEmpty ? nil : cookie
         },
@@ -31,12 +32,12 @@ public final class P115ShareExtractor: SourceExtractorProtocol {
             let accessToken = [
                 env["NETVPLAYER_115_ACCESS_TOKEN"] ?? "",
                 env["NETVPLAYER_P115_ACCESS_TOKEN"] ?? "",
-                UserDefaults.standard.string(forKey: P115ShareExtractor.accessTokenDefaultsKey) ?? ""
+                UserPreferences.shared.p115AccessToken
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             return accessToken.isEmpty ? nil : accessToken
         },
         cookieUpdateHandler: @escaping @Sendable (String) -> Void = {
-            UserDefaults.standard.set($0, forKey: P115ShareExtractor.cookieDefaultsKey)
+            UserPreferences.shared.p115Cookie = $0
         }
     ) {
         self.client = P115DriveClient(httpClient: httpClient)

@@ -36,9 +36,29 @@ class SentryPackagingTests(unittest.TestCase):
             result = module.package_resources(package, app, dsn)
             self.assertTrue(result["sentry_configured"])
             self.assertEqual(plistlib.loads(info_path.read_bytes())["NetVplayerSentryDSN"], dsn)
+            self.assertEqual(plistlib.loads(info_path.read_bytes())["NetVplayerSentryEnvironment"], "production")
             self.assertEqual(plistlib.loads(source.read_bytes())["NetVplayerSentryDSN"], "")
             self.assertEqual((app / "Contents/Resources/Sentry.bundle/Contents/Resources/PrivacyInfo.xcprivacy").read_bytes(), manifest)
             self.assertTrue((app / "Contents/Resources/ThirdPartyLicenses/Sentry.LICENSE").is_file())
+
+            build_id = "273A3B02-7D82-3AB9-8A6D-BB717027F57D"
+            module.package_resources(package, app, dsn, environment="development", build_id=build_id)
+            development_info = plistlib.loads(info_path.read_bytes())
+            self.assertEqual(development_info["NetVplayerSentryEnvironment"], "development")
+            self.assertEqual(development_info["NetVplayerSentryBuildID"], build_id.lower())
+            self.assertEqual(development_info["CFBundleVersion"], "10")
+
+            module.package_resources(package, app, dsn, environment="production")
+            production_info = plistlib.loads(info_path.read_bytes())
+            self.assertEqual(production_info["NetVplayerSentryEnvironment"], "production")
+            self.assertNotIn("NetVplayerSentryBuildID", production_info)
+
+    def test_development_build_identity_requires_a_binary_uuid(self):
+        for value in [None, "", "private-build-path", "main"]:
+            with self.assertRaises(ValueError):
+                module.build_identity("development", value)
+        with self.assertRaises(ValueError):
+            module.build_identity("unknown", None)
 
     def test_invalid_dsn_is_rejected(self):
         for value in ["http://abc@o1.ingest.us.sentry.io/123", "https://abc:secret@o1.ingest.us.sentry.io/123", "https://abc@example.com/123"]:

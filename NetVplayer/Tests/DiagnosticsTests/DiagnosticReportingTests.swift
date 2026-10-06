@@ -9,7 +9,7 @@ import Sentry
         let record = try #require(RemoteDiagnosticRecord(localMessage:
             "[PROXY_UPSTREAM_ERROR] status=403 url=https://example.com/movie?token=secret Cookie: session=private bodyPrefix={\"password\":\"hunter2\"} title=Private Movie"))
         #expect(record.code == "PROXY_UPSTREAM_ERROR")
-        #expect(record.isError)
+        #expect(!record.isError)
         #expect(record.measurements == ["status": 403])
         #expect(RemoteDiagnosticRecord(localMessage: "[MPV_LOG] arbitrary private text") == nil)
         #expect(RemoteDiagnosticRecord(localMessage: "[MPV_PLAY_ERROR_IGNORED] code=1") == nil)
@@ -32,6 +32,59 @@ import Sentry
         #expect(mpv.measurements == ["errorKind": 3])
         #expect(terminal.isError)
         #expect(terminal.measurements == ["errorKind": 5, "provider": 1, "route": 6])
+        #expect(terminal.fingerprint == [
+            "netvplayer", "PLAYBACK_RECOVERY_FAILED", "provider:1", "route:6", "errorKind:5",
+        ])
+    }
+
+    @Test func upstreamFailuresKeepTheirStatusWithoutConsumingTheTerminalErrorBudget() throws {
+        for code in ["PROXY_UPSTREAM_ERROR", "PROXY_UPSTREAM_STREAM_ERROR", "REMOTE_STREAM_UPSTREAM_ERROR"] {
+            let record = try #require(RemoteDiagnosticRecord(localMessage: "[\(code)] status=403"))
+            #expect(!record.isError)
+            #expect(record.measurements == ["status": 403])
+        }
+        for code in ["PROXY_SERVER_ERROR", "PLAYBACK_RECOVERY_FAILED", "LIVE_CONTENT_RECOVERY_FAILED"] {
+            let record = try #require(RemoteDiagnosticRecord(localMessage: "[\(code)] errorKind=4 code=-1005"))
+            #expect(record.isError)
+            #expect(record.measurements == ["errorKind": 4, "code": -1005])
+        }
+    }
+
+    @Test func playbackFailuresKeepNumericCauseAndSeparateHTTPStatuses() throws {
+        let terminal = try #require(RemoteDiagnosticRecord(localMessage:
+            "[PLAYBACK_RECOVERY_FAILED] errorKind=5 provider=2 route=5 failureKind=3 status=403 url=https://private.example/?token=secret"))
+        #expect(terminal.measurements == ["errorKind": 5, "provider": 2, "route": 5, "failureKind": 3, "status": 403])
+        #expect(terminal.fingerprint == ["netvplayer", "PLAYBACK_RECOVERY_FAILED", "provider:2", "route:5", "errorKind:5", "failureKind:3", "status:403"])
+        let other = try #require(RemoteDiagnosticRecord(localMessage:
+            "[PLAYBACK_RECOVERY_FAILED] errorKind=5 provider=2 route=5 failureKind=3 status=404"))
+        #expect(terminal.fingerprint != other.fingerprint)
+        let http = try #require(RemoteDiagnosticRecord(localMessage: "[MPV_HTTP_ERROR] status=403 token=secret"))
+        let ended = try #require(RemoteDiagnosticRecord(localMessage: "[MPV_END_FILE] code=4 errorCode=-13"))
+        #expect(!http.isError && !ended.isError)
+        #expect(http.measurements == ["status": 403])
+        #expect(ended.measurements == ["code": 4, "errorCode": -13])
+    }
+
+    @Test func developmentBinariesDoNotShareProductionReleaseIdentity() {
+        let info: [String: Any] = ["CFBundleShortVersionString": "1.0.12", "CFBundleVersion": "13"]
+        var production = info
+        production["NetVplayerSentryEnvironment"] = "production"
+        let published = DiagnosticReportingConfiguration.identity(info: production)
+        #expect(published.environment == "production")
+        #expect(published.release == "com.netvplayer.app@1.0.12+13")
+        #expect(published.dist == "13")
+
+        var development = info
+        development["NetVplayerSentryEnvironment"] = "development"
+        development["NetVplayerSentryBuildID"] = "273A3B02-7D82-3AB9-8A6D-BB717027F57D"
+        let first = DiagnosticReportingConfiguration.identity(info: development)
+        #expect(first.environment == "development")
+        #expect(first.release == "com.netvplayer.app@1.0.12-dev+13.273a3b02-7d82-3ab9-8a6d-bb717027f57d")
+        #expect(first.dist == "13.273a3b02-7d82-3ab9-8a6d-bb717027f57d")
+        development["NetVplayerSentryBuildID"] = "EFDFC73F-E855-302F-8F67-C9B49E3EDAA4"
+        #expect(DiagnosticReportingConfiguration.identity(info: development).release != first.release)
+        development["NetVplayerSentryBuildID"] = "/Users/private-sentinel"
+        #expect(DiagnosticReportingConfiguration.identity(info: development).dist == "13.unpackaged")
     }
 
     @Test func expectedSourceErrorsDoNotCreateIssuesAndDriveAPIErrorsKeepSafeDimensions() throws {
@@ -53,6 +106,10 @@ import Sentry
             "status": 503,
             "code": 429,
             "attempt": 1,
+        ])
+        #expect(driveAPI.fingerprint == [
+            "netvplayer", "PLAYBACK_PREPARE_FAILED", "errorKind:2", "provider:1",
+            "status:503", "code:429", "errorCode:6",
         ])
     }
 
@@ -128,5 +185,36 @@ import Sentry
         #expect(json.contains("0x1234"))
         #expect(json.contains("arm64"))
         #expect(result.user == nil)
+    }
+
+    @Test func sanitizerKeepsOnlyApprovedNumericDiagnosticDimensions() throws {
+        let event = Event(level: .error)
+        event.message = SentryMessage(formatted: "PLAYBACK_RECOVERY_FAILED")
+        event.context = [
+            "diagnostic": [
+                "errorKind": 5,
+                "provider": 2,
+                "route": 6,
+                "bytes": 1024,
+                "private": "private-sentinel",
+            ],
+        ]
+        let breadcrumb = Breadcrumb(level: .error, category: "diagnostic")
+        breadcrumb.message = "PLAYBACK_RECOVERY_FAILED"
+        for (key, value) in ["errorKind": 5, "provider": 2, "route": 6, "bytes": 1024] {
+            breadcrumb.setData(value: value, key: key)
+        }
+        breadcrumb.setData(value: "private-sentinel", key: "private")
+        event.breadcrumbs = [breadcrumb]
+
+        let result = SentryDiagnostics.sanitize(event)
+        let data = try JSONSerialization.data(withJSONObject: result.serialize())
+        let json = String(decoding: data, as: UTF8.self)
+
+        for key in ["errorKind", "provider", "route", "bytes"] {
+            #expect(json.contains(key))
+        }
+        #expect(!json.contains("private-sentinel"))
+        #expect(!json.contains("\"private\""))
     }
 }

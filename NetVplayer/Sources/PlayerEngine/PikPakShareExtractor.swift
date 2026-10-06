@@ -2,6 +2,7 @@
 // PikPak file/share references to playable links.
 
 import Foundation
+import Storage
 import Models
 import Networking
 import DriveEngine
@@ -21,11 +22,11 @@ public final class PikPakShareExtractor: SourceExtractorProtocol {
             let env = ProcessInfo.processInfo.environment
             let accessToken = [
                 env["NETVPLAYER_PIKPAK_ACCESS_TOKEN"] ?? "",
-                UserDefaults.standard.string(forKey: PikPakShareExtractor.accessTokenDefaultsKey) ?? ""
+                UserPreferences.shared.pikpakAccessToken
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             let refreshToken = [
                 env["NETVPLAYER_PIKPAK_REFRESH_TOKEN"] ?? "",
-                UserDefaults.standard.string(forKey: PikPakShareExtractor.refreshTokenDefaultsKey) ?? ""
+                UserPreferences.shared.pikpakRefreshToken
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             let deviceID = [
                 env["NETVPLAYER_PIKPAK_DEVICE_ID"] ?? "",
@@ -47,8 +48,8 @@ public final class PikPakShareExtractor: SourceExtractorProtocol {
             )
         },
         credentialUpdateHandler: @escaping @Sendable (CloudCredential) -> Void = { credential in
-            UserDefaults.standard.set(credential.accessToken ?? "", forKey: PikPakShareExtractor.accessTokenDefaultsKey)
-            UserDefaults.standard.set(credential.refreshToken ?? "", forKey: PikPakShareExtractor.refreshTokenDefaultsKey)
+            UserPreferences.shared.pikpakAccessToken = credential.accessToken ?? ""
+            UserPreferences.shared.pikpakRefreshToken = credential.refreshToken ?? ""
             UserDefaults.standard.set(credential.deviceID ?? credential.metadata["device_id"] ?? "", forKey: PikPakShareExtractor.deviceIDDefaultsKey)
         }
     ) {

@@ -53,8 +53,17 @@ public final class MPVOpenGLVideoView: NSView {
         openGLView.openGLSurfaceOrder
     }
 
-    public func activatePlaybackSurface() -> UInt64 {
-        attachmentLease.activate()
+    public var isOpenGLAvailable: Bool {
+        openGLView.isOpenGLAvailable
+    }
+
+    public var isPlaybackSurfaceActive: Bool {
+        attachmentLease.isActive
+    }
+
+    public func activatePlaybackSurface() -> UInt64? {
+        guard openGLView.restoreOpenGLSurface() else { return nil }
+        return attachmentLease.activate()
     }
 
     public func deactivatePlaybackSurface() {
@@ -67,6 +76,14 @@ public final class MPVOpenGLVideoView: NSView {
 
     public func detachFromPlayerEngine() {
         engine.detach(from: self)
+    }
+
+    public func detachFromPlayerEngineAndReleaseOpenGLResources() async {
+        await engine.detachAndReleaseOpenGLResources(from: self)
+    }
+
+    public func releaseOpenGLResources() {
+        openGLView.releaseOpenGLSurface()
     }
 
     func makeOpenGLContextCurrent() {
@@ -90,7 +107,10 @@ public final class MPVOpenGLVideoView: NSView {
     }
 
     private func openGLDidPrepare() {
-        let generation = activatePlaybackSurface()
+        guard let generation = activatePlaybackSurface() else {
+            engine.reportUnavailableVideoSurface(surface)
+            return
+        }
         Task { @MainActor [weak self] in
             guard let self,
                   acceptsPlaybackSurfaceAttachment(generation: generation) else {

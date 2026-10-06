@@ -1,6 +1,15 @@
 {
-  "originHash" : "6947031d1d6840b6709630df95d3e31e8825f010fa72481d858703e973cc76dc",
+  "originHash" : "a5888d5b161cb7bfb2b75c268c2d1bec1e772e974a150131eaec814576fb8b28",
   "pins" : [
+    {
+      "identity" : "amsmb2",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/amosavian/AMSMB2.git",
+      "state" : {
+        "revision" : "1726aaaf7adf63d7d1d2a0c5d1b0e635028215c0",
+        "version" : "4.0.3"
+      }
+    },
     {
       "identity" : "sentry-apple-binaries",
       "kind" : "remoteSourceControl",

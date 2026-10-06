@@ -1,3 +1,4 @@
+import Models
 // NetVplayerApp/Views/WebHomeView.swift
 // Default-off WKWebView surface wired to the sanitized WebHome bridge.
 
@@ -14,8 +15,8 @@ struct WebHomeView: View {
     var body: some View {
         Group {
             if !webHomeEnabled {
-                unavailableView(title: "WebHome 未启用", message: "请先在设置中开启实验入口。")
-                    .onAppear { appState.updateWebHomeURLStatus("关闭") }
+                unavailableView(title: L10n.text("WebHome 未启用"), message: L10n.text("请先在设置中开启实验入口。"))
+                    .onAppear { appState.updateWebHomeURLStatus(L10n.text("关闭")) }
             } else {
                 switch resolvedDestination {
                 case .success(let destination):
@@ -36,7 +37,7 @@ struct WebHomeView: View {
                     }
                 case .failure(let error):
                     let message = UserFacingErrorPresenter.message(for: error, context: .webContent)
-                    unavailableView(title: "页面地址不可用", message: message)
+                    unavailableView(title: L10n.text("页面地址不可用"), message: message)
                         .onAppear { appState.updateWebHomeURLStatus(message) }
                 }
             }
@@ -72,7 +73,7 @@ private struct WebHomeDebugPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 14) {
-                Label("Bridge 调试", systemImage: "ladybug")
+                Label(L10n.text("Bridge 调试"), systemImage: "ladybug")
                     .font(.headline)
                 statusChip(diagnostic.currentURLStatus)
                 statusChip("Cache \(diagnostic.cacheKeyCount)")
@@ -83,7 +84,7 @@ private struct WebHomeDebugPanel: View {
             }
 
             if diagnostic.invocations.isEmpty {
-                Text("暂无调用")
+                Text(L10n.text("暂无调用"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -123,7 +124,7 @@ private struct WebHomeDebugPanel: View {
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Text(invocation.ok ? "已返回 \(invocation.responseBytes) 字节" : "操作未完成，请检查页面来源后重试。")
+            Text(invocation.ok ? L10n.text("已返回 {0} 字节", ["\(invocation.responseBytes)"]) : L10n.text("操作未完成，请检查页面来源后重试。"))
                 .font(.caption2)
                 .foregroundStyle(
                     invocation.ok
@@ -262,7 +263,7 @@ private struct WebHomeContainerView: NSViewRepresentable {
 }
 
 enum WebHomeDemoPage {
-    static let html = """
+    static var html: String { """
     <!doctype html>
     <html>
     <head>
@@ -286,27 +287,27 @@ enum WebHomeDemoPage {
     <body>
       <main>
         <h1>WebHome</h1>
-        <p class="hint">内置离线 demo，只调用 NetVplayer 白名单 bridge。</p>
+        <p class="hint">\(L10n.text("内置离线 demo，只调用 NetVplayer 白名单 bridge。"))</p>
         <div class="row">
-          <input id="keyword" value="测试" aria-label="keyword">
-          <button onclick="demoSearch()">搜索</button>
-          <button onclick="callBridge('history.query', { limit: 12 })">历史</button>
+          <input id="keyword" value="\(L10n.text("测试"))" aria-label="keyword">
+          <button onclick="demoSearch()">\(L10n.text("搜索"))</button>
+          <button onclick="callBridge('history.query', { limit: 12 })">\(L10n.text("历史"))</button>
         </div>
         <div class="row">
           <input id="shareURL" value="https://pan.quark.cn/s/demo" aria-label="share url">
-          <button onclick="callBridge('pan.check', { shareURL: document.getElementById('shareURL').value })">网盘检查</button>
+          <button onclick="callBridge('pan.check', { shareURL: document.getElementById('shareURL').value })">\(L10n.text("网盘检查"))</button>
         </div>
         <div class="grid">
-          <button onclick="setDemoCache()">写入缓存</button>
-          <button onclick="callBridge('cache.get', { key: 'demo.last' })">读取缓存</button>
-          <button onclick="readLastResultToken()">读取大结果</button>
-          <button onclick="demoPlay()">播放入口</button>
+          <button onclick="setDemoCache()">\(L10n.text("写入缓存"))</button>
+          <button onclick="callBridge('cache.get', { key: 'demo.last' })">\(L10n.text("读取缓存"))</button>
+          <button onclick="readLastResultToken()">\(L10n.text("读取大结果"))</button>
+          <button onclick="demoPlay()">\(L10n.text("播放入口"))</button>
         </div>
         <pre id="out"></pre>
       </main>
       <script>
         let lastResultToken = '';
-        function keyword() { return document.getElementById('keyword').value || '测试'; }
+        function keyword() { return document.getElementById('keyword').value || '\(L10n.text("测试"))'; }
         async function callBridge(method, params) {
           try {
             const response = await window.NetVplayerBridge.call(method, params);
@@ -344,7 +345,7 @@ enum WebHomeDemoPage {
       </script>
     </body>
     </html>
-    """
+    """ }
 }
 
 private extension WebHomeDestination {
@@ -360,9 +361,9 @@ private extension WebHomeDestination {
     var statusText: String {
         switch self {
         case .localDemo:
-            return "内置 demo"
+            return L10n.text("内置 demo")
         case .remote(let url):
-            return "已校验 \(url.host ?? "remote")"
+            return L10n.text("已校验 {0}", ["\(url.host ?? "remote")"])
         }
     }
 }

@@ -61,7 +61,7 @@ public final class UCCookieDriver: @unchecked Sendable {
         guard let selected = client.selectPlayableFile(from: playableFiles, share: share) else {
             throw DriveEngineError.noPlayableFile(share.originalURL)
         }
-        guard selected.file.isPlayableVideo else {
+        guard selected.file.isPlayableMedia else {
             throw DriveEngineError.noPlayableFile(selected.file.name)
         }
 
@@ -98,7 +98,7 @@ public final class UCCookieDriver: @unchecked Sendable {
         share: UCShareRequest,
         cookie: String
     ) async throws -> (link: CloudDriveLink, result: UCDownloadResult) {
-        guard selected.file.isPlayableVideo else {
+        guard selected.file.isPlayableMedia else {
             throw DriveEngineError.noPlayableFile(selected.file.name)
         }
         let savedResult = try await client.fetchSavedDownloadURLResult(for: selected, share: share, cookie: cookie)

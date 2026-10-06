@@ -15,6 +15,7 @@ struct LiveStreamView: View {
     let onExit: () -> Void
 
     @State private var isGuideVisible = false
+    @State private var isEPGGuideVisible = false
     @State private var isHUDVisible = true
     @State private var isPointerInsidePlayer = false
     @State private var guideFocusedChannel: Channel?
@@ -27,7 +28,6 @@ struct LiveStreamView: View {
     @State private var hiddenGroupPassword = ""
     @State private var isHiddenGroupUnlockPresented = false
     @State private var unlockedHiddenGroupNames = Set<String>()
-    @State private var lastNonZeroVolume: Float = 1
     @FocusState private var isChannelNumberFieldFocused: Bool
 
     var body: some View {
@@ -59,6 +59,7 @@ struct LiveStreamView: View {
                         duration: playerState.duration,
                         isAlwaysOnTop: windowContext.isAlwaysOnTop,
                         isVisible: isPointerInsidePlayer,
+                        mediaID: playerState.currentSpec?.url ?? "",
                         onTogglePlayback: togglePlayPause,
                         onSeek: { target in
                             MPVPlayerEngine.live.seek(to: Int64(target * 1_000))
@@ -142,6 +143,15 @@ struct LiveStreamView: View {
             }
         }
         .ignoresSafeArea()
+        .sheet(isPresented: $isEPGGuideVisible) {
+            EPGGuideView().environmentObject(appState)
+        }
+        .task(id: "\(appState.activeLive?.url ?? "")|\(appState.selectedChannel.map(channelIdentity) ?? "")") {
+            while !Task.isCancelled, let channel = appState.selectedChannel {
+                await appState.loadLiveEpg(for: channel)
+                do { try await Task.sleep(for: .seconds(300)) } catch { break }
+            }
+        }
         .background {
             PlayerShortcutMonitor(
                 isPlaybackControlEnabled: appState.selectedChannel != nil
@@ -158,7 +168,6 @@ struct LiveStreamView: View {
         .onAppear {
             prepareInitialSelection()
             focusGuideChannel(appState.selectedChannel)
-            lastNonZeroVolume = max(0.01, playerState.volume)
             showHUDTemporarily()
         }
         .onDisappear {
@@ -171,6 +180,13 @@ struct LiveStreamView: View {
         }
         .onChange(of: appState.selectedChannel.map(channelIdentity) ?? "") { _, _ in
             focusGuideChannel(appState.selectedChannel)
+            showHUDTemporarily()
+        }
+        .onChange(of: appState.activeLive.map { "\($0.name)|\($0.url)" } ?? "") { _, _ in
+            liveSearchText = ""
+            guideFocusedChannel = nil
+            unlockedHiddenGroupNames = []
+            isHiddenGroupUnlockPresented = false
             showHUDTemporarily()
         }
         .onChange(of: liveSearchText) { _, _ in
@@ -214,16 +230,22 @@ struct LiveStreamView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .alert("解锁隐藏分组", isPresented: $isHiddenGroupUnlockPresented) {
-            SecureField("密码", text: $hiddenGroupPassword)
-            Button("解锁") {
-                unlockHiddenGroup()
+        .sheet(isPresented: $isHiddenGroupUnlockPresented, onDismiss: { hiddenGroupPassword = "" }) {
+            SettingsEditorContainer(title: L10n.text("解锁隐藏分组"), width: 480) {
+                Text(L10n.text("输入分组密码后会在本次会话显示对应频道。"))
+                    .font(.callout).padding(.bottom, 16)
+                FormFieldLabel(title: L10n.text("密码"), requirement: .required).padding(.bottom, 8)
+                SettingsPasswordField(L10n.text("分组密码"), text: $hiddenGroupPassword)
+            } actions: {
+                Spacer()
+                Button(L10n.text("取消")) { isHiddenGroupUnlockPresented = false }.keyboardShortcut(.cancelAction)
+                Button(L10n.text("解锁")) {
+                    unlockHiddenGroup()
+                    isHiddenGroupUnlockPresented = false
+                }
+                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                .disabled(hiddenGroupPassword.isEmpty)
             }
-            Button("取消", role: .cancel) {
-                hiddenGroupPassword = ""
-            }
-        } message: {
-            Text("输入分组密码后会在本次会话显示对应频道。")
         }
     }
 
@@ -237,6 +259,7 @@ struct LiveStreamView: View {
                     surface: .live,
                     attachmentRevision: appState.livePlayerOpenRequestSerial
                 )
+                .id(appState.livePlayerOpenRequestSerial)
             } else {
                 emptyLiveState
             }
@@ -290,10 +313,10 @@ struct LiveStreamView: View {
 
     private var emptyLiveState: some View {
         liveStateCard(systemImage: "tv", tint: LiveUIPalette.foreground) {
-            Text(appState.channelGroups.isEmpty ? "电视直播" : "选择频道开始直播")
+            Text(appState.channelGroups.isEmpty ? L10n.text("电视直播") : L10n.text("选择频道开始直播"))
                 .font(.system(size: 21, weight: .semibold))
                 .foregroundStyle(LiveUIPalette.foreground)
-            Text(appState.channelGroups.isEmpty ? "暂无直播数据" : "频道列表已准备好，打开频道指南后即可按分组浏览或直接搜索。")
+            Text(appState.channelGroups.isEmpty ? L10n.text("暂无直播数据") : L10n.text("频道列表已准备好，打开频道指南后即可按分组浏览或直接搜索。"))
                 .font(.system(size: 13))
                 .foregroundStyle(LiveUIPalette.muted)
                 .multilineTextAlignment(.center)
@@ -303,7 +326,7 @@ struct LiveStreamView: View {
                 Button {
                     reloadLiveContent()
                 } label: {
-                    Label("重新加载直播源", systemImage: "arrow.clockwise")
+                    Label(L10n.text("重新加载直播源"), systemImage: "arrow.clockwise")
                         .font(.system(size: 13, weight: .semibold))
                         .frame(height: 42)
                         .padding(.horizontal, 12)
@@ -320,7 +343,7 @@ struct LiveStreamView: View {
                 Button {
                     showGuide()
                 } label: {
-                    Label("打开频道指南", systemImage: "list.bullet.rectangle")
+                    Label(L10n.text("打开频道指南"), systemImage: "list.bullet.rectangle")
                         .font(.system(size: 13, weight: .semibold))
                         .frame(height: 42)
                         .padding(.horizontal, 12)
@@ -343,7 +366,7 @@ struct LiveStreamView: View {
         VStack {
             ZStack {
                 VStack(spacing: 2) {
-                    Text(appState.selectedChannel?.name ?? "电视直播")
+                    Text(appState.selectedChannel?.name ?? L10n.text("电视直播"))
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(LiveUIPalette.foreground)
                         .lineLimit(1)
@@ -355,10 +378,15 @@ struct LiveStreamView: View {
                 .padding(.horizontal, 220)
 
                 HStack {
-                    chromeIconButton(systemImage: "chevron.left", help: "停止直播并返回") {
+                    chromeIconButton(systemImage: "chevron.left", help: L10n.text("停止直播并返回")) {
                         exitLive()
                     }
                     Spacer()
+                    if !appState.lives.isEmpty {
+                        LiveSourcePicker()
+                            .labelsHidden()
+                            .frame(maxWidth: 190)
+                    }
                 }
                 .padding(.leading, 118)
                 .padding(.trailing, 18)
@@ -391,21 +419,25 @@ struct LiveStreamView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 18) {
                     HStack(spacing: 8) {
-                        chromeTextButton(title: "频道指南", systemImage: "list.bullet.rectangle", help: "打开频道指南") {
+                        chromeTextButton(title: L10n.text("频道指南"), systemImage: "list.bullet.rectangle", help: L10n.text("打开频道指南")) {
                             showGuide()
+                        }
+                        chromeTextButton(title: L10n.text("节目单"), systemImage: "calendar", help: L10n.text("打开节目单")) {
+                            restorePlayerCursor()
+                            isEPGGuideVisible = true
                         }
                         chromeIconButton(
                             systemImage: playerState.isPlaying ? "pause.fill" : "play.fill",
-                            help: playerState.isPlaying ? "暂停" : "播放",
+                            help: playerState.isPlaying ? L10n.text("暂停") : L10n.text("播放"),
                             isPrimary: true
                         ) {
                             togglePlayPause()
                             showHUDTemporarily()
                         }
-                        chromeIconButton(systemImage: "chevron.up", help: "上一个频道") {
+                        chromeIconButton(systemImage: "chevron.up", help: L10n.text("上一个频道")) {
                             changeChannel(offset: -1)
                         }
-                        chromeIconButton(systemImage: "chevron.down", help: "下一个频道") {
+                        chromeIconButton(systemImage: "chevron.down", help: L10n.text("下一个频道")) {
                             changeChannel(offset: 1)
                         }
                     }
@@ -418,21 +450,21 @@ struct LiveStreamView: View {
                             toggleMute()
                             showHUDTemporarily()
                         } label: {
-                            Image(systemName: playerState.volume > 0 ? "speaker.wave.2" : "speaker.slash")
+                            Image(systemName: (!playerState.isMuted && playerState.volume > 0) ? "speaker.wave.2" : "speaker.slash")
                                 .font(.system(size: 15))
                                 .foregroundStyle(LiveUIPalette.foreground)
                                 .frame(width: 30, height: 30)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help(playerState.volume > 0 ? "静音" : "恢复音量")
+                        .help((!playerState.isMuted && playerState.volume > 0) ? L10n.text("静音") : L10n.text("恢复音量"))
 
                         Slider(value: volumeBinding, in: 0...1)
                             .frame(width: 88)
                             .tint(LiveUIPalette.lavender)
 
                         if let channel = appState.selectedChannel, channel.urls.count > 1 {
-                            Picker("线路", selection: Binding(
+                            Picker(L10n.text("线路"), selection: Binding(
                                 get: { appState.currentChannelUrlIndex },
                                 set: { index in
                                     Task {
@@ -442,7 +474,7 @@ struct LiveStreamView: View {
                                 }
                             )) {
                                 ForEach(0..<channel.urls.count, id: \.self) { index in
-                                    Text("线路 \(index + 1)").tag(index)
+                                    Text(L10n.text("线路 {0}", ["\(index + 1)"])).tag(index)
                                 }
                             }
                             .labelsHidden()
@@ -451,7 +483,7 @@ struct LiveStreamView: View {
                             .frame(width: 108, height: 44)
                         }
 
-                        chromeIconButton(systemImage: "stop.fill", help: "停止直播") {
+                        chromeIconButton(systemImage: "stop.fill", help: L10n.text("停止直播")) {
                             stopLive()
                         }
                         .disabled(appState.selectedChannel == nil)
@@ -460,7 +492,7 @@ struct LiveStreamView: View {
                             systemImage: windowContext.isFullScreen
                                 ? "arrow.down.right.and.arrow.up.left"
                                 : "arrow.up.left.and.arrow.down.right",
-                            help: windowContext.isFullScreen ? "退出全屏" : "进入全屏"
+                            help: windowContext.isFullScreen ? L10n.text("退出全屏") : L10n.text("进入全屏")
                         ) {
                             toggleFullScreen()
                         }
@@ -478,10 +510,10 @@ struct LiveStreamView: View {
 
     private var channelNumberControl: some View {
         VStack(spacing: 2) {
-            Text("频道号")
+            Text(L10n.text("频道号"))
                 .font(.system(size: 10))
                 .foregroundStyle(LiveUIPalette.muted)
-            TextField("频道号", text: Binding(
+            TextField(L10n.text("频道号"), text: Binding(
                 get: { channelNumberInput },
                 set: { value in
                     channelNumberInput = String(value.filter(\.isNumber).suffix(3))
@@ -517,10 +549,10 @@ struct LiveStreamView: View {
                     .frame(minWidth: 42)
             }
             .buttonStyle(.plain)
-            .help("输入频道号")
+            .help(L10n.text("输入频道号"))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(appState.selectedChannel?.name ?? "未选择频道")
+                Text(appState.selectedChannel?.name ?? L10n.text("未选择频道"))
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(LiveUIPalette.foreground)
                     .lineLimit(1)
@@ -528,6 +560,17 @@ struct LiveStreamView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(LiveUIPalette.muted)
                     .lineLimit(1)
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    let items = appState.liveEpgData?.items ?? []
+                    let current = items.first { $0.start <= context.date && $0.end > context.date }
+                    let next = items.first { $0.start > context.date }
+                    if let current {
+                        Text(L10n.text("正在播出：{0}", [current.title])).lineLimit(1)
+                    }
+                    if let next {
+                        Text(L10n.text("接下来：{0}", [next.title])).lineLimit(1)
+                    }
+                }.font(.caption).foregroundStyle(LiveUIPalette.muted)
             }
         }
         .frame(minWidth: 180, alignment: .leading)
@@ -540,12 +583,12 @@ struct LiveStreamView: View {
                     .fill(LiveUIPalette.foreground)
                     .frame(width: 7, height: 7)
                     .shadow(color: LiveUIPalette.foreground.opacity(0.42), radius: 7)
-                Text("正在直播")
+                Text(L10n.text("正在直播"))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(LiveUIPalette.foreground.opacity(0.88))
             }
 
-            Text(appState.selectedChannel?.name ?? "电视直播")
+            Text(appState.selectedChannel?.name ?? L10n.text("电视直播"))
                 .font(.system(size: 36, weight: .semibold))
                 .foregroundStyle(LiveUIPalette.foreground)
                 .lineLimit(1)
@@ -579,15 +622,15 @@ struct LiveStreamView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("关闭频道指南")
+            .accessibilityLabel(L10n.text("关闭频道指南"))
 
             VStack(spacing: LiveGuideLayoutPolicy.columnSpacing) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("频道指南")
+                        Text(L10n.text("频道指南"))
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(LiveUIPalette.foreground.opacity(0.94))
-                        Text("\(visibleGroups.count) 个分类 · \(displayedChannels.count) 个频道")
+                        Text(L10n.text("{0} 个分类 · {1} 个频道", ["\(visibleGroups.count)", "\(displayedChannels.count)"]))
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(LiveUIPalette.muted)
                     }
@@ -619,18 +662,18 @@ struct LiveStreamView: View {
 
     private func guideGroupColumn(width: CGFloat) -> some View {
         guidePanel(
-            title: isSearching ? "搜索" : "频道分类",
-            detail: isSearching ? nil : "\(visibleGroups.count) 组",
+            title: isSearching ? L10n.text("搜索") : L10n.text("频道分类"),
+            detail: isSearching ? nil : L10n.text("{0} 组", ["\(visibleGroups.count)"]),
             width: width
         ) {
             if isSearching {
                 VStack(alignment: .leading, spacing: 10) {
-                    Label("搜索结果", systemImage: "magnifyingglass")
+                    Label(L10n.text("搜索结果"), systemImage: "magnifyingglass")
                         .font(.headline)
-                    Text("\(searchHits.count) 个频道")
+                    Text(L10n.text("{0} 个频道", ["\(searchHits.count)"]))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("清空搜索后恢复分组浏览")
+                    Text(L10n.text("清空搜索后恢复分组浏览"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -643,7 +686,7 @@ struct LiveStreamView: View {
                                 hiddenGroupPassword = ""
                                 isHiddenGroupUnlockPresented = true
                             } label: {
-                                Label("解锁隐藏分组", systemImage: "lock")
+                                Label(L10n.text("解锁隐藏分组"), systemImage: "lock")
                                     .font(.callout.weight(.semibold))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.horizontal, 11)
@@ -694,8 +737,8 @@ struct LiveStreamView: View {
 
     private func guideChannelColumn(width: CGFloat) -> some View {
         guidePanel(
-            title: "频道列表",
-            detail: "\(isSearching ? searchHits.count : displayedChannels.count) 个频道",
+            title: L10n.text("频道列表"),
+            detail: L10n.text("{0} 个频道", ["\(isSearching ? searchHits.count : displayedChannels.count)"]),
             width: width
         ) {
             VStack(spacing: 10) {
@@ -705,9 +748,9 @@ struct LiveStreamView: View {
                     LazyVStack(alignment: .leading, spacing: 7) {
                         if isSearching, searchHits.isEmpty {
                             ContentUnavailableView(
-                                "没有匹配频道",
+                                L10n.text("没有匹配频道"),
                                 systemImage: "magnifyingglass",
-                                description: Text("换个关键词试试")
+                                description: Text(L10n.text("换个关键词试试"))
                             )
                             .frame(maxWidth: .infinity, minHeight: 220)
                         } else if isSearching {
@@ -764,7 +807,7 @@ struct LiveStreamView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("搜索频道", text: $liveSearchText)
+            TextField(L10n.text("搜索频道"), text: $liveSearchText)
                 .textFieldStyle(.plain)
             if !liveSearchText.isEmpty {
                 Button {
@@ -774,7 +817,7 @@ struct LiveStreamView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("清空搜索")
+                .help(L10n.text("清空搜索"))
             }
         }
         .padding(.horizontal, 10)
@@ -808,7 +851,7 @@ struct LiveStreamView: View {
                         }
 
                         Text(isSelected(channel) && playerState.isPlaying
-                             ? "正在播放"
+                             ? L10n.text("正在播放")
                              : channelSecondaryText(channel: channel, group: group))
                             .font(.system(size: 11))
                             .foregroundStyle(LiveUIPalette.muted)
@@ -834,7 +877,7 @@ struct LiveStreamView: View {
                     .frame(width: 44, height: 44)
             }
             .buttonStyle(.plain)
-            .help(isKept ? "取消直播收藏" : "收藏直播频道")
+            .help(isKept ? L10n.text("取消直播收藏") : L10n.text("收藏直播频道"))
         }
         .padding(.horizontal, 11)
         .frame(minHeight: 46)
@@ -862,7 +905,7 @@ struct LiveStreamView: View {
     private func liveErrorState(_ error: String) -> some View {
         liveStateOverlay {
             liveStateCard(systemImage: "exclamationmark.triangle", tint: LiveUIPalette.danger) {
-                Text("当前线路无法播放")
+                Text(appState.selectedChannel == nil ? L10n.text("暂无直播数据") : L10n.text("当前线路无法播放"))
                     .font(.system(size: 21, weight: .semibold))
                     .foregroundStyle(LiveUIPalette.foreground)
 
@@ -874,7 +917,7 @@ struct LiveStreamView: View {
                     .frame(maxWidth: 340)
 
                 HStack(spacing: 8) {
-                    Button("重试当前线路") {
+                    Button(appState.selectedChannel == nil ? L10n.text("重新加载直播源") : L10n.text("重试当前线路")) {
                         retryCurrentChannel()
                     }
                     .buttonStyle(.plain)
@@ -888,7 +931,7 @@ struct LiveStreamView: View {
                             .stroke(LiveUIPalette.accent.opacity(0.58), lineWidth: 1)
                     }
 
-                    chromeTextButton(title: "选择其他频道", systemImage: "list.bullet.rectangle", help: "打开频道指南") {
+                    chromeTextButton(title: L10n.text("选择其他频道"), systemImage: "list.bullet.rectangle", help: L10n.text("打开频道指南")) {
                         appState.liveError = nil
                         showGuide()
                     }
@@ -908,10 +951,10 @@ struct LiveStreamView: View {
                         .controlSize(.regular)
                 }
 
-                Text("正在连接直播")
+                Text(L10n.text("正在连接直播"))
                     .font(.system(size: 21, weight: .semibold))
                     .foregroundStyle(LiveUIPalette.foreground)
-                Text("正在检查当前频道线路，请稍候。")
+                Text(L10n.text("正在检查当前频道线路，请稍候。"))
                     .font(.system(size: 13))
                     .foregroundStyle(LiveUIPalette.muted)
             }
@@ -1002,7 +1045,7 @@ struct LiveStreamView: View {
                 }
         }
         .buttonStyle(.plain)
-        .help("关闭频道指南")
+        .help(L10n.text("关闭频道指南"))
     }
 
     private func chromeIconButton(
@@ -1257,19 +1300,13 @@ struct LiveStreamView: View {
 
     private func setVolume(_ volume: Float) {
         let clamped = min(1, max(0, volume))
-        if clamped > 0 {
-            lastNonZeroVolume = clamped
-        }
+        if clamped > 0 { playerState.isMuted = false }
         playerState.volume = clamped
         MPVPlayerEngine.live.setVolume(clamped)
     }
 
     private func toggleMute() {
-        if playerState.volume > 0 {
-            setVolume(0)
-        } else {
-            setVolume(max(0.01, lastNonZeroVolume))
-        }
+        MPVPlayerEngine.live.toggleMute()
     }
 
     private func ensureGuideFocus() {
@@ -1326,7 +1363,7 @@ struct LiveStreamView: View {
     private func retryCurrentChannel() {
         guard let channel = appState.selectedChannel else {
             appState.liveError = nil
-            showGuide()
+            reloadLiveContent()
             return
         }
         appState.liveError = nil
@@ -1340,13 +1377,12 @@ struct LiveStreamView: View {
     }
 
     private func enterFullScreen(_ window: NSWindow) {
-        guard !window.styleMask.contains(.fullScreen) else { return }
-        PlayerWindowChromePolicy.toggleFullScreen(window)
+        PlayerWindowChromePolicy.configureFullScreenPlayback(window)
+        PlayerFullScreenCoordinator.attached(to: window).request(true)
     }
 
     private func exitFullScreen(_ window: NSWindow) {
-        guard window.styleMask.contains(.fullScreen) else { return }
-        PlayerWindowChromePolicy.toggleFullScreen(window)
+        PlayerFullScreenCoordinator.attached(to: window).request(false)
     }
 
     private var playerWindow: NSWindow? {
@@ -1383,7 +1419,7 @@ struct LiveStreamView: View {
             }
         }
 
-        appState.liveError = "没有找到频道号 \(requested)。请检查频道号后重试。"
+        appState.liveError = L10n.text("没有找到频道号 {0}。请检查频道号后重试。", ["\(requested)"])
         showHUDTemporarily()
     }
 
@@ -1396,7 +1432,7 @@ struct LiveStreamView: View {
             .filter { $0.isHidden && $0.password == password }
             .map(\.name)
         guard !unlocked.isEmpty else {
-            appState.liveError = "隐藏分组密码不正确。请重新输入。"
+            appState.liveError = L10n.text("隐藏分组密码不正确。请重新输入。")
             return
         }
 
@@ -1484,9 +1520,9 @@ struct LiveStreamView: View {
             parts.append(group)
         }
         if appState.selectedChannel != nil {
-            parts.append("线路 \(appState.currentChannelUrlIndex + 1)")
+            parts.append(L10n.text("线路 {0}", ["\(appState.currentChannelUrlIndex + 1)"]))
         }
-        return parts.isEmpty ? (appState.activeLive?.name ?? "直播") : parts.joined(separator: " · ")
+        return parts.isEmpty ? (appState.activeLive?.name ?? L10n.text("直播")) : parts.joined(separator: " · ")
     }
 
     private var bottomSubtitle: String {
@@ -1495,9 +1531,9 @@ struct LiveStreamView: View {
             parts.append(group)
         }
         if appState.selectedChannel != nil {
-            parts.append("线路 \(appState.currentChannelUrlIndex + 1)")
+            parts.append(L10n.text("线路 {0}", ["\(appState.currentChannelUrlIndex + 1)"]))
         }
-        return parts.isEmpty ? "打开频道指南选择频道" : parts.joined(separator: " · ")
+        return parts.isEmpty ? L10n.text("打开频道指南选择频道") : parts.joined(separator: " · ")
     }
 
     private var heroSubtitle: String {
@@ -1505,7 +1541,7 @@ struct LiveStreamView: View {
         if let group = appState.selectedGroup?.name, !group.isEmpty {
             parts.append(group)
         }
-        return parts.isEmpty ? "正在播放直播频道" : parts.joined(separator: " · ")
+        return parts.isEmpty ? L10n.text("正在播放直播频道") : parts.joined(separator: " · ")
     }
 
     private var visibleGroups: [ChannelGroup] {
@@ -1590,15 +1626,15 @@ struct LiveStreamView: View {
 
     private func channelSecondaryText(channel: Channel, group: ChannelGroup?) -> String {
         if group?.name == PlaybackLinkage.liveFavoritesGroupName {
-            return sourceGroup(for: channel, fallback: group)?.name ?? "直播收藏"
+            return sourceGroup(for: channel, fallback: group)?.name ?? L10n.text("直播收藏")
         }
         if isSearching, let group {
             return group.name
         }
         if channel.urls.count > 1 {
-            return "\(channel.urls.count) 条线路"
+            return L10n.text("{0} 条线路", ["\(channel.urls.count)"])
         }
-        return channel.epgName.isEmpty ? "直播频道" : channel.epgName
+        return channel.epgName.isEmpty ? L10n.text("直播频道") : channel.epgName
     }
 
     private func sourceGroup(for channel: Channel, fallback group: ChannelGroup?) -> ChannelGroup? {

@@ -98,25 +98,62 @@ public struct ProviderInstallProgress: Equatable, Sendable {
 
 public typealias ProviderInstallProgressHandler = @Sendable (ProviderInstallProgress) async -> Void
 
-private final class ProviderDownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+final class ProviderDownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let providerID: String
     private let version: String
     private let maximumBytes: Int64
     private let progress: ProviderInstallProgressHandler
+    private let destination: URL
     private let lock = NSLock()
     private var limitExceeded = false
     private var progressTail: Task<Void, Never>?
+    private var continuation: CheckedContinuation<(URL, URLResponse), any Error>?
+    private var downloadTask: URLSessionDownloadTask?
+    private var downloadedResponse: URLResponse?
+    private var downloadError: (any Error)?
+    private var cancelled = false
 
     init(
         providerID: String,
         version: String,
         maximumBytes: Int64,
+        destination: URL,
         progress: @escaping ProviderInstallProgressHandler
     ) {
         self.providerID = providerID
         self.version = version
         self.maximumBytes = maximumBytes
+        self.destination = destination
         self.progress = progress
+    }
+
+    func download(for request: URLRequest, configuration: URLSessionConfiguration) async throws -> (URL, URLResponse) {
+        // The async URLSession download convenience method consumes the task's
+        // download delegate callbacks on macOS. Own the task and bridge completion
+        // instead, retaining the caller's proxy, cookies and protocol configuration.
+        try Task.checkCancellation()
+        await progress(ProviderInstallProgress(providerID: providerID, version: version, phase: .downloading))
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                guard !cancelled else {
+                    lock.unlock()
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                downloadedResponse = nil
+                downloadError = nil
+                self.continuation = continuation
+                let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+                let task = session.downloadTask(with: request)
+                downloadTask = task
+                lock.unlock()
+                task.resume()
+            }
+        } onCancel: {
+            self.cancel()
+        }
     }
 
     func urlSession(
@@ -148,7 +185,47 @@ private final class ProviderDownloadProgressDelegate: NSObject, URLSessionDownlo
         _ session: URLSession,
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
-    ) {}
+    ) {
+        do {
+            // URLSession removes its temporary file after this callback returns.
+            try FileManager.default.moveItem(at: location, to: destination)
+            lock.withLock { downloadedResponse = downloadTask.response }
+        } catch {
+            lock.withLock { downloadError = error }
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        let completion = lock.withLock {
+            let completion = (continuation, error ?? downloadError, downloadedResponse, cancelled)
+            continuation = nil
+            downloadTask = nil
+            downloadedResponse = nil
+            downloadError = nil
+            return completion
+        }
+        session.finishTasksAndInvalidate()
+        if let error = completion.1 {
+            try? FileManager.default.removeItem(at: destination)
+            completion.0?.resume(throwing: error)
+        } else if completion.3 {
+            try? FileManager.default.removeItem(at: destination)
+            completion.0?.resume(throwing: CancellationError())
+        } else if let response = completion.2 {
+            completion.0?.resume(returning: (destination, response))
+        } else {
+            try? FileManager.default.removeItem(at: destination)
+            completion.0?.resume(throwing: URLError(.badServerResponse))
+        }
+    }
+
+    private func cancel() {
+        let task = lock.withLock {
+            cancelled = true
+            return downloadTask
+        }
+        task?.cancel()
+    }
 
     func exceededLimit() -> Bool {
         lock.lock()
@@ -303,15 +380,11 @@ public actor ProviderDistributionClient {
         let package = temporaryRoot.appendingPathComponent("package", isDirectory: true)
         try fileManager.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
         do {
-            await progress(ProviderInstallProgress(
-                providerID: release.providerID,
-                version: release.version,
-                phase: .downloading
-            ))
             let delegate = ProviderDownloadProgressDelegate(
                 providerID: release.providerID,
                 version: release.version,
                 maximumBytes: maximumArchiveBytes,
+                destination: temporaryRoot.appendingPathComponent("download.zip"),
                 progress: progress
             )
             let downloaded: URL
@@ -415,7 +488,7 @@ public actor ProviderDistributionClient {
         var attempt = 0
         while true {
             do {
-                return try await session.download(for: request, delegate: delegate)
+                return try await delegate.download(for: request, configuration: session.configuration)
             } catch {
                 await delegate.drain()
                 attempt += 1

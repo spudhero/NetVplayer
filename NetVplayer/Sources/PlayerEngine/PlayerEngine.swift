@@ -22,9 +22,9 @@ public enum PlayerVideoAspectMode: String, CaseIterable, Codable, Sendable {
     public var displayName: String {
         switch self {
         case .fit:
-            return "原始"
+            return L10n.text("原始")
         case .fill:
-            return "填满"
+            return L10n.text("填满")
         case .wide16x9:
             return "16:9"
         case .classic4x3:
@@ -35,13 +35,13 @@ public enum PlayerVideoAspectMode: String, CaseIterable, Codable, Sendable {
     public var menuTitle: String {
         switch self {
         case .fit:
-            return "原始比例（自动适应）"
+            return L10n.text("原始比例（自动适应）")
         case .fill:
-            return "填满窗口（裁切边缘）"
+            return L10n.text("填满窗口（裁切边缘）")
         case .wide16x9:
-            return "固定比例 16:9"
+            return L10n.text("固定比例 16:9")
         case .classic4x3:
-            return "固定比例 4:3"
+            return L10n.text("固定比例 4:3")
         }
     }
 
@@ -82,13 +82,16 @@ public struct SubtitleRenderSettings: Equatable, Sendable {
     public var position: Int
     public var overrideSourceStyle: Bool
     public var fontName: String
+    public var appearance: SubtitleAppearance
 
     public init(
         fontSize: Int = Self.defaultFontSize,
         position: Int = Self.defaultPosition,
         overrideSourceStyle: Bool = Self.defaultOverrideSourceStyle,
-        fontName: String = Self.defaultFontName
+        fontName: String = Self.defaultFontName,
+        appearance: SubtitleAppearance = .init()
     ) {
+        self.appearance = appearance.normalized
         self.fontSize = min(max(fontSize, 16), 72)
         self.position = min(max(position, 0), 100)
         self.overrideSourceStyle = overrideSourceStyle
@@ -99,7 +102,7 @@ public struct SubtitleRenderSettings: Equatable, Sendable {
 }
 
 public enum PlayerSubtitlePolicy {
-    public static func mpvOptions(for settings: SubtitleRenderSettings) -> [String: String] {
+    public static func mpvOptions(for settings: SubtitleRenderSettings, trackFormat: SubtitleTrackFormat = .text) -> [String: String] {
         [
             "sub-ass-override": settings.overrideSourceStyle ? "strip" : "no",
             "secondary-sub-ass-override": settings.overrideSourceStyle ? "strip" : "no",
@@ -108,16 +111,18 @@ public enum PlayerSubtitlePolicy {
             "sub-pos": "\(settings.position)",
             "sub-align-x": "center",
             "sub-align-y": "bottom",
-            "sub-border-size": "2",
+            "sub-color": settings.appearance.color.mpvValue,
+            "sub-back-color": String(format: "#%02X000000", Int(settings.appearance.backgroundOpacity * 255)),
+            "sub-border-size": String(format: "%g", settings.appearance.borderWidth),
+            "sub-border-style": settings.appearance.backgroundOpacity > 0 ? "background-box" : "outline-and-shadow",
             "sub-shadow-offset": "0",
-            "sub-scale": "1.0",
+            "sub-scale": trackFormat == .bitmap ? String(settings.appearance.bitmapScale) : "1.0",
             "sub-scale-by-window": "yes",
             "sub-scale-with-window": "yes",
             "sub-use-margins": "no",
             "sub-ass-force-margins": "yes",
             "sub-ass-use-video-data": "none",
-            "secondary-sid": "no",
-            "secondary-sub-visibility": "no"
+            "secondary-sub-pos": String(settings.appearance.secondaryPosition)
         ]
     }
 
@@ -126,6 +131,7 @@ public enum PlayerSubtitlePolicy {
         settings: SubtitleRenderSettings
     ) -> [String: String] {
         sourceOptions.merging(mpvOptions(for: settings)) { _, userPreference in userPreference }
+            .merging(["secondary-sid": "no", "secondary-sub-visibility": "no"]) { _, initial in initial }
     }
 
     public static func preferredInitialSubtitleTrack(
@@ -340,9 +346,12 @@ struct PlaybackPostSeekEndGuard: Equatable, Sendable {
         }
     }
 
-    func canPresentFrame(at positionSeconds: Double) -> Bool {
+    func canPresentFrame(at positionSeconds: Double, confirmedSeek: Bool = false) -> Bool {
         guard let targetSeconds = pendingFrameTargetSeconds else { return true }
-        guard didReceivePlaybackRestart, positionSeconds.isFinite else { return false }
+        guard didReceivePlaybackRestart, positionSeconds.isFinite, positionSeconds >= 0 else { return false }
+        // Keyframe seeks may legitimately land far from the requested position.
+        // Only an owned native seek/restart sequence may bypass the initial-load guard.
+        if confirmedSeek { return true }
         let tolerance = max(2, min(10, targetSeconds * 0.2))
         return abs(positionSeconds - targetSeconds) <= tolerance
     }
@@ -363,6 +372,22 @@ struct PlaybackPostSeekEndGuard: Equatable, Sendable {
               durationSeconds > 0 else { return false }
         let boundary = max(0, durationSeconds - max(0, completionToleranceSeconds))
         return targetSeconds >= boundary || positionSeconds >= boundary
+    }
+
+    func didPlayToEndAfterSeek(positionSeconds: Double, durationSeconds: Double) -> Bool {
+        guard let targetSeconds,
+              didRestartPlayback,
+              pendingFrameTargetSeconds == nil,
+              positionSeconds.isFinite,
+              durationSeconds.isFinite,
+              durationSeconds > targetSeconds else { return false }
+        // A short tail cannot accumulate three seconds of playback. Allow the
+        // final half-second between property updates, but require real progress
+        // after a confirmed frame rather than a jump straight to/past EOF.
+        let remaining = durationSeconds - targetSeconds
+        let requiredProgress = min(Self.requiredForwardProgressSeconds, max(0.1, remaining - 0.5))
+        return continuousForwardProgressSeconds >= requiredProgress
+            && positionSeconds >= durationSeconds - 0.5
     }
 
     mutating func reset() {
@@ -453,5 +478,67 @@ public enum PlaybackAutoAdvancePolicy {
             && inFlightEpisodeURL != episodeURL
             && hasNextEpisode
             && !isLoading
+    }
+}
+
+public enum PlaybackPreloadDecision: Int, Sendable, Comparable {
+    case none
+    case metadataOnly
+    case metadataAndMedia
+
+    public static func < (lhs: PlaybackPreloadDecision, rhs: PlaybackPreloadDecision) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+public enum PlaybackPreloadPolicy {
+    public static let mediaWindowSeconds: Double = 30
+    public static let metadataFallbackWindowSeconds: Double = 10
+    public static let bufferedToleranceSeconds: Double = 1
+
+    public static func decision(
+        positionSeconds: Double,
+        durationSeconds: Double,
+        bufferedUntilSeconds: Double,
+        endingSkipSeconds: Int,
+        hasNextEpisode: Bool,
+        isLoading: Bool,
+        isSeeking: Bool,
+        allowsEarlyMediaPreload: Bool = false,
+        minimumBufferedAheadSeconds: Double = 15
+    ) -> PlaybackPreloadDecision {
+        guard hasNextEpisode,
+              !isLoading,
+              !isSeeking,
+              positionSeconds.isFinite,
+              durationSeconds.isFinite,
+              bufferedUntilSeconds.isFinite,
+              positionSeconds >= 0,
+              durationSeconds > 0 else {
+            return .none
+        }
+
+        let safeEndingSkip = min(max(0, Double(endingSkipSeconds)), durationSeconds)
+        let transitionPoint = durationSeconds - safeEndingSkip
+        guard transitionPoint > 0 else { return .none }
+
+        let secondsUntilTransition = transitionPoint - positionSeconds
+        guard secondsUntilTransition > 0 else { return .none }
+
+        if secondsUntilTransition <= mediaWindowSeconds,
+           bufferedUntilSeconds >= transitionPoint - bufferedToleranceSeconds {
+            return .metadataAndMedia
+        }
+        if allowsEarlyMediaPreload,
+           secondsUntilTransition <= mediaWindowSeconds {
+            let bufferedAhead = max(0, bufferedUntilSeconds - positionSeconds)
+            return bufferedAhead >= max(0, minimumBufferedAheadSeconds)
+                ? .metadataAndMedia
+                : .metadataOnly
+        }
+        if secondsUntilTransition <= metadataFallbackWindowSeconds {
+            return .metadataOnly
+        }
+        return .none
     }
 }

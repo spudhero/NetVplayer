@@ -1,3 +1,4 @@
+import Models
 import SwiftUI
 
 enum AppAppearanceThemeID: String, CaseIterable, Codable, Identifiable, Sendable {
@@ -20,20 +21,20 @@ enum AppAppearanceThemeID: String, CaseIterable, Codable, Identifiable, Sendable
 
     var displayName: String {
         switch self {
-        case .legacyDeepSpace: return "深空青蓝"
-        case .auroraViolet: return "极光紫蓝"
-        case .crimsonPetals: return "赤夜飞花"
-        case .deepSea: return "深海青绿"
-        case .coralDusk: return "晚霞珊瑚"
-        case .glacierBloom: return "冰川蓝粉"
-        case .orangeSea: return "暮海橙光"
-        case .mintLemon: return "青柠薄荷"
-        case .blushSky: return "晴空花雾"
-        case .lemonSummer: return "柠黄初夏"
-        case .seaSalt: return "海盐蓝雾"
-        case .greenPeachBlush: return "青桃初绯"
-        case .caramelSunrise: return "焦糖橙曦"
-        case .monochromeFlow: return "玄白流光"
+        case .legacyDeepSpace: return L10n.text("深空青蓝")
+        case .auroraViolet: return L10n.text("极光紫蓝")
+        case .crimsonPetals: return L10n.text("赤夜飞花")
+        case .deepSea: return L10n.text("深海青绿")
+        case .coralDusk: return L10n.text("晚霞珊瑚")
+        case .glacierBloom: return L10n.text("冰川蓝粉")
+        case .orangeSea: return L10n.text("暮海橙光")
+        case .mintLemon: return L10n.text("青柠薄荷")
+        case .blushSky: return L10n.text("晴空花雾")
+        case .lemonSummer: return L10n.text("柠黄初夏")
+        case .seaSalt: return L10n.text("海盐蓝雾")
+        case .greenPeachBlush: return L10n.text("青桃初绯")
+        case .caramelSunrise: return L10n.text("焦糖橙曦")
+        case .monochromeFlow: return L10n.text("玄白流光")
         }
     }
 

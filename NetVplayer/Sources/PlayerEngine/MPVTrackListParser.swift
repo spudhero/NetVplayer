@@ -1,3 +1,4 @@
+import Models
 // PlayerEngine/MPVTrackListParser.swift
 // Offline parser for mpv track-list node/map JSON shapes.
 
@@ -8,6 +9,8 @@ public struct PlayerTrackListSnapshot: Equatable, Sendable {
     public var subtitleTracks: [PlayerTrackInfo]
     public var selectedAudioTrackID: String?
     public var selectedSubtitleTrackID: String?
+    public var selectedSecondarySubtitleTrackID: String?
+    public var externalTrackIDs: [String: String]
     public var source: String
 
     public init(
@@ -15,12 +18,16 @@ public struct PlayerTrackListSnapshot: Equatable, Sendable {
         subtitleTracks: [PlayerTrackInfo] = [],
         selectedAudioTrackID: String? = nil,
         selectedSubtitleTrackID: String? = nil,
+        selectedSecondarySubtitleTrackID: String? = nil,
+        externalTrackIDs: [String: String] = [:],
         source: String = ""
     ) {
         self.audioTracks = audioTracks
         self.subtitleTracks = subtitleTracks
         self.selectedAudioTrackID = selectedAudioTrackID
         self.selectedSubtitleTrackID = selectedSubtitleTrackID
+        self.selectedSecondarySubtitleTrackID = selectedSecondarySubtitleTrackID
+        self.externalTrackIDs = externalTrackIDs
         self.source = source
     }
 
@@ -35,7 +42,7 @@ public enum MPVTrackListParserError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .invalidJSON:
-            "mpv track-list JSON 无法解析"
+            L10n.text("mpv track-list JSON 无法解析")
         }
     }
 }
@@ -54,6 +61,8 @@ public enum MPVTrackListParser {
         var subtitleTracks: [PlayerTrackInfo] = []
         var selectedAudioTrackID: String?
         var selectedSubtitleTrackID: String?
+        var selectedSecondarySubtitleTrackID: String?
+        var externalTrackIDs: [String: String] = [:]
 
         for item in items {
             guard let kind = trackKind(from: item),
@@ -79,8 +88,10 @@ public enum MPVTrackListParser {
                 }
             } else {
                 subtitleTracks.append(track)
+                if let filename = stringValue(item["external-filename"]), !filename.isEmpty { externalTrackIDs[filename] = id }
                 if boolValue(item["selected"]) == true {
-                    selectedSubtitleTrackID = id
+                    if stringValue(item["main-selection"]) == "1" { selectedSecondarySubtitleTrackID = id }
+                    else { selectedSubtitleTrackID = id }
                 }
             }
         }
@@ -90,6 +101,8 @@ public enum MPVTrackListParser {
             subtitleTracks: subtitleTracks,
             selectedAudioTrackID: selectedAudioTrackID,
             selectedSubtitleTrackID: selectedSubtitleTrackID,
+            selectedSecondarySubtitleTrackID: selectedSecondarySubtitleTrackID,
+            externalTrackIDs: externalTrackIDs,
             source: source
         )
     }

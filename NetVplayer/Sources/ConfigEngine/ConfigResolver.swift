@@ -6,6 +6,7 @@ import CryptoKit
 import Models
 import NodeBundleRuntime
 import Networking
+import Storage
 
 public enum VodInputKind: String, Sendable, Equatable {
     case configuration
@@ -22,6 +23,8 @@ public struct ResolvedVodInput: Sendable {
     public let initialResult: Result?
     public let providerID: String?
     public let fingerprint: String
+    public let usesCachedConfiguration: Bool
+    public let configurationRefreshError: (any Error)?
 
     public init(
         json: String,
@@ -30,7 +33,9 @@ public struct ResolvedVodInput: Sendable {
         canonicalURL: String,
         initialResult: Result?,
         providerID: String? = nil,
-        fingerprint: String? = nil
+        fingerprint: String? = nil,
+        usesCachedConfiguration: Bool = false,
+        configurationRefreshError: (any Error)? = nil
     ) {
         self.json = json
         self.config = config
@@ -39,6 +44,8 @@ public struct ResolvedVodInput: Sendable {
         self.initialResult = initialResult
         self.providerID = providerID
         self.fingerprint = fingerprint ?? StableFingerprint.sha256Prefix(json)
+        self.usesCachedConfiguration = usesCachedConfiguration
+        self.configurationRefreshError = configurationRefreshError
     }
 }
 
@@ -66,9 +73,13 @@ public final class ConfigResolver: Sendable {
     private static let configurationRequestHeaders = ["User-Agent": "okhttp/5.3.2"]
 
     private let httpClient: HTTPClient
+    private let preferences: UserPreferences
+    private let allowsProxyFallback: Bool
 
-    public init(httpClient: HTTPClient = .shared) {
+    public init(httpClient: HTTPClient = .shared, preferences: UserPreferences = .shared, allowsProxyFallback: Bool = true) {
         self.httpClient = httpClient
+        self.preferences = preferences
+        self.allowsProxyFallback = allowsProxyFallback
     }
 
     /// 加载并解密配置
@@ -76,11 +87,65 @@ public final class ConfigResolver: Sendable {
         try await loadPayload(url: url).payload
     }
 
+    /// Restores only a usable snapshot of this exact source, without making a request.
+    public func cachedVodInput(url: String, cachedConfig: Config?) -> ResolvedVodInput? {
+        let inputURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let sourceURL = URL(string: inputURL),
+              sourceURL.isFileURL || ["http", "https"].contains(sourceURL.scheme?.lowercased() ?? ""),
+              !Self.isNodeBundleURL(inputURL),
+              let cachedConfig, cachedConfig.type == .vod,
+              cachedConfig.url.trimmingCharacters(in: .whitespacesAndNewlines) == inputURL,
+              let data = cachedConfig.json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["msg"] == nil, object["urls"] == nil,
+              let sites = object["sites"] as? [[String: Any]], !sites.isEmpty,
+              let siteData = try? JSONSerialization.data(withJSONObject: sites),
+              let decodedSites = try? JSONDecoder().decode([Site].self, from: siteData),
+              decodedSites.contains(where: {
+                  !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                      && !$0.api.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              }) else { return nil }
+        return ResolvedVodInput(
+            json: cachedConfig.json,
+            config: cachedConfig,
+            kind: .configuration,
+            canonicalURL: inputURL,
+            initialResult: nil,
+            usesCachedConfiguration: true
+        )
+    }
+
+    /// Loads a complete snapshot for background persistence without changing active configuration state.
+    public func loadVodSnapshot(url: String) async throws -> ResolvedVodInput {
+        let input = try await loadVodInput(url: url)
+        guard input.kind != .nodeJSBundle else { throw VodInputError.unrecognizedContent }
+        let snapshotResolver = VodConfig(httpClient: httpClient, hygieneStore: nil)
+        let json = try await snapshotResolver.resolveConfigurationSnapshot(json: input.json, config: input.config)
+        try Task.checkCancellation()
+        guard snapshotResolver.externalArrayErrors.isEmpty else { throw ConfigError.invalidJSON }
+        return ResolvedVodInput(
+            json: json, config: input.config, kind: input.kind,
+            canonicalURL: input.canonicalURL, initialResult: input.initialResult
+        )
+    }
+
     /// 加载地址并识别完整配置或单个 MacCMS 接口。
-    public func loadVodInput(url: String) async throws -> ResolvedVodInput {
+    public func loadVodInput(url: String, cachedConfig: Config? = nil) async throws -> ResolvedVodInput {
         let inputURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !inputURL.isEmpty else { throw VodInputError.emptyURL }
         guard URL(string: inputURL) != nil else { throw VodInputError.invalidURL }
+
+        if let uri = URL(string: inputURL), uri.scheme == "netvplayer-xtream",
+           let host = uri.host, let id = UUID(uuidString: host),
+           let account = preferences.xtreamConfigurations.first(where: { $0.id == id }) {
+            let site = try account.site()
+            let data = try JSONEncoder().encode([site])
+            let sites = try JSONSerialization.jsonObject(with: data)
+            let json = try JSONSerialization.data(withJSONObject: ["sites": sites, "home": site.key])
+            return ResolvedVodInput(json: String(decoding: json, as: UTF8.self), config: Config(type: .vod, url: account.url, name: account.name), kind: .configuration, canonicalURL: account.url, initialResult: nil)
+        }
+
+        if inputURL.hasPrefix("netvplayer-xtream:") { throw XtreamError.authorizationRequired }
 
         if Self.isNodeBundleURL(inputURL) {
             do {
@@ -101,7 +166,25 @@ public final class ConfigResolver: Sendable {
         }
 
         let requestURL = inputURL
-        let loaded = try await loadPayload(url: requestURL)
+        let loaded: (payload: String, finalURL: String)
+        do {
+            loaded = try await loadPayload(url: requestURL)
+        } catch {
+            try Task.checkCancellation()
+            guard ConfigurationRecoveryPolicy.canRestoreCachedConfiguration(after: error),
+                  let cached = cachedVodInput(url: requestURL, cachedConfig: cachedConfig) else {
+                throw error
+            }
+            return ResolvedVodInput(
+                json: cached.json,
+                config: cached.config,
+                kind: .configuration,
+                canonicalURL: requestURL,
+                initialResult: nil,
+                usesCachedConfiguration: true,
+                configurationRefreshError: error
+            )
+        }
         let payload = loaded.payload.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let data = payload.data(using: .utf8),
@@ -167,8 +250,12 @@ public final class ConfigResolver: Sendable {
     private func loadPayload(url: String) async throws -> (payload: String, finalURL: String) {
         let response = try await httpClient.get(
             url: url,
-            headers: Self.configurationRequestHeaders
+            headers: Self.configurationRequestHeaders,
+            allowsProxyFallback: allowsProxyFallback
         )
+        guard (200..<300).contains(response.statusCode) else {
+            throw HTTPError.httpError(response.statusCode, HTTPURLResponse.localizedString(forStatusCode: response.statusCode))
+        }
         let finalURL = response.finalURL?.absoluteString ?? url
         let text = response.text
 

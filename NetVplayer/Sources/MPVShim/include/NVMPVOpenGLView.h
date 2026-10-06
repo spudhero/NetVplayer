@@ -15,6 +15,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (instancetype)initWithFrame:(NSRect)frame NS_DESIGNATED_INITIALIZER;
 - (nullable instancetype)initWithCoder:(NSCoder *)coder NS_UNAVAILABLE;
+- (BOOL)restoreOpenGLSurface;
+- (void)releaseOpenGLSurface;
 - (void)makeOpenGLContextCurrent;
 - (void)updateOpenGLContext;
 - (void)flushOpenGLBuffer;

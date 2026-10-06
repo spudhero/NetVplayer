@@ -215,8 +215,7 @@ public actor DriveSavedFileStore {
     }
 
     private static var isRunningTests: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || ProcessInfo.processInfo.arguments.contains { $0.contains(".xctest") || $0.contains("swift-testing") }
+        TestRuntime.isRunning
     }
 
     private static func copyLegacyStoreIfNeeded(from legacyURL: URL?, to versionedURL: URL) {

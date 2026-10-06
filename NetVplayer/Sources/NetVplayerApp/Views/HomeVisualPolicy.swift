@@ -269,6 +269,7 @@ struct AppNavigationIconBackground: View {
 
 struct AppGroupBoxStyle: GroupBoxStyle {
     @Environment(\.appThemePalette) private var palette
+    var expandsToFillWidth = false
 
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -279,6 +280,7 @@ struct AppGroupBoxStyle: GroupBoxStyle {
             configuration.content
                 .foregroundStyle(palette.foreground)
         }
+        .frame(maxWidth: expandsToFillWidth ? .infinity : nil, alignment: .leading)
         .padding(16)
         .background {
             AppGlassSurface(

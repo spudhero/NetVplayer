@@ -169,10 +169,14 @@ actor CatalogRepository {
         NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
 
-    func clear() {
-        entries.removeAll()
+    func cancelPending() {
         for request in inFlight.values { request.task.cancel() }
         inFlight.removeAll()
+    }
+
+    func clear() {
+        entries.removeAll()
+        cancelPending()
         NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
 
@@ -296,13 +300,17 @@ actor VodDetailRepository {
         prefetchTasks[key] = (id, task)
     }
 
-    func clear() {
-        entries.removeAll()
+    func cancelPending() {
         for request in inFlight.values { request.task.cancel() }
         inFlight.removeAll()
         for request in prefetchTasks.values { request.task.cancel() }
         prefetchTasks.removeAll()
         // Occupied slots are released only when each real loader exits.
+    }
+
+    func clear() {
+        entries.removeAll()
+        cancelPending()
         NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
 
@@ -362,7 +370,7 @@ final class CacheCoordinator {
         do {
             try await PosterImagePipeline.shared.clearDiskCache()
         } catch {
-            failures.append("海报缓存：\(error.localizedDescription)")
+            failures.append(L10n.text("海报缓存：{0}", ["\(error.localizedDescription)"]))
         }
         await CatalogRepository.shared.clear()
         await VodDetailRepository.shared.clear()

@@ -13,16 +13,16 @@ public enum DrivePlaybackDisplayPolicy {
 
         switch route {
         case DrivePlaybackRoute.originalDownload, DrivePlaybackRoute.ucOriginalProxy:
-            return "原片"
+            return L10n.text("原片")
         case DrivePlaybackRoute.ucOpenAPIStreaming:
             let compactLabel = compactQualityLabel(label)
             return compactLabel.isEmpty ? "UC Streaming" : compactLabel
         case DrivePlaybackRoute.personalTranscode, DrivePlaybackRoute.ucSmartPlay:
             let compactLabel = compactQualityLabel(label)
             if compactLabel.localizedCaseInsensitiveContains("4K") {
-                return "4K 转码"
+                return L10n.text("4K 转码")
             }
-            return compactLabel.isEmpty || compactLabel == "转码" ? "转码" : "转码 \(compactLabel)"
+            return compactLabel.isEmpty || compactLabel == "转码" ? L10n.text("转码") : L10n.text("转码 {0}", ["\(compactLabel)"])
         default:
             return nil
         }

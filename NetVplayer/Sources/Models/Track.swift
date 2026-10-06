@@ -7,6 +7,7 @@ import Foundation
 public enum TrackType: Int, Codable, Sendable {
     case audio = 0
     case subtitle = 1
+    case secondarySubtitle = 2
 }
 
 /// 音轨/字幕轨偏好

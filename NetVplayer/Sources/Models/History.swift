@@ -28,6 +28,7 @@ public struct History: Codable, Identifiable, Equatable, Sendable {
     public var driveReferenceURL: String
     public var driveRoute: String
     public var configId: Int
+    public var sourceFingerprint: String
     public var createTime: Date
 
     public var id: String { key }
@@ -55,6 +56,7 @@ public struct History: Codable, Identifiable, Equatable, Sendable {
         driveReferenceURL: String = "",
         driveRoute: String = "",
         configId: Int = 0,
+        sourceFingerprint: String = "",
         createTime: Date = Date()
     ) {
         self.key = key
@@ -86,13 +88,14 @@ public struct History: Codable, Identifiable, Equatable, Sendable {
         self.driveReferenceURL = driveReferenceURL
         self.driveRoute = driveRoute
         self.configId = configId
+        self.sourceFingerprint = sourceFingerprint
         self.createTime = createTime
     }
 
     enum CodingKeys: String, CodingKey {
         case key, siteKey, vodId, vodPic, vodName, vodFlag, vodRemarks, episodeUrl, episodeKey, episodeName
         case revSort, revPlay, opening, ending, position, duration, speed, scale
-        case driveProvider, driveReferenceURL, driveRoute, configId, createTime
+        case driveProvider, driveReferenceURL, driveRoute, configId, sourceFingerprint, createTime
     }
 
     public init(from decoder: Decoder) throws {
@@ -127,6 +130,7 @@ public struct History: Codable, Identifiable, Equatable, Sendable {
         self.driveReferenceURL = try container.decodeIfPresent(String.self, forKey: .driveReferenceURL) ?? ""
         self.driveRoute = try container.decodeIfPresent(String.self, forKey: .driveRoute) ?? ""
         self.configId = try container.decodeIfPresent(Int.self, forKey: .configId) ?? 0
+        self.sourceFingerprint = try container.decodeIfPresent(String.self, forKey: .sourceFingerprint) ?? ""
         self.createTime = try container.decodeIfPresent(Date.self, forKey: .createTime) ?? Date()
     }
 
@@ -184,6 +188,7 @@ public enum HistoryPersistencePolicy {
     public static func sanitizedEpisodeLocator(_ rawValue: String) -> String {
         let value = trimmed(rawValue)
         guard !value.isEmpty else { return "" }
+        if value.hasPrefix("nvfile:") { return FileResourceReference(locator: value)?.locator ?? "" }
         let driveReference = sanitizedDriveReference(value)
         if !driveReference.isEmpty {
             return driveReference

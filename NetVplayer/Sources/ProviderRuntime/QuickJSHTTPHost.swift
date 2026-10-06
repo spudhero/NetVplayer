@@ -1,4 +1,5 @@
 import Foundation
+import Networking
 import ProviderSDK
 
 struct QuickJSHostControl: Codable, Sendable {
@@ -115,7 +116,7 @@ struct QuickJSHTTPHost: @unchecked Sendable {
         urlRequest.httpBody = method == .post ? (body ?? Data()) : nil
 
         let followsRedirects = number(options["redirect"]).map { $0 == 1 } ?? true
-        let redirectDelegate = QuickJSHTTPRedirectDelegate(followsRedirects: followsRedirects)
+        let redirectDelegate = QuickJSHTTPRedirectDelegate(followsRedirects: followsRedirects, initialRequest: urlRequest)
         do {
             let (bytes, response) = try await session.bytes(for: urlRequest, delegate: redirectDelegate)
             guard let httpResponse = response as? HTTPURLResponse else {
@@ -407,6 +408,7 @@ private struct QuickJSHTTPHostError: Error {
 
 final class QuickJSHTTPRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let followsRedirects: Bool
+    private let redirects: HTTPRedirectDelegate
     private let lock = NSLock()
     private var rejectedResponseStorage: HTTPURLResponse?
 
@@ -416,8 +418,9 @@ final class QuickJSHTTPRedirectDelegate: NSObject, URLSessionTaskDelegate, @unch
         return rejectedResponseStorage
     }
 
-    init(followsRedirects: Bool) {
+    init(followsRedirects: Bool, initialRequest: URLRequest? = nil) {
         self.followsRedirects = followsRedirects
+        self.redirects = HTTPRedirectDelegate(initialRequest: initialRequest)
     }
 
     func urlSession(
@@ -428,7 +431,7 @@ final class QuickJSHTTPRedirectDelegate: NSObject, URLSessionTaskDelegate, @unch
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
         if followsRedirects {
-            completionHandler(request)
+            completionHandler(redirects.redirected(task: task, response: response, proposed: request))
         } else {
             lock.lock()
             rejectedResponseStorage = response

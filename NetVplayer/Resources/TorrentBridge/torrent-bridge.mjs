@@ -92,10 +92,10 @@ client.on('error', fail)
 
 let torrent
 try {
-  torrent = client.add(await resolveTorrentInput(), { path: storagePath })
+  torrent = client.add(await resolveTorrentInput(), { path: storagePath, deselect: true })
 } catch {
   metadataSource = 'dht'
-  torrent = client.add(magnetURI, { path: storagePath })
+  torrent = client.add(magnetURI, { path: storagePath, deselect: true })
 }
 torrent.on('error', fail)
 torrent.once('ready', () => {
@@ -104,10 +104,11 @@ torrent.once('ready', () => {
     fail(new Error('元数据 info hash 与磁力链接不匹配'))
     return
   }
-  const playableFiles = torrent.files.filter(file => videoExtensions.has(path.extname(file.name).toLowerCase()))
-  const candidates = playableFiles.length ? playableFiles : torrent.files
-  const file = candidates.sort((left, right) => right.length - left.length)[0]
-  if (!file) {
+  const playableFiles = torrent.files
+    .map((file, index) => ({ file, index }))
+    .filter(({ file }) => videoExtensions.has(path.extname(file.name).toLowerCase()))
+    .sort((left, right) => left.file.name.localeCompare(right.file.name, 'en', { numeric: true }))
+  if (!playableFiles.length) {
     fail(new Error('磁力元数据中没有可播放文件'))
     return
   }
@@ -118,6 +119,14 @@ torrent.once('ready', () => {
       response.end()
       return
     }
+    const pathname = new URL(request.url, 'http://127.0.0.1').pathname
+    const selected = playableFiles.find(({ file, index }) => pathname === `/stream/${index}/${encodeURIComponent(file.name)}`)
+    if (!selected) {
+      response.writeHead(404)
+      response.end()
+      return
+    }
+    const { file } = selected
     const range = parseRange(request.headers.range, file.length)
     if (range === undefined) {
       response.writeHead(416, { 'Content-Range': `bytes */${file.length}` })
@@ -144,6 +153,12 @@ torrent.once('ready', () => {
     }
 
     const stream = file.createReadStream(range ?? {})
+    const waiting = setTimeout(() => {
+      console.error(`[TORRENT_WAIT] peers=${torrent.numPeers} downloaded=${torrent.downloaded}`)
+    }, 10000)
+    waiting.unref()
+    stream.once('data', () => clearTimeout(waiting))
+    response.on('close', () => clearTimeout(waiting))
     request.on('aborted', () => stream.destroy())
     response.on('close', () => stream.destroy())
     stream.on('error', error => {
@@ -152,14 +167,27 @@ torrent.once('ready', () => {
     })
     stream.pipe(response)
   })
+  server.on('clientError', (error, socket) => {
+    console.error(`[TORRENT_HTTP] code=${error.code} reason=${error.reason ?? ''} parsed=${error.bytesParsed ?? 0}`)
+    if (socket.writable) {
+      const status = error.code === 'HPE_HEADER_OVERFLOW' ? '431 Request Header Fields Too Large' : '400 Bad Request'
+      socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`)
+    }
+  })
 
   server.listen(0, '127.0.0.1', () => {
     const address = server.address()
-    const encodedName = encodeURIComponent(file.name)
-    writeReady({
-      url: `http://127.0.0.1:${address.port}/stream/${encodedName}`,
+    const files = playableFiles.map(({ file, index }) => ({
+      index,
       name: file.name,
       length: file.length,
+      url: `http://127.0.0.1:${address.port}/stream/${index}/${encodeURIComponent(file.name)}`
+    }))
+    writeReady({
+      url: files[0].url,
+      name: files[0].name,
+      length: files[0].length,
+      files,
       infoHash: torrent.infoHash,
       metadataSource
     })

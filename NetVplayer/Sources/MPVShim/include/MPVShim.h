@@ -44,6 +44,16 @@ int nv_mpv_initialize(NVMPVContext *context);
 int nv_mpv_set_property_string(NVMPVContext *context, const char *name, const char *value);
 int nv_mpv_set_property_double(NVMPVContext *context, const char *name, double value);
 int nv_mpv_set_property_flag(NVMPVContext *context, const char *name, int value);
+// Queue runtime changes without waiting for the core/render threads.
+int nv_mpv_set_property_double_async(NVMPVContext *context, uint64_t reply_userdata, const char *name, double value);
+int nv_mpv_set_property_flag_async(NVMPVContext *context, uint64_t reply_userdata, const char *name, int value);
+// Copies a structured property as bounded JSON; caller frees it with nv_mpv_free_string.
+char *nv_mpv_copy_property_json(NVMPVContext *context, const char *name);
+// mpv's option string representation can be round-tripped to restore runtime defaults.
+char *nv_mpv_copy_property_string(NVMPVContext *context, const char *name);
+void nv_mpv_free_string(char *value);
+int nv_mpv_observe_change(NVMPVContext *context, uint64_t userdata, const char *name);
+int nv_mpv_get_media_track_counts(NVMPVContext *context, int64_t *audio_count, int64_t *video_count);
 
 int nv_mpv_command1(NVMPVContext *context, const char *arg0);
 int nv_mpv_command2(NVMPVContext *context, const char *arg0, const char *arg1);

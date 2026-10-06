@@ -372,7 +372,7 @@ struct PlayerHUDVisualPolicyTests {
     }
 
     @Test
-    func testFeatureControlsUseUnifiedPopoverAndCyclicButtonSlots() {
+    func testFeatureControlsOfferDirectSelectionInUnifiedPopovers() {
         #expect(PlayerHUDVisualPolicy.unifiedFeatureControlSlots == [
             .subtitles,
             .audio,
@@ -387,8 +387,8 @@ struct PlayerHUDVisualPolicyTests {
         #expect(PlayerHUDVisualPolicy.menuIconBoxSize == 38)
         #expect(PlayerHUDVisualPolicy.menuGlyphSize == 26)
         #expect(PlayerHUDVisualPolicy.menuGlyphStrokeWidth == 1.65)
-        #expect(PlayerHUDVisualPolicy.popoverBackedControlSlots == [.subtitles, .audio])
-        #expect(PlayerHUDVisualPolicy.cyclicControlSlots == [.aspectRatio, .speed])
+        #expect(PlayerHUDVisualPolicy.popoverBackedControlSlots == [.subtitles, .audio, .aspectRatio, .speed])
+        #expect(PlayerHUDVisualPolicy.cyclicControlSlots.isEmpty)
         #expect(PlayerHUDVisualPolicy.popoverBackedControlSlots.allSatisfy { PlayerHUDVisualPolicy.unifiedFeatureControlSlots.contains($0) })
         #expect(PlayerHUDVisualPolicy.cyclicControlSlots.allSatisfy { PlayerHUDVisualPolicy.unifiedFeatureControlSlots.contains($0) })
     }
@@ -847,7 +847,8 @@ struct PlayerHUDVisualPolicyTests {
         #expect(!PlayerPlaybackActivityPolicy.blocksVideoGestures)
 
         #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: nil) == nil)
-        #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: 0) == nil)
+        #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: 0) == "0 B/s")
+        #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: -1) == nil)
         #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: 512) == "512 B/s")
         #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: 1_536) == "1.5 KB/s")
         #expect(PlayerPlaybackActivityPolicy.speedText(bytesPerSecond: 2_097_152) == "2.0 MB/s")
@@ -965,6 +966,7 @@ struct PlayerHUDVisualPolicyTests {
         #expect(playerScenario?.captureStates == [
             "normal",
             "settings-drawer",
+            "subtitle-settings",
             "episode-drawer",
             "skip-dialog",
             "warning",
@@ -972,6 +974,10 @@ struct PlayerHUDVisualPolicyTests {
             "loading",
             "buffering",
             "hud-hidden",
+            "ended",
+            "time-preview",
+            "chapter-navigation",
+            "chapter-preview",
         ])
         #expect(playerScenario?.responsiveViewports == [
             "1480x833",

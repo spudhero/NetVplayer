@@ -33,19 +33,19 @@ struct FeedbackView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
             GroupBox(label: SettingsPanelLabel(
-                title: "自动诊断",
-                subtitle: "帮助定位闪退和播放错误。",
+                title: L10n.text("自动诊断"),
+                subtitle: L10n.text("帮助定位闪退和播放错误。"),
                 systemImage: "waveform.path.ecg"
             )) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Toggle("自动发送错误诊断", isOn: $automaticDiagnostics)
+                    Toggle(L10n.text("自动发送错误诊断"), isOn: $automaticDiagnostics)
                         .disabled(!SentryDiagnostics.shared.isConfigured)
                         .onChange(of: automaticDiagnostics) { _, enabled in
                             SentryDiagnostics.shared.setEnabled(enabled)
                         }
                     Text(SentryDiagnostics.shared.isConfigured
-                         ? "通过 Sentry 发送崩溃堆栈、版本信息、错误码和操作步骤。不发送账号凭据、视频名称、播放地址或完整日志；少量会话用于统计起播耗时。"
-                         : "此构建尚未启用自动诊断，仍可在下方生成问题报告。")
+                         ? L10n.text("通过 Sentry 发送崩溃堆栈、版本信息、错误码和操作步骤。不发送账号凭据、视频名称、播放地址或完整日志；少量会话用于统计起播耗时。")
+                         : L10n.text("此构建尚未启用自动诊断，仍可在下方生成问题报告。"))
                         .font(.caption)
                         .foregroundStyle(palette.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -54,13 +54,13 @@ struct FeedbackView: View {
             }
 
             GroupBox(label: SettingsPanelLabel(
-                title: "问题说明",
-                subtitle: "提交可复现的现象和操作路径。",
+                title: L10n.text("问题说明"),
+                subtitle: L10n.text("提交可复现的现象和操作路径。"),
                 systemImage: "exclamationmark.bubble"
             )) {
                 VStack(alignment: .leading, spacing: 14) {
-                    SettingsControlRow(title: "问题分类", caption: "用于确定排障层级") {
-                        Picker("问题分类", selection: categoryBinding) {
+                    SettingsControlRow(title: L10n.text("问题分类"), caption: L10n.text("用于确定排障层级")) {
+                        Picker(L10n.text("问题分类"), selection: categoryBinding) {
                             ForEach(FeedbackCategory.allCases) { category in
                                 Text(category.title).tag(category)
                             }
@@ -69,34 +69,34 @@ struct FeedbackView: View {
                         .frame(width: 180)
                     }
 
-                    feedbackTextField(title: "标题", prompt: "简要说明问题", text: binding(\.title))
-                    feedbackTextArea(title: "问题现象", text: binding(\.problemDescription), height: 110)
-                    feedbackTextArea(title: "复现步骤", text: binding(\.reproductionSteps), height: 110)
-                    feedbackTextArea(title: "预期结果", text: binding(\.expectedResult), height: 82)
-                    feedbackTextArea(title: "实际结果", text: binding(\.actualResult), height: 82)
+                    feedbackTextField(title: L10n.text("标题"), prompt: L10n.text("简要说明问题"), text: binding(\.title))
+                    feedbackTextArea(title: L10n.text("问题现象"), text: binding(\.problemDescription), height: 110)
+                    feedbackTextArea(title: L10n.text("复现步骤"), text: binding(\.reproductionSteps), height: 110)
+                    feedbackTextArea(title: L10n.text("预期结果"), text: binding(\.expectedResult), height: 82)
+                    feedbackTextArea(title: L10n.text("实际结果"), text: binding(\.actualResult), height: 82)
                 }
                 .padding(.top, 6)
             }
 
             GroupBox(label: SettingsPanelLabel(
-                title: "复现资料",
-                subtitle: "配置只生成指纹；原始地址不会自动公开。",
+                title: L10n.text("复现资料"),
+                subtitle: L10n.text("配置只生成指纹；原始地址不会自动公开。"),
                 systemImage: "shield.lefthalf.filled",
                 statusText: reproductionStatus,
                 statusColor: reproductionStatusColor
             )) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("与配置源或播放线路有关", isOn: binding(\.isSourceRelated))
+                    Toggle(L10n.text("与配置源或播放线路有关"), isOn: binding(\.isSourceRelated))
 
                     if draft.isSourceRelated {
                         feedbackTextField(
-                            title: "公开复现源",
-                            prompt: "https://example.com/minimal-config.json（可选）",
+                            title: L10n.text("公开复现源"),
+                            prompt: L10n.text("https://example.com/minimal-config.json（可选）"),
                             text: binding(\.publicSourceURL)
                         )
                         if !draft.publicSourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             Toggle(
-                                "我确认该地址和返回内容可以公开访问",
+                                L10n.text("我确认该地址和返回内容可以公开访问"),
                                 isOn: binding(\.confirmsPublicSource)
                             )
                             if let publicSourceValidationMessage {
@@ -109,9 +109,9 @@ struct FeedbackView: View {
 
                     Divider()
 
-                    Toggle("附带本次和上次会话的脱敏日志", isOn: binding(\.includeLogs))
+                    Toggle(L10n.text("附带本次和上次会话的脱敏日志"), isOn: binding(\.includeLogs))
                     Label(
-                        "GitHub Issue 和手动附加的日志会公开可访问",
+                        L10n.text("GitHub Issue 和手动附加的日志会公开可访问"),
                         systemImage: "eye"
                     )
                     .font(.caption)
@@ -124,14 +124,14 @@ struct FeedbackView: View {
                 Button {
                     generatePreview(showPreview: true)
                 } label: {
-                    Label("生成预览", systemImage: "doc.text.magnifyingglass")
+                    Label(L10n.text("生成预览"), systemImage: "doc.text.magnifyingglass")
                 }
                 .buttonStyle(.bordered)
 
                 Button {
                     isShowingPreview = previewReport != nil
                 } label: {
-                    Label("查看预览", systemImage: "doc.plaintext")
+                    Label(L10n.text("查看预览"), systemImage: "doc.plaintext")
                 }
                 .buttonStyle(.bordered)
                 .disabled(previewReport == nil)
@@ -141,14 +141,14 @@ struct FeedbackView: View {
                 Button {
                     continueToGitHub()
                 } label: {
-                    Label("在 GitHub 中继续", systemImage: "arrow.up.right.square")
+                    Label(L10n.text("在 GitHub 中继续"), systemImage: "arrow.up.right.square")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(previewReport == nil || repositoryURL == nil)
             }
 
             if repositoryURL == nil {
-                Label("当前构建未配置有效的 GitHub 反馈仓库", systemImage: "link.badge.plus")
+                Label(L10n.text("当前构建未配置有效的 GitHub 反馈仓库"), systemImage: "link.badge.plus")
                     .font(.caption)
                     .foregroundStyle(palette.color(for: .warning))
             }
@@ -164,7 +164,7 @@ struct FeedbackView: View {
             }
         }
         .sheet(isPresented: $isShowingPreview) {
-            previewSheet
+            previewSheet.themedPresentation()
         }
     }
 
@@ -227,14 +227,14 @@ struct FeedbackView: View {
             VStack(spacing: 0) {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("反馈报告预览")
+                        Text(L10n.text("反馈报告预览"))
                             .font(.title2.bold())
                         Text(previewReport.reproductionLevel.title)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("完成") {
+                    Button(L10n.text("完成")) {
                         isShowingPreview = false
                     }
                 }
@@ -283,7 +283,7 @@ struct FeedbackView: View {
         } catch {
             return UserFacingErrorPresenter.message(
                 for: error,
-                context: .feedback(operation: "校验公开复现地址")
+                context: .feedback(operation: L10n.text("校验公开复现地址"))
             )
         }
     }
@@ -301,14 +301,14 @@ struct FeedbackView: View {
                 )
                 guard requestedDraft == draft else { return }
                 previewSnapshot = FeedbackPreviewSnapshot(draft: requestedDraft, report: report)
-                statusMessage = "预览已生成；字段变化后需要重新生成"
+                statusMessage = L10n.text("预览已生成；字段变化后需要重新生成")
                 statusIsError = false
                 isShowingPreview = showPreview
             } catch {
                 previewSnapshot = nil
                 statusMessage = UserFacingErrorPresenter.message(
                     for: error,
-                    context: .feedback(operation: "生成反馈预览")
+                    context: .feedback(operation: L10n.text("生成反馈预览"))
                 )
                 statusIsError = true
                 isShowingPreview = false
@@ -326,18 +326,18 @@ struct FeedbackView: View {
             )
             if let attachmentURL = result.attachmentURL {
                 statusMessage = result.copiedToClipboard
-                    ? "GitHub 空白 Issue 已打开；请粘贴正文并拖入日志：\(attachmentURL.path)"
-                    : "GitHub 已打开；请从 Finder 拖入日志：\(attachmentURL.path)"
+                    ? L10n.text("GitHub 空白 Issue 已打开；请粘贴正文并拖入日志：{0}", ["\(attachmentURL.path)"])
+                    : L10n.text("GitHub 已打开；请从 Finder 拖入日志：{0}", ["\(attachmentURL.path)"])
             } else {
                 statusMessage = result.copiedToClipboard
-                    ? "GitHub 空白 Issue 已打开，完整正文已复制到剪贴板"
-                    : "GitHub 已打开，请检查后提交"
+                    ? L10n.text("GitHub 空白 Issue 已打开，完整正文已复制到剪贴板")
+                    : L10n.text("GitHub 已打开，请检查后提交")
             }
             statusIsError = false
         } catch {
             statusMessage = UserFacingErrorPresenter.message(
                 for: error,
-                context: .feedback(operation: "打开反馈页面")
+                context: .feedback(operation: L10n.text("打开反馈页面"))
             )
             statusIsError = true
         }

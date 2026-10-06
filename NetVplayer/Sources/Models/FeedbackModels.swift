@@ -17,13 +17,13 @@ public enum FeedbackCategory: String, CaseIterable, Codable, Sendable, Identifia
 
     public var title: String {
         switch self {
-        case .playback: return "播放"
-        case .source: return "配置源"
-        case .live: return "直播"
-        case .provider: return "播放扩展"
-        case .userInterface: return "界面"
-        case .crash: return "崩溃"
-        case .other: return "其他"
+        case .playback: return L10n.text("播放")
+        case .source: return L10n.text("配置源")
+        case .live: return L10n.text("直播")
+        case .provider: return L10n.text("播放扩展")
+        case .userInterface: return L10n.text("界面")
+        case .crash: return L10n.text("崩溃")
+        case .other: return L10n.text("其他")
         }
     }
 
@@ -90,9 +90,9 @@ public enum FeedbackReproductionLevel: String, Codable, Sendable {
 
     public var title: String {
         switch self {
-        case .generic: return "通用问题"
-        case .diagnosticOnly: return "仅诊断资料，真实源未验证"
-        case .publicSource: return "包含可公开复现源"
+        case .generic: return L10n.text("通用问题")
+        case .diagnosticOnly: return L10n.text("仅诊断资料，真实源未验证")
+        case .publicSource: return L10n.text("包含可公开复现源")
         }
     }
 }
@@ -154,13 +154,13 @@ public enum PublicSourceValidationError: Error, LocalizedError, Sendable, Equata
 
     public var errorDescription: String? {
         switch self {
-        case .confirmationRequired: return "请确认该复现源可以公开访问"
-        case .invalidURL: return "复现源地址无效"
-        case .requiresHTTPS: return "复现源必须使用 HTTPS"
-        case .containsCredentials: return "复现源不能包含用户名或密码"
-        case .containsFragment: return "复现源不能包含“#”后的页面定位内容"
-        case .containsSensitiveQuery(let name): return "复现源包含敏感参数：\(name)"
-        case .privateHost: return "复现源必须是可公开访问的主机"
+        case .confirmationRequired: return L10n.text("请确认该复现源可以公开访问")
+        case .invalidURL: return L10n.text("复现源地址无效")
+        case .requiresHTTPS: return L10n.text("复现源必须使用 HTTPS")
+        case .containsCredentials: return L10n.text("复现源不能包含用户名或密码")
+        case .containsFragment: return L10n.text("复现源不能包含“#”后的页面定位内容")
+        case .containsSensitiveQuery(let name): return L10n.text("复现源包含敏感参数：{0}", ["\(name)"])
+        case .privateHost: return L10n.text("复现源必须是可公开访问的主机")
         }
     }
 }
@@ -261,8 +261,8 @@ public enum FeedbackValidationError: Error, LocalizedError, Sendable, Equatable 
 
     public var errorDescription: String? {
         switch self {
-        case .missingTitle: return "请填写问题标题"
-        case .missingProblemDescription: return "请填写问题现象"
+        case .missingTitle: return L10n.text("请填写问题标题")
+        case .missingProblemDescription: return L10n.text("请填写问题现象")
         }
     }
 }
@@ -349,18 +349,10 @@ public enum FeedbackReportBuilder {
         )
         let logSection = draft.includeLogs
             ? diagnosticLogs.trimmingCharacters(in: .whitespacesAndNewlines)
-            : "日志未附带（用户选择）"
-        let attachmentPrefix = """
-        NetVplayer Feedback Report
-        Generated: \(ISO8601DateFormatter().string(from: environment.generatedAt))
-        Session: \(environment.sessionID)
-
-        \(issueBody)
-
-        ## 脱敏诊断日志
-        """
+            : L10n.text("日志未附带（用户选择）")
+        let attachmentPrefix = L10n.text("NetVplayer Feedback Report\nGenerated: {0}\nSession: {1}\n\n{2}\n\n## 脱敏诊断日志", ["\(ISO8601DateFormatter().string(from: environment.generatedAt))", "\(environment.sessionID)", "\(issueBody)"])
         let sanitizedLog = logSection.isEmpty
-            ? "没有可用的诊断日志"
+            ? L10n.text("没有可用的诊断日志")
             : DiagnosticLogSanitizer.sanitize(logSection)
         return FeedbackReport(
             issueTitle: issueTitle,
@@ -376,22 +368,7 @@ public enum FeedbackReportBuilder {
         draft: FeedbackDraft,
         automaticContext: String
     ) -> String {
-        """
-        <!-- netvplayer-feedback:v1 -->
-        ## 问题现象
-        \(safeUserText(draft.problemDescription))
-
-        ## 复现步骤
-        \(safeUserText(draft.reproductionSteps, fallback: "未提供"))
-
-        ## 预期结果
-        \(safeUserText(draft.expectedResult, fallback: "未提供"))
-
-        ## 实际结果
-        \(safeUserText(draft.actualResult, fallback: "未提供"))
-
-        \(automaticContext)
-        """
+        L10n.text("<!-- netvplayer-feedback:v1 -->\n## 问题现象\n{0}\n\n## 复现步骤\n{1}\n\n## 预期结果\n{2}\n\n## 实际结果\n{3}\n\n{4}", ["\(safeUserText(draft.problemDescription))", "\(safeUserText(draft.reproductionSteps, fallback: "未提供"))", "\(safeUserText(draft.expectedResult, fallback: "未提供"))", "\(safeUserText(draft.actualResult, fallback: "未提供"))", "\(automaticContext)"])
     }
 
     private static func automaticContextMarkdown(
@@ -405,28 +382,7 @@ public enum FeedbackReportBuilder {
             .compactMap { $0 }
             .filter { !$0.isEmpty }
             .joined(separator: " @ ")
-        return """
-        ## 复现资料
-        - 复现等级：\(reproductionLevel.title)
-        - 公开复现源：\(publicSource?.absoluteString ?? "未提供")
-        - 配置指纹：\(sourceContext.configFingerprint ?? "无")
-        - 输入类型：\(sourceContext.inputKind ?? "无")
-        - 适配器：\(sourceContext.adapterID ?? "无")
-        - Provider：\(provider.isEmpty ? "无" : provider)
-        - 站点键指纹：\(sourceContext.siteKeyFingerprint ?? "无")
-        - 最近失败阶段：\(sourceContext.failureStage ?? "无")
-        - 最近错误分类：\(sourceContext.errorCategory?.rawValue ?? "无")
-        - 用户选择分类：\(draft.category.failureCategory.rawValue)
-
-        ## 运行环境
-        - NetVplayer：\(environment.appVersion) (\(environment.buildNumber))
-        - macOS：\(environment.operatingSystem)
-        - 架构：\(environment.architecture)
-        - 会话：\(environment.sessionID)
-
-        ## 验证边界
-        \(reproductionLevel == .diagnosticOnly ? "代码回归可以验证；真实配置源未提供，真实源修复状态必须保持为未验证。" : "请分别记录自动化回归、打包 App 验证与真实源验证结果。")
-        """
+        return L10n.text("## 复现资料\n- 复现等级：{0}\n- 公开复现源：{1}\n- 配置指纹：{2}\n- 输入类型：{3}\n- 适配器：{4}\n- Provider：{5}\n- 站点键指纹：{6}\n- 最近失败阶段：{7}\n- 最近错误分类：{8}\n- 用户选择分类：{9}\n\n## 运行环境\n- NetVplayer：{10} ({11})\n- macOS：{12}\n- 架构：{13}\n- 会话：{14}\n\n## 验证边界\n{15}", ["\(reproductionLevel.title)", "\(publicSource?.absoluteString ?? "未提供")", "\(sourceContext.configFingerprint ?? "无")", "\(sourceContext.inputKind ?? "无")", "\(sourceContext.adapterID ?? "无")", "\(provider.isEmpty ? "无" : provider)", "\(sourceContext.siteKeyFingerprint ?? "无")", "\(sourceContext.failureStage ?? "无")", "\(sourceContext.errorCategory?.rawValue ?? "无")", "\(draft.category.failureCategory.rawValue)", "\(environment.appVersion)", "\(environment.buildNumber)", "\(environment.operatingSystem)", "\(environment.architecture)", "\(environment.sessionID)", "\(reproductionLevel == .diagnosticOnly ? "代码回归可以验证；真实配置源未提供，真实源修复状态必须保持为未验证。" : "请分别记录自动化回归、打包 App 验证与真实源验证结果。")"])
     }
 
     private static func safeUserText(_ value: String, fallback: String = "") -> String {
@@ -441,7 +397,7 @@ public enum FeedbackReportBuilder {
     private static func boundedAttachment(prefix: String, diagnosticLog: String) -> String {
         let complete = prefix + diagnosticLog
         guard complete.utf8.count > FeedbackReport.maximumAttachmentBytes else { return complete }
-        let marker = "\n[REPORT_TRUNCATED] 日志已按 2 MiB 上限截断。\n"
+        let marker = L10n.text("\n[REPORT_TRUNCATED] 日志已按 2 MiB 上限截断。\n")
         let availableLogBytes = max(
             0,
             FeedbackReport.maximumAttachmentBytes - prefix.utf8.count - marker.utf8.count
@@ -468,7 +424,7 @@ public enum FeedbackReportBuilder {
 public enum GitHubIssueDraftError: Error, LocalizedError, Sendable, Equatable {
     case invalidRepositoryURL
 
-    public var errorDescription: String? { "反馈仓库地址无效" }
+    public var errorDescription: String? { L10n.text("反馈仓库地址无效") }
 }
 
 public struct GitHubIssueHandoff: Sendable, Equatable {

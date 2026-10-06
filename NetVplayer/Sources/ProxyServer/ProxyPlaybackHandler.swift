@@ -25,12 +25,149 @@ private actor QuarkHLSNormalizationState {
     }
 }
 
+private actor PlaybackPrefetchResponseCache {
+    static let shared = PlaybackPrefetchResponseCache()
+
+    private struct Entry {
+        let response: ProxyResponse
+        let storedAt: Date
+    }
+
+    private let ttl: TimeInterval = 90
+    private let absoluteMaxBytes = 16 * 1024 * 1024
+    private var budgetBytes = 16 * 1024 * 1024
+    private var entries: [String: Entry] = [:]
+    private var bytes = 0
+    private var generation = 0
+    private var expiryTask: Task<Void, Never>?
+
+    func response(for params: [String: String], now: Date = Date()) -> ProxyResponse? {
+        removeExpired(now: now)
+        return entries[Self.key(for: params)]?.response
+    }
+
+    @discardableResult
+    func store(_ response: ProxyResponse, for params: [String: String], now: Date = Date()) -> Bool {
+        removeExpired(now: now)
+        guard (200..<300).contains(response.statusCode),
+              !response.data.isEmpty,
+              Self.isCacheable(contentType: response.contentType),
+              response.data.count <= 16 * 1024 * 1024 else {
+            return false
+        }
+        let key = Self.key(for: params)
+        let previousBytes = entries[key]?.response.data.count ?? 0
+        guard bytes - previousBytes + response.data.count <= budgetBytes else { return false }
+        bytes -= previousBytes
+        entries[key] = Entry(response: response, storedAt: now)
+        bytes += response.data.count
+        scheduleExpiry()
+        return true
+    }
+
+    func clear() {
+        expiryTask?.cancel()
+        expiryTask = nil
+        generation &+= 1
+        entries.removeAll(keepingCapacity: false)
+        bytes = 0
+        budgetBytes = absoluteMaxBytes
+    }
+
+    func reset(byteLimit: Int) {
+        expiryTask?.cancel()
+        expiryTask = nil
+        generation &+= 1
+        entries.removeAll(keepingCapacity: false)
+        bytes = 0
+        budgetBytes = min(absoluteMaxBytes, max(1, byteLimit))
+    }
+
+    func snapshot() -> (bytes: Int, entries: Int) {
+        removeExpired(now: Date())
+        return (bytes, entries.count)
+    }
+
+    private func removeExpired(now: Date) {
+        let expiredKeys = entries.compactMap { key, entry in
+            now.timeIntervalSince(entry.storedAt) > ttl ? key : nil
+        }
+        for key in expiredKeys {
+            if let entry = entries[key] {
+                bytes -= entry.response.data.count
+            }
+            entries[key] = nil
+        }
+    }
+
+    private static func key(for params: [String: String]) -> String {
+        let semanticKeys = [
+            "url", "u64", "header", "h64", "hls", "hs64", "qctx", "stream", "__downstream_range",
+        ]
+        let value = semanticKeys.map { "\($0)=\(params[$0] ?? "")" }.joined(separator: "&")
+        return SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func isCacheable(contentType: String) -> Bool {
+        let normalized = contentType.lowercased()
+        return normalized.contains("mpegurl")
+            || normalized.hasPrefix("video/")
+            || normalized.hasPrefix("audio/")
+            || normalized.contains("application/octet-stream")
+    }
+
+    private func scheduleExpiry() {
+        expiryTask?.cancel()
+        let expectedGeneration = generation
+        expiryTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 90_000_000_000)
+            } catch {
+                return
+            }
+            await self?.expire(generation: expectedGeneration)
+        }
+    }
+
+    private func expire(generation expectedGeneration: Int) {
+        guard generation == expectedGeneration else { return }
+        entries.removeAll(keepingCapacity: false)
+        bytes = 0
+        expiryTask = nil
+    }
+}
+
+public struct HLSPlaybackPrefetchResult: Sendable, Equatable {
+    public let cachedBytes: Int
+    public let cachedResponses: Int
+    public let mediaSegments: Int
+    public let isStaticMediaPlaylist: Bool
+
+    public init(
+        cachedBytes: Int,
+        cachedResponses: Int,
+        mediaSegments: Int,
+        isStaticMediaPlaylist: Bool
+    ) {
+        self.cachedBytes = cachedBytes
+        self.cachedResponses = cachedResponses
+        self.mediaSegments = mediaSegments
+        self.isStaticMediaPlaylist = isStaticMediaPlaylist
+    }
+}
+
 public struct ProxyPlaybackHandlers {
     public let buffered: ProxyHandler
+    public let prefetched: ProxyHandler
     public let streaming: ProxyStreamingHandler
 
-    public init(buffered: @escaping ProxyHandler, streaming: @escaping ProxyStreamingHandler) {
+    public init(
+        buffered: @escaping ProxyHandler,
+        prefetched: @escaping ProxyHandler,
+        streaming: @escaping ProxyStreamingHandler
+    ) {
         self.buffered = buffered
+        self.prefetched = prefetched
         self.streaming = streaming
     }
 }
@@ -48,6 +185,14 @@ public enum ProxyPlaybackHandler {
         let normalizationState = QuarkHLSNormalizationState()
         return ProxyPlaybackHandlers(
             buffered: makeBuffered(httpClient: httpClient, normalizationState: normalizationState),
+            prefetched: { params in
+                guard params["preload"] != "1" else { return nil }
+                let response = await PlaybackPrefetchResponseCache.shared.response(for: params)
+                if let response {
+                    DiagnosticLog.write("[NEXT_PRELOAD_HLS_HIT] bytes=\(response.data.count)")
+                }
+                return response
+            },
             streaming: makeStreaming(
                 httpClient: httpClient,
                 normalizationState: normalizationState,
@@ -61,6 +206,11 @@ public enum ProxyPlaybackHandler {
         normalizationState: QuarkHLSNormalizationState
     ) -> ProxyHandler {
         return { params in
+            if params["preload"] != "1",
+               let cached = await PlaybackPrefetchResponseCache.shared.response(for: params) {
+                DiagnosticLog.write("[NEXT_PRELOAD_HLS_HIT] bytes=\(cached.data.count)")
+                return cached
+            }
             guard let urlStr = targetURL(from: params), !urlStr.isEmpty else { return nil }
             let requestURLString = hmysSignedURL(urlStr, encodedSecret: params["hs64"])
             let targetURL = try ProxyAccessPolicy.validateTargetURL(requestURLString)
@@ -90,7 +240,7 @@ public enum ProxyPlaybackHandler {
 
             var responseData = response.data
             if params["hls"] == "1",
-               let unwrapped = unwrapPNGPrefixedMPEGTS(response.data) {
+               let unwrapped = unwrapPNGPrefixedMPEGTS(response.data) ?? unwrapJPEGPrefixedMPEGTS(response.data) {
                 responseData = unwrapped
                 contentType = "video/mp2t"
                 responseHeaders.removeValue(forKey: "Content-Range")
@@ -112,13 +262,17 @@ public enum ProxyPlaybackHandler {
                 DiagnosticLog.write("[PROXY_M3U8_REWRITE] \(upstreamLogLabel(targetURL)) originalBytes=\(response.data.count) rewrittenBytes=\(responseData.count)")
             }
 
-            return ProxyResponse(
+            let proxyResponse = ProxyResponse(
                 statusCode: response.statusCode,
                 contentType: contentType,
                 data: responseData,
                 headers: responseHeaders,
                 closeConnection: params["hls"] == "1"
             )
+            if params["preload"] == "1" {
+                _ = await PlaybackPrefetchResponseCache.shared.store(proxyResponse, for: params)
+            }
+            return proxyResponse
         }
     }
 
@@ -165,6 +319,106 @@ public enum ProxyPlaybackHandler {
                 sendBody: sendBody
             )
         }
+    }
+
+    public static func prefetchStaticHLS(
+        localURL: String,
+        byteLimit: Int = 16 * 1024 * 1024,
+        maxSegments: Int = 2,
+        httpClient: HTTPClient = .shared
+    ) async throws -> HLSPlaybackPrefetchResult? {
+        guard byteLimit > 0,
+              maxSegments > 0,
+              let components = URLComponents(string: localURL),
+              let host = components.host?.lowercased(),
+              host == "127.0.0.1" || host == "localhost",
+              components.port == ProxyServer.shared.port,
+              components.path.hasPrefix("/proxy") else {
+            return nil
+        }
+
+        try await PlaybackBackgroundBudget.shared.waitForBackgroundPermission()
+        let byteLimit = min(byteLimit, Int(PlaybackTransferProfile.backgroundByteLimit))
+        await PlaybackPrefetchResponseCache.shared.reset(byteLimit: byteLimit)
+        let playlistResponse = try await fetchLocalPreload(
+            preloadURL(localURL),
+            httpClient: httpClient
+        )
+        guard (200..<300).contains(playlistResponse.statusCode),
+              let playlist = String(data: playlistResponse.data, encoding: .utf8),
+              playlist.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") else {
+            await PlaybackPrefetchResponseCache.shared.clear()
+            return nil
+        }
+
+        let isMaster = playlist.localizedCaseInsensitiveContains("#EXT-X-STREAM-INF")
+        let hasByteRanges = playlist.localizedCaseInsensitiveContains("#EXT-X-BYTERANGE")
+        let isStatic = playlist.localizedCaseInsensitiveContains("#EXT-X-ENDLIST")
+            && !isMaster
+            && !hasByteRanges
+        var mediaSegments = 0
+        if isStatic {
+            let segmentURLs = playlist
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+                .filter { raw in
+                    guard let url = URL(string: raw),
+                          let segmentHost = url.host?.lowercased() else { return false }
+                    return segmentHost == "127.0.0.1" || segmentHost == "localhost"
+                }
+                .prefix(maxSegments)
+
+            for segmentURL in segmentURLs {
+                try await PlaybackBackgroundBudget.shared.waitForBackgroundPermission()
+                let before = await PlaybackPrefetchResponseCache.shared.snapshot().bytes
+                guard before < byteLimit else { break }
+                let response = try await fetchLocalPreload(
+                    preloadURL(segmentURL),
+                    httpClient: httpClient
+                )
+                guard (200..<300).contains(response.statusCode) else { continue }
+                let after = await PlaybackPrefetchResponseCache.shared.snapshot().bytes
+                if after > before { mediaSegments += 1 }
+            }
+        }
+
+        let snapshot = await PlaybackPrefetchResponseCache.shared.snapshot()
+        DiagnosticLog.write(
+            "[NEXT_PRELOAD_HLS] static=\(isStatic) segments=\(mediaSegments) cachedBytes=\(snapshot.bytes) entries=\(snapshot.entries)"
+        )
+        return HLSPlaybackPrefetchResult(
+            cachedBytes: snapshot.bytes,
+            cachedResponses: snapshot.entries,
+            mediaSegments: mediaSegments,
+            isStaticMediaPlaylist: isStatic
+        )
+    }
+
+    public static func clearPrefetchedPlaybackResponses() async {
+        await PlaybackPrefetchResponseCache.shared.clear()
+    }
+
+    private static func preloadURL(_ rawURL: String) -> String {
+        guard var components = URLComponents(string: rawURL) else { return rawURL }
+        var items = components.queryItems ?? []
+        items.removeAll { $0.name == "preload" }
+        items.append(URLQueryItem(name: "preload", value: "1"))
+        components.queryItems = items
+        return components.url?.absoluteString ?? rawURL
+    }
+
+    private static func fetchLocalPreload(
+        _ url: String,
+        httpClient: HTTPClient
+    ) async throws -> HTTPResponse {
+        try await httpClient.request(
+            url: url,
+            method: .get,
+            timeout: 15,
+            allowsProxyFallback: false,
+            redactsURLInLogs: true
+        )
     }
 
     private static func streamQuarkSignedHLSChild(
@@ -421,6 +675,11 @@ public enum ProxyPlaybackHandler {
         allowsProxyFallback: Bool = true
     ) async throws -> HTTPResponse {
         let validatedURL = try ProxyAccessPolicy.validateTargetURL(url.absoluteString)
+        if let response = try await HLSIPv6Recovery.response(
+            for: validatedURL, headers: headers, httpClient: httpClient, timeout: timeout
+        ) {
+            return response
+        }
         let response = try await httpClient.request(
             url: validatedURL.absoluteString,
             method: .get,
@@ -536,8 +795,9 @@ public enum ProxyPlaybackHandler {
         })
     }
 
-    private static func upstreamLogLabel(_ url: URL) -> String {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+    static func upstreamLogLabel(_ url: URL) -> String {
+        let redacted = XtreamLogRedaction.redact(url.absoluteString)
+        guard var components = URLComponents(string: redacted) else {
             return "upstream"
         }
         components.query = nil
@@ -549,6 +809,13 @@ public enum ProxyPlaybackHandler {
         let lowerURL = url.lowercased()
         let lowerContentType = contentType.lowercased()
         return lowerContentType.contains("mpegurl") || lowerURL.contains(".m3u8")
+    }
+
+    public static func recoveryPlaylist(_ playlist: String, baseURL: String, headers: [String: String]) -> String? {
+        guard let headerData = try? JSONSerialization.data(withJSONObject: headers),
+              let header = String(data: headerData, encoding: .utf8),
+              let data = rewriteM3U8(data: Data(playlist.utf8), baseURL: baseURL, header: header) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     private static func rewriteM3U8(
@@ -698,7 +965,11 @@ public enum ProxyPlaybackHandler {
         if let url = URL(string: targetURL), isQuarkSignedHLSChildURL(url) {
             relayHeader = "{}"
         } else {
-            relayHeader = hlsChildRelayHeader(for: targetURL, inheritedHeader: header)
+            relayHeader = hlsChildRelayHeader(
+                for: targetURL,
+                baseURL: baseURL,
+                inheritedHeader: header
+            )
         }
         var proxyComponents = URLComponents()
         proxyComponents.scheme = "http"
@@ -764,19 +1035,49 @@ public enum ProxyPlaybackHandler {
         return target.url?.absoluteString ?? targetURL
     }
 
-    private static func hlsChildRelayHeader(for targetURL: String, inheritedHeader: String) -> String {
-        guard let host = URL(string: targetURL)?.host?.lowercased(),
-              host == "xhscdn.com" || host.hasSuffix(".xhscdn.com"),
-              let data = inheritedHeader.data(using: .utf8),
-              var headers = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+    static func hlsChildRelayHeader(
+        for targetURL: String,
+        baseURL: String,
+        inheritedHeader: String
+    ) -> String {
+        guard let data = inheritedHeader.data(using: .utf8),
+              var headers = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+              let target = URL(string: targetURL),
+              let base = URL(string: baseURL) else {
             return inheritedHeader
         }
-        headers = headers.filter { key, _ in
-            key.caseInsensitiveCompare("Referer") != .orderedSame
+
+        func effectivePort(_ url: URL) -> Int {
+            url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80)
+        }
+        let sameOrigin = target.scheme?.lowercased() == base.scheme?.lowercased()
+            && target.host?.lowercased() == base.host?.lowercased()
+            && effectivePort(target) == effectivePort(base)
+        if !sameOrigin {
+            let allowed: Set<String> = [
+                "user-agent", "referer", "origin", "accept", "accept-language",
+                "range", "icy-metadata",
+            ]
+            headers = headers.filter { key, _ in
+                allowed.contains(key.lowercased())
+            }
+        }
+        // This NewCz playlist uses image-hosted TS segments that reject its player Referer.
+        let isNewCzImageSegment = base.scheme?.lowercased() == "https"
+            && base.host?.lowercased() == "m3hlsm3.py1080p.com" && base.port == 907
+            && base.pathExtension.lowercased() == "m3u8"
+            && target.scheme?.lowercased() == "https"
+            && target.host?.lowercased() == "p.ananas.chaoxing.com"
+            && target.pathExtension.lowercased() == "jpg"
+        if let host = target.host?.lowercased(),
+           host == "xhscdn.com" || host.hasSuffix(".xhscdn.com") || isNewCzImageSegment {
+            headers = headers.filter { key, _ in
+                key.caseInsensitiveCompare("Referer") != .orderedSame
+            }
         }
         guard let sanitizedData = try? JSONSerialization.data(withJSONObject: headers, options: [.sortedKeys]),
               let sanitized = String(data: sanitizedData, encoding: .utf8) else {
-            return inheritedHeader
+            return "{}"
         }
         return sanitized
     }
@@ -804,6 +1105,28 @@ public enum ProxyPlaybackHandler {
         let pathExtension = URL(string: targetURL)?.pathExtension.lowercased() ?? ""
         let relayExtension = supportedExtensions.contains(pathExtension) ? pathExtension : fallbackExtension
         return "/proxy.\(relayExtension)"
+    }
+
+    private static func unwrapJPEGPrefixedMPEGTS(_ data: Data) -> Data? {
+        let prefixEnd = data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> Int? in
+            // Some HLS sources prepend a short JPEG envelope to TS packets.
+            // Require the JPEG boundary and three complete aligned TS packets;
+            // ordinary images, partial responses and arbitrary prefixes stay intact.
+            guard bytes.count >= 4 + 188 * 3,
+                  bytes[0] == 0xFF, bytes[1] == 0xD8 else { return nil }
+            let limit = min(64 * 1024, bytes.count - 188 * 3)
+            for offset in 4...limit {
+                if bytes[offset - 2] == 0xFF, bytes[offset - 1] == 0xD9,
+                   bytes[offset] == 0x47,
+                   bytes[offset + 188] == 0x47,
+                   bytes[offset + 376] == 0x47 {
+                    return offset
+                }
+            }
+            return nil
+        }
+        guard let prefixEnd else { return nil }
+        return data.subdata(in: prefixEnd..<data.count)
     }
 
     private static func unwrapPNGPrefixedMPEGTS(_ data: Data) -> Data? {

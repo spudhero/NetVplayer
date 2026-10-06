@@ -41,7 +41,15 @@ enum PlayerVisualRegressionCaptureController {
         renderingWindow = window
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            capture(window: window, configuration: configuration)
+            if configuration.state == .chapterNavigation || configuration.state == .chapterPreview {
+                // Initial libmpv property observations can publish duration=0 before any load.
+                configuration.apply(to: appState)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    capture(window: window, configuration: configuration)
+                }
+            } else {
+                capture(window: window, configuration: configuration)
+            }
         }
     }
 

@@ -5,6 +5,8 @@ import Foundation
 import DriveEngine
 import Models
 import Networking
+import FileServiceEngine
+import Storage
 
 public struct AListNativeProvider: SiteContentProvider {
     private let httpClient: HTTPClient
@@ -124,6 +126,9 @@ public struct AListNativeProvider: SiteContentProvider {
         guard !url.isEmpty else {
             throw SpiderEngineError.nativeReplacementUnsupported(site: "csp_AList", capability: "missing raw_url")
         }
+        if let target = URL(string: url), let server = URL(string: request.server), !sameHTTPOrigin(target, server) {
+            headers = headers.filter { !["authorization", "cookie", "proxy-authorization"].contains($0.key.lowercased()) }
+        }
         return AListPlaybackLink(url: url, headers: headers, subs: request.subs)
     }
 
@@ -159,17 +164,23 @@ public struct AListNativeProvider: SiteContentProvider {
     }
 
     private func list(drive: AListDrive, path: String) async throws -> [AListItem] {
-        var drive = drive
-        let response = try await postJSON(
-            url: drive.server.appendingPathComponent("/api/fs/list"),
-            body: ["path": normalizedPath(path), "password": drive.password(for: path), "page": 1, "per_page": 200],
-            headers: drive.headers,
-            drive: drive
-        )
-        if let updatedHeaders = response.updatedHeaders {
-            drive.headers.merge(updatedHeaders) { _, new in new }
-        }
-        return items(from: response.object)
+        let client = try protocolClient(drive: drive)
+        let entries = try await client.allEntries(path: normalizedPath(path))
+        return entries.compactMap { AListItem(["name": $0.name, "path": $0.path, "is_dir": $0.isDirectory,
+            "size": $0.size, "modified": $0.modifiedAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""]) }
+    }
+
+    private func protocolClient(drive: AListDrive) throws -> AListClient {
+        let httpClient = httpClient
+        var passwords = ["/": drive.password]
+        for item in drive.pathPasswords { passwords[item.path] = item.password }
+        return try AListClient(configuration: .init(name: drive.name, kind: .alist, address: drive.server),
+            credentials: .init(username: drive.loginUsername, password: drive.loginPassword, directoryPasswords: passwords),
+            additionalHeaders: drive.headers) { url, method, headers, body in
+                let response = try await httpClient.post(url: url.absoluteString, headers: headers, body: body ?? Data(), timeout: 30)
+                guard let http = HTTPURLResponse(url: response.finalURL ?? url, statusCode: response.statusCode, httpVersion: nil, headerFields: response.headers) else { throw HTTPError.invalidResponse }
+                return (response.data, http)
+            }
     }
 
     private func search(drive: AListDrive, keyword: String, page: String) async throws -> [AListItem] {
@@ -193,6 +204,13 @@ public struct AListNativeProvider: SiteContentProvider {
     }
 
     private func postJSON(url: String, body: [String: Any], headers: [String: String], drive: AListDrive? = nil) async throws -> AListPostResponse {
+        if let drive, let requestedURL = URL(string: url), let server = URL(string: drive.server) {
+            let client = try protocolClient(drive: drive)
+            let endpoint = String(requestedURL.path.dropFirst(server.path.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let data = try await client.requestJSON(endpoint: endpoint, body: JSONSerialization.data(withJSONObject: body))
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw HTTPError.invalidResponse }
+            return AListPostResponse(object: object, updatedHeaders: await client.authenticatedHeaders())
+        }
         let data = try JSONSerialization.data(withJSONObject: body)
         var requestHeaders = headers
         requestHeaders["Content-Type"] = "application/json; charset=utf-8"
@@ -232,7 +250,7 @@ public struct AListNativeProvider: SiteContentProvider {
         }
         let token = firstString(data, keys: ["token"])
         guard !token.isEmpty else { return nil }
-        return ["Authorization": token.hasPrefix("Bearer ") ? token : "Bearer \(token)"]
+        return ["Authorization": token]
     }
 
     private func items(from response: [String: Any]) -> [AListItem] {
@@ -1023,23 +1041,10 @@ public struct WebDAVNativeProvider: SiteContentProvider {
     }
 
     private func propfind(drive: WebDAVDrive, path: String) async throws -> [WebDAVItem] {
-        guard let url = URL(string: URLHelper.resolve(base: drive.server.ensureTrailingSlash(), relative: normalizedPath(path).dropFirstSlash())) else {
-            throw SpiderEngineError.nativeReplacementUnsupported(site: "csp_WebDAV", capability: "invalid URL")
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "PROPFIND"
-        request.setValue("1", forHTTPHeaderField: "Depth")
-        for (key, value) in drive.headers { request.setValue(value, forHTTPHeaderField: key) }
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw HTTPError.invalidResponse
-        }
-        if let allowedOrigin {
-            guard let finalURL = httpResponse.url, sameOrigin(finalURL, allowedOrigin) else {
-                throw HTTPError.originMismatch
-            }
-        }
-        return WebDAVItem.parse(data: data, basePath: normalizedPath(path))
+        if let allowedOrigin, let server = URL(string: drive.server), !sameOrigin(server, allowedOrigin) { throw HTTPError.originMismatch }
+        let client = try WebDAVClient(configuration: .init(name: drive.name, kind: .webDAV, address: drive.server), session: session, additionalHeaders: drive.headers)
+        let entries = try await client.allEntries(path: normalizedPath(path))
+        return entries.map { WebDAVItem(name: $0.name, path: $0.path, isDirectory: $0.isDirectory, size: $0.size, modified: $0.modifiedAt) }
     }
 
     private func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
@@ -1281,7 +1286,7 @@ private struct AListDrive: Sendable {
         guard !name.isEmpty, !server.isEmpty else { return nil }
         var headers = (dict["headers"] as? [String: String]) ?? (dict["header"] as? [String: String]) ?? [:]
         if let token = dict["token"] as? String, !token.isEmpty {
-            headers["Authorization"] = token.hasPrefix("Bearer ") ? token : "Bearer \(token)"
+            headers["Authorization"] = token
         }
         let login = dict["login"] as? [String: Any]
         let pathPasswords = (dict["params"] as? [[String: Any]] ?? []).compactMap(AListPathPassword.init)
@@ -1508,6 +1513,11 @@ private func sameServer(_ lhs: String, _ rhs: String) -> Bool {
     let left = lhs.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
     let right = rhs.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
     return !left.isEmpty && left == right
+}
+
+private func sameHTTPOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+    lhs.scheme?.lowercased() == rhs.scheme?.lowercased() && lhs.host?.lowercased() == rhs.host?.lowercased()
+        && (lhs.port ?? (lhs.scheme == "https" ? 443 : 80)) == (rhs.port ?? (rhs.scheme == "https" ? 443 : 80))
 }
 
 private func firstString(_ dict: [String: Any], keys: [String]) -> String {

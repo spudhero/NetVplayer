@@ -2,6 +2,7 @@
 
 #include <dlfcn.h>
 #include <limits.h>
+#include <math.h>
 #include <mach-o/dyld.h>
 #include <mpv/client.h>
 #include <mpv/render.h>
@@ -18,12 +19,78 @@ struct NVMPVContext {
     char loaded_path[PATH_MAX];
 };
 
+typedef struct NVJSONBuffer {
+    char *data;
+    size_t length;
+    int failed;
+} NVJSONBuffer;
+
+static void json_append(NVJSONBuffer *buffer, const char *text, size_t length) {
+    if (buffer->failed) { return; }
+    if (length > 1024 * 1024 - buffer->length) { buffer->failed = 1; return; }
+    memcpy(buffer->data + buffer->length, text, length);
+    buffer->length += length;
+    buffer->data[buffer->length] = 0;
+}
+
+static void json_string(NVJSONBuffer *buffer, const char *text) {
+    json_append(buffer, "\"", 1);
+    for (const unsigned char *p = (const unsigned char *)(text ? text : ""); *p && !buffer->failed; p++) {
+        if (*p == '"' || *p == '\\') {
+            char escaped[2] = {'\\', (char)*p};
+            json_append(buffer, escaped, 2);
+        } else if (*p < 32) {
+            char escaped[7];
+            snprintf(escaped, sizeof(escaped), "\\u%04x", *p);
+            json_append(buffer, escaped, 6);
+        } else {
+            json_append(buffer, (const char *)p, 1);
+        }
+    }
+    json_append(buffer, "\"", 1);
+}
+
+static void json_node(NVJSONBuffer *buffer, const mpv_node *node, int depth) {
+    if (depth > 16 || buffer->failed) { buffer->failed = 1; return; }
+    char number[64];
+    switch (node->format) {
+        case MPV_FORMAT_STRING: json_string(buffer, node->u.string); break;
+        case MPV_FORMAT_FLAG: json_append(buffer, node->u.flag ? "true" : "false", node->u.flag ? 4 : 5); break;
+        case MPV_FORMAT_INT64:
+            snprintf(number, sizeof(number), "%lld", (long long)node->u.int64);
+            json_append(buffer, number, strlen(number)); break;
+        case MPV_FORMAT_DOUBLE:
+            if (!isfinite(node->u.double_)) { json_append(buffer, "null", 4); break; }
+            snprintf(number, sizeof(number), "%.17g", node->u.double_);
+            json_append(buffer, number, strlen(number)); break;
+        case MPV_FORMAT_NODE_ARRAY:
+        case MPV_FORMAT_NODE_MAP: {
+            const mpv_node_list *list = node->u.list;
+            if (!list || list->num < 0 || list->num > 4096) { buffer->failed = 1; return; }
+            int map = node->format == MPV_FORMAT_NODE_MAP;
+            json_append(buffer, map ? "{" : "[", 1);
+            for (int i = 0; i < list->num && !buffer->failed; i++) {
+                if (i) { json_append(buffer, ",", 1); }
+                if (map) { json_string(buffer, list->keys[i]); json_append(buffer, ":", 1); }
+                json_node(buffer, &list->values[i], depth + 1);
+            }
+            json_append(buffer, map ? "}" : "]", 1);
+            break;
+        }
+        default: json_append(buffer, "null", 4); break;
+    }
+}
+
 typedef mpv_handle *(*mpv_create_fn)(void);
 typedef int (*mpv_initialize_fn)(mpv_handle *);
 typedef void (*mpv_terminate_destroy_fn)(mpv_handle *);
 typedef int (*mpv_set_option_fn)(mpv_handle *, const char *, mpv_format, void *);
 typedef int (*mpv_set_option_string_fn)(mpv_handle *, const char *, const char *);
+typedef int (*mpv_get_property_fn)(mpv_handle *, const char *, mpv_format, void *);
+typedef void (*mpv_free_node_contents_fn)(mpv_node *);
+typedef void (*mpv_free_fn)(void *);
 typedef int (*mpv_set_property_fn)(mpv_handle *, const char *, mpv_format, void *);
+typedef int (*mpv_set_property_async_fn)(mpv_handle *, uint64_t, const char *, mpv_format, void *);
 typedef int (*mpv_set_property_string_fn)(mpv_handle *, const char *, const char *);
 typedef int (*mpv_command_fn)(mpv_handle *, const char **);
 typedef int (*mpv_command_async_fn)(mpv_handle *, uint64_t, const char **);
@@ -44,7 +111,11 @@ static mpv_initialize_fn p_mpv_initialize = NULL;
 static mpv_terminate_destroy_fn p_mpv_terminate_destroy = NULL;
 static mpv_set_option_fn p_mpv_set_option = NULL;
 static mpv_set_option_string_fn p_mpv_set_option_string = NULL;
+static mpv_get_property_fn p_mpv_get_property = NULL;
+static mpv_free_node_contents_fn p_mpv_free_node_contents = NULL;
+static mpv_free_fn p_mpv_free = NULL;
 static mpv_set_property_fn p_mpv_set_property = NULL;
+static mpv_set_property_async_fn p_mpv_set_property_async = NULL;
 static mpv_set_property_string_fn p_mpv_set_property_string = NULL;
 static mpv_command_fn p_mpv_command = NULL;
 static mpv_command_async_fn p_mpv_command_async = NULL;
@@ -131,7 +202,11 @@ static int load_symbols(void *library, NVMPVContext *context) {
     if (!load_symbol(library, "mpv_terminate_destroy", (void **)&p_mpv_terminate_destroy)) { set_error(context, "libmpv 缺少 mpv_terminate_destroy"); return 0; }
     if (!load_symbol(library, "mpv_set_option", (void **)&p_mpv_set_option)) { set_error(context, "libmpv 缺少 mpv_set_option"); return 0; }
     if (!load_symbol(library, "mpv_set_option_string", (void **)&p_mpv_set_option_string)) { set_error(context, "libmpv 缺少 mpv_set_option_string"); return 0; }
+    if (!load_symbol(library, "mpv_get_property", (void **)&p_mpv_get_property)) { set_error(context, "libmpv lacks mpv_get_property"); return 0; }
+    if (!load_symbol(library, "mpv_free_node_contents", (void **)&p_mpv_free_node_contents)) { set_error(context, "libmpv lacks mpv_free_node_contents"); return 0; }
+    if (!load_symbol(library, "mpv_free", (void **)&p_mpv_free)) { set_error(context, "libmpv lacks mpv_free"); return 0; }
     if (!load_symbol(library, "mpv_set_property", (void **)&p_mpv_set_property)) { set_error(context, "libmpv 缺少 mpv_set_property"); return 0; }
+    if (!load_symbol(library, "mpv_set_property_async", (void **)&p_mpv_set_property_async)) { set_error(context, "libmpv 缺少 mpv_set_property_async"); return 0; }
     if (!load_symbol(library, "mpv_set_property_string", (void **)&p_mpv_set_property_string)) { set_error(context, "libmpv 缺少 mpv_set_property_string"); return 0; }
     if (!load_symbol(library, "mpv_command", (void **)&p_mpv_command)) { set_error(context, "libmpv 缺少 mpv_command"); return 0; }
     if (!load_symbol(library, "mpv_command_async", (void **)&p_mpv_command_async)) { set_error(context, "libmpv 缺少 mpv_command_async"); return 0; }
@@ -246,6 +321,46 @@ int nv_mpv_set_property_flag(NVMPVContext *context, const char *name, int value)
     return code;
 }
 
+int nv_mpv_set_property_double_async(NVMPVContext *context, uint64_t reply_userdata, const char *name, double value) {
+    if (!context || !context->handle || !p_mpv_set_property_async) { return -1; }
+    int code = p_mpv_set_property_async(context->handle, reply_userdata, name, MPV_FORMAT_DOUBLE, &value);
+    if (code < 0) { set_mpv_error(context, code); }
+    return code;
+}
+
+int nv_mpv_set_property_flag_async(NVMPVContext *context, uint64_t reply_userdata, const char *name, int value) {
+    if (!context || !context->handle || !p_mpv_set_property_async) { return -1; }
+    int code = p_mpv_set_property_async(context->handle, reply_userdata, name, MPV_FORMAT_FLAG, &value);
+    if (code < 0) { set_mpv_error(context, code); }
+    return code;
+}
+
+int nv_mpv_get_media_track_counts(NVMPVContext *context, int64_t *audio_count, int64_t *video_count) {
+    if (!audio_count || !video_count) { return -1; }
+    *audio_count = 0;
+    *video_count = 0;
+    if (!context || !context->handle || !p_mpv_get_property || !p_mpv_free_node_contents) { return -1; }
+    mpv_node tracks = {0};
+    int code = p_mpv_get_property(context->handle, "track-list", MPV_FORMAT_NODE, &tracks);
+    if (code < 0) { return code; }
+    if (tracks.format != MPV_FORMAT_NODE_ARRAY || !tracks.u.list) {
+        p_mpv_free_node_contents(&tracks);
+        return -1;
+    }
+    for (int i = 0; i < tracks.u.list->num; i++) {
+        mpv_node *track = &tracks.u.list->values[i];
+        if (track->format != MPV_FORMAT_NODE_MAP || !track->u.list) { continue; }
+        for (int j = 0; j < track->u.list->num; j++) {
+            mpv_node *value = &track->u.list->values[j];
+            if (strcmp(track->u.list->keys[j], "type") != 0 || value->format != MPV_FORMAT_STRING) { continue; }
+            if (strcmp(value->u.string, "audio") == 0) { (*audio_count)++; }
+            if (strcmp(value->u.string, "video") == 0) { (*video_count)++; }
+        }
+    }
+    p_mpv_free_node_contents(&tracks);
+    return 0;
+}
+
 static int run_command(NVMPVContext *context, const char **args) {
     if (!context || !context->handle || !p_mpv_command) { return -1; }
     int code = p_mpv_command(context->handle, args);
@@ -298,7 +413,9 @@ int nv_mpv_command4(NVMPVContext *context, const char *arg0, const char *arg1, c
 }
 
 int nv_mpv_clear_http_headers(NVMPVContext *context) {
-    return nv_mpv_set_property_string(context, "http-header-fields", "");
+    // An empty string creates one empty list item and terminates HTTP headers early.
+    const char *args[] = { "change-list", "http-header-fields", "clr", "", NULL };
+    return run_command(context, args);
 }
 
 int nv_mpv_append_http_header(NVMPVContext *context, const char *header) {
@@ -309,6 +426,39 @@ int nv_mpv_append_http_header(NVMPVContext *context, const char *header) {
 int nv_mpv_observe_double(NVMPVContext *context, uint64_t userdata, const char *name) {
     if (!context || !context->handle || !p_mpv_observe_property) { return -1; }
     int code = p_mpv_observe_property(context->handle, userdata, name, MPV_FORMAT_DOUBLE);
+    if (code < 0) { set_mpv_error(context, code); }
+    return code;
+}
+
+char *nv_mpv_copy_property_json(NVMPVContext *context, const char *name) {
+    if (!context || !context->handle || !p_mpv_get_property || !p_mpv_free_node_contents) { return NULL; }
+    mpv_node value = {0};
+    int code = p_mpv_get_property(context->handle, name, MPV_FORMAT_NODE, &value);
+    if (code < 0) { set_mpv_error(context, code); return NULL; }
+    NVJSONBuffer buffer = {calloc(1024 * 1024 + 1, 1), 0, 0};
+    if (buffer.data) { json_node(&buffer, &value, 0); }
+    p_mpv_free_node_contents(&value);
+    if (!buffer.data || buffer.failed) { free(buffer.data); return NULL; }
+    return buffer.data;
+}
+
+void nv_mpv_free_string(char *value) { free(value); }
+
+char *nv_mpv_copy_property_string(NVMPVContext *context, const char *name) {
+    if (!context || !context->handle || !p_mpv_get_property || !p_mpv_free) { return NULL; }
+    char *value = NULL;
+    int code = p_mpv_get_property(context->handle, name, MPV_FORMAT_STRING, &value);
+    if (code < 0) { return NULL; }
+    size_t size = value ? strnlen(value, 1024 * 1024 + 1) : 0;
+    char *copy = size <= 1024 * 1024 ? calloc(size + 1, 1) : NULL;
+    if (copy && size) { memcpy(copy, value, size); }
+    p_mpv_free(value);
+    return copy;
+}
+
+int nv_mpv_observe_change(NVMPVContext *context, uint64_t userdata, const char *name) {
+    if (!context || !context->handle || !p_mpv_observe_property) { return -1; }
+    int code = p_mpv_observe_property(context->handle, userdata, name, MPV_FORMAT_NONE);
     if (code < 0) { set_mpv_error(context, code); }
     return code;
 }

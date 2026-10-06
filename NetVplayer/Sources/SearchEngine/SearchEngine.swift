@@ -268,6 +268,7 @@ public final class SearchEngine: @unchecked Sendable {
     public let maxConcurrentSites: Int
     private let searchContent: @Sendable (Site, String, Bool, String) async throws -> Result
     private let operationLimiter: SearchOperationLimiter
+    private let responseCache = SearchResponseCache()
 
     public init(siteApi: SiteApi = .shared, maxConcurrentSites: Int = 6) {
         self.maxConcurrentSites = max(1, maxConcurrentSites)
@@ -287,7 +288,8 @@ public final class SearchEngine: @unchecked Sendable {
     }
 
     /// 多站点并发搜索，返回 AsyncStream 渐进式渲染
-    public func search(keyword: String, sites: [Site], page: String = "1", quick: Bool = false) -> AsyncStream<SearchResult> {
+    public func search(keyword: String, sites: [Site], page: String = "1", quick: Bool = false,
+                       cacheScope: String? = nil, bypassCache: Bool = false) -> AsyncStream<SearchResult> {
         AsyncStream { continuation in
             let producer = Task {
                 let searchableSites = sites.filter { $0.isSearchable && (!quick || $0.isQuickSearch) }
@@ -296,14 +298,14 @@ public final class SearchEngine: @unchecked Sendable {
                     var nextSiteIndex = 0
                     let initialCount = min(maxConcurrentSites, searchableSites.count)
                     for site in searchableSites.prefix(initialCount) {
-                        group.addTask { [searchContent, operationLimiter] in
-                            await Self.searchSite(
+                        group.addTask { [self] in
+                            await self.searchSiteWithCache(
                                 site,
                                 keyword: keyword,
                                 page: page,
                                 quick: quick,
-                                operationLimiter: operationLimiter,
-                                searchContent: searchContent
+                                cacheScope: cacheScope,
+                                bypassCache: bypassCache
                             )
                         }
                         nextSiteIndex += 1
@@ -318,14 +320,14 @@ public final class SearchEngine: @unchecked Sendable {
                         if nextSiteIndex < searchableSites.count, !Task.isCancelled {
                             let site = searchableSites[nextSiteIndex]
                             nextSiteIndex += 1
-                            group.addTask { [searchContent, operationLimiter] in
-                                await Self.searchSite(
+                            group.addTask { [self] in
+                                await self.searchSiteWithCache(
                                     site,
                                     keyword: keyword,
                                     page: page,
                                     quick: quick,
-                                    operationLimiter: operationLimiter,
-                                    searchContent: searchContent
+                                    cacheScope: cacheScope,
+                                    bypassCache: bypassCache
                                 )
                             }
                         }
@@ -338,6 +340,30 @@ public final class SearchEngine: @unchecked Sendable {
                 producer.cancel()
             }
         }
+    }
+
+    public func invalidateSearchCache() async { await responseCache.clear() }
+
+    private func searchSiteWithCache(
+        _ site: Site, keyword: String, page: String, quick: Bool,
+        cacheScope: String?, bypassCache: Bool
+    ) async -> SearchResult {
+        let key = cacheScope.map { SearchResponseCacheKey(scope: $0, site: site,
+            keyword: keyword, page: page, quick: quick) }
+        var revision: UInt64 = 0
+        var writer = UUID()
+        if let key {
+            let lookup = await responseCache.lookup(key, bypass: bypassCache)
+            revision = lookup.revision
+            writer = lookup.writer
+            if let result = lookup.result, !Task.isCancelled { return result }
+        }
+        let result = await Self.searchSite(site, keyword: keyword, page: page, quick: quick,
+            operationLimiter: operationLimiter, searchContent: searchContent)
+        if let key, !Task.isCancelled {
+            await responseCache.insert(result, for: key, revision: revision, writer: writer)
+        }
+        return result
     }
 
     private static func searchSite(
@@ -372,6 +398,7 @@ public final class SearchEngine: @unchecked Sendable {
                 searchContent: searchContent
             )
             var result = original
+            var effectiveKeyword = plan.original
             if requestedPage == 1,
                let fallback = plan.fallback,
                !SearchTitleNormalizer.hasMeaningfulMatch(original.list, keyword: plan.original) {
@@ -387,7 +414,10 @@ public final class SearchEngine: @unchecked Sendable {
                             operationLimiter: operationLimiter,
                             searchContent: searchContent
                         )
-                        result = merged(original: original, fallback: fallbackResult, siteKey: site.key)
+                        if !fallbackResult.list.isEmpty {
+                            result = merged(original: original, fallback: fallbackResult, siteKey: site.key)
+                            effectiveKeyword = fallback
+                        }
                         DiagnosticLog.write(
                             "[SEARCH_SITE_FALLBACK] site=\(site.name) key=\(site.key) original=\(plan.original) fallback=\(fallback) list=\(fallbackResult.list.count)"
                         )
@@ -400,14 +430,16 @@ public final class SearchEngine: @unchecked Sendable {
                     }
                 }
             }
-            let resultPage = result.page > 0 ? result.page : requestedPage
+            let resultPage = result.pageIsKnown ? result.page : requestedPage
             let searchResult = SearchResult(
                 siteName: site.name,
                 siteKey: site.key,
                 vods: result.list,
                 page: resultPage,
-                hasMore: result.pagecount > resultPage,
-                durationMs: durationMs()
+                hasMore: result.pageCountIsKnown ? result.pagecount > resultPage : !result.list.isEmpty,
+                durationMs: durationMs(),
+                effectiveKeyword: effectiveKeyword,
+                pageCountIsKnown: result.pageCountIsKnown
             )
             DiagnosticLog.write("[SEARCH_SITE_RESULT] site=\(site.name) key=\(site.key) list=\(result.list.count) page=\(resultPage)")
             return searchResult
@@ -418,7 +450,8 @@ public final class SearchEngine: @unchecked Sendable {
                 error: error.localizedDescription,
                 errorCategory: Self.category(for: error),
                 page: requestedPage,
-                durationMs: durationMs()
+                durationMs: durationMs(),
+                effectiveKeyword: keyword
             )
             DiagnosticLog.write("[SEARCH_SITE_RESULT] site=\(site.name) key=\(site.key) list=0 error=\(error.localizedDescription)")
             return searchResult
@@ -480,8 +513,10 @@ public final class SearchEngine: @unchecked Sendable {
                 : "\(source)|\(vod.vodId)"
             return seen.insert(identity).inserted
         }
-        result.page = max(original.page, fallback.page)
-        result.pagecount = max(original.pagecount, fallback.pagecount)
+        result.page = fallback.page
+        result.pageIsKnown = fallback.pageIsKnown
+        result.pagecount = fallback.pagecount
+        result.pageCountIsKnown = fallback.pageCountIsKnown
         result.total = max(result.list.count, max(original.total, fallback.total))
         return result
     }

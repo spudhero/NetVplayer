@@ -233,11 +233,25 @@ private final class QuickJSRealHTTPFixture {
         try Data(
             """
             from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+            import time
 
             class Handler(BaseHTTPRequestHandler):
                 protocol_version = "HTTP/1.0"
 
                 def do_GET(self):
+                    if self.path in {"/download-known", "/download-unknown"}:
+                        self.send_response(200)
+                        if self.path == "/download-known":
+                            self.send_header("Content-Length", str(2 * 1024 * 1024))
+                        self.end_headers()
+                        try:
+                            for _ in range(32):
+                                self.wfile.write(b"x" * 65536)
+                                self.wfile.flush()
+                                time.sleep(0.02)
+                        except (BrokenPipeError, ConnectionResetError):
+                            pass
+                        return
                     if self.path == "/redirect":
                         body = b"redirect-body"
                         self.send_response(302)
@@ -333,6 +347,88 @@ private actor ProviderProgressRecorder {
     func downloadFractions() -> [Double] {
         values.compactMap(\.fractionCompleted)
     }
+
+    func events() -> [ProviderInstallProgress] { values }
+}
+
+@Test(arguments: [true, false])
+func providerDownloadReportsRealIntermediateBytesBeforeCompletion(knownSize: Bool) async throws {
+    let fixture = try QuickJSRealHTTPFixture()
+    let destination = FileManager.default.temporaryDirectory.appendingPathComponent("provider-progress-\(UUID()).zip")
+    defer { try? FileManager.default.removeItem(at: destination) }
+    let recorder = ProviderProgressRecorder()
+    let delegate = ProviderDownloadProgressDelegate(
+        providerID: "fixture.progress", version: "1.0.0", maximumBytes: 4 * 1024 * 1024,
+        destination: destination, progress: { await recorder.append($0) }
+    )
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.connectionProxyDictionary = [:]
+    let path = knownSize ? "download-known" : "download-unknown"
+    let request = URLRequest(url: URL(string: "http://127.0.0.1:\(fixture.port)/\(path)")!)
+    let (downloaded, _) = try await delegate.download(for: request, configuration: configuration)
+    await delegate.drain()
+    let events = await recorder.events()
+    let totalBytes: Int64 = 2_097_152
+    let finalProgress = try #require(events.last)
+    #expect(events.first?.receivedBytes == 0)
+    #expect(events.contains { $0.receivedBytes > 0 && $0.receivedBytes < 2 * 1024 * 1024 })
+    #expect(finalProgress.receivedBytes == totalBytes)
+    #expect(events.dropFirst().allSatisfy { $0.expectedBytes == (knownSize ? 2 * 1024 * 1024 : nil) })
+    #expect(zip(events, events.dropFirst()).allSatisfy { $0.receivedBytes <= $1.receivedBytes })
+    #expect(try Data(contentsOf: downloaded) == Data(repeating: 120, count: 2 * 1024 * 1024))
+}
+
+@Test func providerDownloadCancelsWhenRealResponseExceedsTheLimit() async throws {
+    let fixture = try QuickJSRealHTTPFixture()
+    let destination = FileManager.default.temporaryDirectory.appendingPathComponent("provider-limit-\(UUID()).zip")
+    defer { try? FileManager.default.removeItem(at: destination) }
+    let delegate = ProviderDownloadProgressDelegate(
+        providerID: "fixture.limit", version: "1.0.0", maximumBytes: 64 * 1024,
+        destination: destination, progress: { _ in }
+    )
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.connectionProxyDictionary = [:]
+    let request = URLRequest(url: URL(string: "http://127.0.0.1:\(fixture.port)/download-known")!)
+    await #expect(throws: URLError.self) {
+        try await delegate.download(for: request, configuration: configuration)
+    }
+    #expect(delegate.exceededLimit())
+    #expect(!FileManager.default.fileExists(atPath: destination.path))
+}
+
+@Test func providerDownloadParentCancellationStopsTheTaskAndRemovesTemporaryData() async throws {
+    let fixture = try QuickJSRealHTTPFixture()
+    let destination = FileManager.default.temporaryDirectory.appendingPathComponent("provider-cancel-\(UUID()).zip")
+    defer { try? FileManager.default.removeItem(at: destination) }
+    let delegate = ProviderDownloadProgressDelegate(
+        providerID: "fixture.cancel", version: "1.0.0", maximumBytes: 4 * 1024 * 1024,
+        destination: destination, progress: { _ in }
+    )
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.connectionProxyDictionary = [:]
+    let request = URLRequest(url: URL(string: "http://127.0.0.1:\(fixture.port)/download-known")!)
+    let task = Task { try await delegate.download(for: request, configuration: configuration) }
+    try await Task.sleep(for: .milliseconds(100))
+    task.cancel()
+    do {
+        _ = try await task.value
+        Issue.record("The cancelled download must not complete")
+    } catch {
+        #expect(error is CancellationError || (error as? URLError)?.code == .cancelled)
+    }
+    #expect(!FileManager.default.fileExists(atPath: destination.path))
+}
+
+private actor ProviderSyncRecorder {
+    enum Event: Equatable {
+        case catalog([ProviderRelease])
+        case progress(ProviderInstallProgress)
+        case failure(ProviderRuntimeSyncFailure)
+    }
+
+    private var values: [Event] = []
+    func append(_ event: Event) { values.append(event) }
+    func events() -> [Event] { values }
 }
 
 private func makeSignedProviderArchive(
@@ -3010,6 +3106,45 @@ private func signedDistributionDocument(
     #expect(command.environment["NETVPLAYER_PROVIDER_STATE"] == state.path)
 }
 
+@Test func commandBuilderDisablesPythonBytecodeWritesInIsolatedMode() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("provider-python-command-\(UUID().uuidString)", isDirectory: true)
+    let state = root.appendingPathComponent("state", isDirectory: true)
+    let runtime = root.appendingPathComponent("runtimes/cpython/bin/python3")
+    let runner = root.appendingPathComponent("runner.pyc")
+    let entrypoint = root.appendingPathComponent("provider.pyc")
+    try FileManager.default.createDirectory(at: runtime.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data().write(to: runtime)
+    try Data().write(to: runner)
+    try Data().write(to: entrypoint)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = ProviderManifest(
+        providerID: "fixture.python",
+        version: "1.0.0",
+        shellMinimumVersion: "1.0.0",
+        architectures: [ProviderManifestVerifier.currentArchitecture],
+        runtime: .python,
+        entrypoint: "provider.pyc",
+        runner: "runner.pyc",
+        runtimeExecutable: "runtimes/cpython/bin/python3",
+        providerClass: "Spider",
+        capabilities: [.home],
+        assets: [],
+        license: "fixture-only"
+    )
+
+    let command = try ProviderCommandBuilder.command(
+        manifest: manifest,
+        packageRoot: root,
+        stateDirectoryURL: state
+    )
+    #expect(command.arguments == [
+        "-I", "-B", "-S", runner.path, "--provider", entrypoint.path, "--class", "Spider",
+    ])
+    #expect(command.environment["PYTHONDONTWRITEBYTECODE"] == "1")
+}
+
 @Test func commandBuilderWrapsQuickJSCosmopolitanRuntimeWithShell() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("provider-quickjs-command-\(UUID().uuidString)", isDirectory: true)
@@ -3314,7 +3449,23 @@ private func signedDistributionDocument(
         distributionIndexURL: indexURL
     )
 
-    let first = try await bootstrap.synchronizeAvailableProviders()
+    let recorder = ProviderSyncRecorder()
+    let first = try await bootstrap.synchronizeAvailableProviders(
+        onCatalogLoaded: { catalog in
+            #expect(ProviderFixtureURLProtocol.requestCount(for: v2URL) == 0)
+            await recorder.append(.catalog(catalog))
+        },
+        onInstallFailure: { await recorder.append(.failure($0)) },
+        progress: { await recorder.append(.progress($0)) }
+    )
+    let events = await recorder.events()
+    #expect(events.first == .progress(ProviderInstallProgress(
+        providerID: "providers", version: "latest", phase: .fetchingCatalog
+    )))
+    #expect(events.dropFirst().first == .catalog([releases[1]]))
+    #expect(events.last == .progress(ProviderInstallProgress(
+        providerID: "fixture.distribution", version: "2.0.0", phase: .completed
+    )))
     #expect(first.catalog.count == 2)
     let indexRequest = try #require(ProviderFixtureURLProtocol.recordedRequest(for: indexURL))
     #expect(indexRequest.cachePolicy == .reloadIgnoringLocalCacheData)
@@ -3359,11 +3510,47 @@ private func signedDistributionDocument(
         distributionVerifier: distributionVerifier,
         distributionIndexURL: indexURL
     )
-    let rejected = try await restricted.synchronizeAvailableProviders()
+    let failures = ProviderSyncRecorder()
+    let rejected = try await restricted.synchronizeAvailableProviders(
+        onInstallFailure: { await failures.append(.failure($0)) }
+    )
     #expect(rejected.installed.isEmpty)
     #expect(rejected.installedOrUpdated.isEmpty)
     #expect(rejected.failures.count == 1)
     #expect(rejected.failures[0].message == ProviderManagerError.sourcePolicyMismatch.localizedDescription)
+    #expect(await failures.events() == [.failure(rejected.failures[0])])
+
+    // Two invalid package identities must report errors immediately and still allow a later component to install.
+    var brokenFirst = releases[1]
+    brokenFirst.providerID = "broken.first"
+    var brokenSecond = releases[1]
+    brokenSecond.providerID = "broken.second"
+    let mixedReleases = [releases[1], brokenSecond, brokenFirst]
+    ProviderFixtureURLProtocol.install([
+        indexURL: .init(statusCode: 200, data: try signedDistributionDocument(
+            releases: mixedReleases, privateKey: distributionKey
+        )),
+        v2URL: .init(statusCode: 200, data: try Data(contentsOf: v2Archive)),
+    ])
+    let mixedRecorder = ProviderSyncRecorder()
+    let mixed = try await restricted.synchronizeAvailableProviders(
+        onCatalogLoaded: { await mixedRecorder.append(.catalog($0)) },
+        onInstallFailure: { await mixedRecorder.append(.failure($0)) },
+        progress: { await mixedRecorder.append(.progress($0)) }
+    )
+    #expect(mixed.failures.map(\.release.providerID) == ["broken.first", "broken.second"])
+    #expect(mixed.installedOrUpdated.map(\.providerID) == ["fixture.distribution"])
+    let mixedEvents = await mixedRecorder.events()
+    #expect(mixedEvents.dropFirst().first == .catalog([brokenFirst, brokenSecond, releases[1]]))
+    let lastFailureIndex = try #require(mixedEvents.lastIndex {
+        if case .failure = $0 { return true }
+        return false
+    })
+    let successfulInstallIndex = try #require(mixedEvents.firstIndex {
+        if case .progress(let progress) = $0 { return progress.providerID == "fixture.distribution" }
+        return false
+    })
+    #expect(lastFailureIndex < successfulInstallIndex)
     await restricted.shutdown()
 }
 

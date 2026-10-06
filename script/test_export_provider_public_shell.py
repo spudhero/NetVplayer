@@ -354,6 +354,7 @@ class ProviderPublicExportTests(unittest.TestCase):
                 ".github/ISSUE_TEMPLATE/config.yml": "blank_issues_enabled: true\n",
                 "NetVplayer/Sources/SpiderEngine/RemoteSiteContentProvider.swift": "public struct Remote {}\n",
                 "NetVplayer/Sources/SpiderEngine/BiliNativeProvider.swift": "private\n",
+                "NetVplayer/Sources/SpiderEngine/FileServiceNativeProvider.swift": "public adapter\n",
                 "NetVplayer/Tests/ConfigEngineTests/ExternalSourceCompatibilityTests.swift": "private test\n",
                 "FongMi/Spider.java": "reference\n",
                 "private-providers/example/provider.py": "private\n",
@@ -385,6 +386,7 @@ class ProviderPublicExportTests(unittest.TestCase):
             self.assertFalse((output / "FongMi").exists())
             self.assertFalse((output / "private-providers").exists())
             self.assertFalse((output / "NetVplayer/Sources/SpiderEngine/BiliNativeProvider.swift").exists())
+            self.assertTrue((output / "NetVplayer/Sources/SpiderEngine/FileServiceNativeProvider.swift").is_file())
             self.assertTrue(build_report(output)["summary"]["release_ready"])
 
     def test_export_rejects_dirty_source_unless_preview_is_explicit(self) -> None:

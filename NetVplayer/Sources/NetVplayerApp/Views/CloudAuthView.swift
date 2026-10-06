@@ -67,11 +67,15 @@ enum CloudAuthQRCodePayloadSignature {
 
 struct CloudAuthView: View {
     enum AuthMode: String, CaseIterable, Identifiable {
-        case qr = "应用扫码"
-        case web = "网页扫码"
-        case cookie = "粘贴登录信息"
-
+        case qr, web, cookie
         var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .qr: L10n.text("应用扫码")
+            case .web: L10n.text("网页扫码")
+            case .cookie: L10n.text("粘贴登录信息")
+            }
+        }
     }
 
     let request: CloudAuthRequest
@@ -121,6 +125,7 @@ struct CloudAuthView: View {
             Divider()
             footer
         }
+        .themedPresentation()
         .onAppear {
             if !availableModes.contains(mode), let first = availableModes.first {
                 mode = first
@@ -131,23 +136,23 @@ struct CloudAuthView: View {
                 mode = CloudAuthStepPolicy.initialStep(provider: .uc) == .webCookie ? .web : .qr
                 statusMessage = pendingShareNeedsCookie
                     ? pendingShareCookieMessage
-                    : "网页扫码一次保存 UC Cookie；播放时会先请求原文件，失败后才降级。"
+                    : L10n.text("网页扫码一次保存 UC Cookie；播放时会先请求原文件，失败后才降级。")
             } else if request.provider == .ali {
                 mode = .web
-                statusMessage = "使用阿里云盘 App 扫码登录，成功后会自动保存 Token。"
+                statusMessage = L10n.text("使用阿里云盘 App 扫码登录，成功后会自动保存 Token。")
                 refreshAliWebLogin()
             } else if request.provider == .p115 {
                 mode = CloudAuthStepPolicy.initialStep(provider: .p115) == .webCookie ? .web : .cookie
-                statusMessage = "请打开 115生活 App，在 App 内使用“扫一扫”登录。"
+                statusMessage = L10n.text("请打开 115生活 App，在 App 内使用“扫一扫”登录。")
                 refreshP115WebLogin()
             } else if request.provider == .baidu {
                 mode = .qr
-                statusMessage = "请使用百度网盘 App 扫码，确认后会自动继续当前播放。"
+                statusMessage = L10n.text("请使用百度网盘 App 扫码，确认后会自动继续当前播放。")
             } else if pendingShareNeedsCookie {
                 mode = request.provider == .uc ? .web : .cookie
                 statusMessage = pendingShareCookieMessage
             } else if request.pendingEpisodeURL != nil {
-                statusMessage = "\(request.provider.displayName) 分享播放会优先使用 Cookie。"
+                statusMessage = L10n.text("{0} 分享播放会优先使用 Cookie。", ["\(request.provider.localizedDisplayName)"])
             }
             startQRCodeAuthIfNeeded()
             if request.provider == .uc, mode == .web {
@@ -220,18 +225,18 @@ struct CloudAuthView: View {
     }
 
     private func authModeTitle(_ mode: AuthMode) -> String {
-        if request.provider == .baidu, mode == .qr { return "扫码登录" }
+        if request.provider == .baidu, mode == .qr { return L10n.text("扫码登录") }
         if request.provider == .p115 {
-            return mode == .web ? "扫码登录" : "粘贴 Cookie"
+            return mode == .web ? L10n.text("扫码登录") : L10n.text("粘贴 Cookie")
         }
-        guard request.provider == .ali else { return mode.rawValue }
+        guard request.provider == .ali else { return mode.title }
         switch mode {
         case .web:
-            return "扫码登录"
+            return L10n.text("扫码登录")
         case .cookie:
-            return "粘贴 Token"
+            return L10n.text("粘贴 Token")
         case .qr:
-            return mode.rawValue
+            return mode.title
         }
     }
 
@@ -242,7 +247,7 @@ struct CloudAuthView: View {
                 .foregroundStyle(palette.accent)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(request.provider.displayName) 授权")
+                Text(L10n.text("{0} 授权", ["\(request.provider.localizedDisplayName)"]))
                     .font(.headline)
                 Text(authSubtitle)
                     .font(.caption)
@@ -257,7 +262,7 @@ struct CloudAuthView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.borderless)
-            .help("关闭")
+            .help(L10n.text("关闭"))
         }
         .padding(16)
     }
@@ -265,17 +270,17 @@ struct CloudAuthView: View {
     private var authSubtitle: String {
         switch request.provider {
         case .quark:
-            return "扫码登录并保存 Cookie，验证成功后自动继续播放。"
+            return L10n.text("扫码登录并保存 Cookie，验证成功后自动继续播放。")
         case .uc:
-            return "优先用一次网页扫码保存 Cookie；原文件不可用时才降级播放。"
+            return L10n.text("优先用一次网页扫码保存 Cookie；原文件不可用时才降级播放。")
         case .ali:
-            return "使用阿里云盘 App 扫码登录，成功后自动保存 Token。"
+            return L10n.text("使用阿里云盘 App 扫码登录，成功后自动保存 Token。")
         case .p115:
-            return "请使用 115生活 App 内的“扫一扫”，不要使用微信或系统相机。"
+            return L10n.text("请使用 115生活 App 内的“扫一扫”，不要使用微信或系统相机。")
         case .baidu:
-            return "使用百度网盘 App 扫码确认，登录成功后自动继续播放。"
+            return L10n.text("使用百度网盘 App 扫码确认，登录成功后自动继续播放。")
         default:
-            return "授权信息验证成功后才会保存。"
+            return L10n.text("授权信息验证成功后才会保存。")
         }
     }
 
@@ -297,7 +302,7 @@ struct CloudAuthView: View {
                             Button {
                                 refreshQRCode()
                             } label: {
-                                Label("刷新 Token 码", systemImage: "arrow.clockwise")
+                                Label(L10n.text("刷新 Token 码"), systemImage: "arrow.clockwise")
                             }
                             .buttonStyle(.bordered)
                             .disabled(isWorking)
@@ -305,7 +310,7 @@ struct CloudAuthView: View {
                             Button {
                                 showQuarkCookieQRCode()
                             } label: {
-                                Label("返回扫码登录", systemImage: "qrcode.viewfinder")
+                                Label(L10n.text("返回扫码登录"), systemImage: "qrcode.viewfinder")
                             }
                             .buttonStyle(.bordered)
                             .disabled(isWorking)
@@ -313,16 +318,16 @@ struct CloudAuthView: View {
                             Button {
                                 refreshQuarkWebQRCode()
                             } label: {
-                                Label("刷新二维码", systemImage: "arrow.clockwise")
+                                Label(L10n.text("刷新二维码"), systemImage: "arrow.clockwise")
                             }
                             .buttonStyle(.bordered)
                             .disabled(isWorking)
 
                             Button {
                                 quarkStep = .manualCookie
-                                statusMessage = "可手动粘贴夸克 Cookie；保存前会先验证。"
+                                statusMessage = L10n.text("可手动粘贴夸克 Cookie；保存前会先验证。")
                             } label: {
-                                Label("无法扫码？", systemImage: "doc.on.clipboard")
+                                Label(L10n.text("无法扫码？"), systemImage: "doc.on.clipboard")
                             }
                             .buttonStyle(.bordered)
                             .disabled(isWorking)
@@ -330,7 +335,7 @@ struct CloudAuthView: View {
                             Button {
                                 showQuarkCookieQRCode()
                             } label: {
-                                Label("返回扫码登录", systemImage: "qrcode.viewfinder")
+                                Label(L10n.text("返回扫码登录"), systemImage: "qrcode.viewfinder")
                             }
                             .buttonStyle(.bordered)
                             .disabled(isWorking)
@@ -341,13 +346,13 @@ struct CloudAuthView: View {
                         Button {
                             showQuarkTokenAuthorization()
                         } label: {
-                            Label("高级 Token 授权", systemImage: "externaldrive.badge.plus")
+                            Label(L10n.text("高级 Token 授权"), systemImage: "externaldrive.badge.plus")
                         }
                         .buttonStyle(.borderless)
                         .controlSize(.small)
                         .disabled(isWorking)
 
-                        Text("扫码确认后会自动读取并验证登录凭据。")
+                        Text(L10n.text("扫码确认后会自动读取并验证登录凭据。"))
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -405,7 +410,7 @@ struct CloudAuthView: View {
                 VStack(spacing: 10) {
                     ProgressView()
                         .controlSize(.large)
-                    Text(quarkStep == .webCookie ? "正在提取二维码" : "正在获取二维码")
+                    Text(quarkStep == .webCookie ? L10n.text("正在提取二维码") : L10n.text("正在获取二维码"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -436,22 +441,22 @@ struct CloudAuthView: View {
     private var quarkStepTitle: String {
         switch quarkStep {
         case .tvToken:
-            return "可选：授权 QuarkTV Token"
+            return L10n.text("可选：授权 QuarkTV Token")
         case .webCookie:
-            return "扫码登录夸克"
+            return L10n.text("扫码登录夸克")
         case .manualCookie:
-            return "手动粘贴夸克 Cookie"
+            return L10n.text("手动粘贴夸克 Cookie")
         }
     }
 
     private var quarkStepDescription: String {
         switch quarkStep {
         case .tvToken:
-            return "Token 用于个人网盘和后续 Open API 能力，不是分享播放的必要步骤。保存成功后会返回登录二维码。"
+            return L10n.text("Token 用于个人网盘和后续 Open API 能力，不是分享播放的必要步骤。保存成功后会返回登录二维码。")
         case .webCookie:
-            return "使用夸克 App 扫描并确认登录。成功后即可继续公开分享的播放、转存和下载。"
+            return L10n.text("使用夸克 App 扫描并确认登录。成功后即可继续公开分享的播放、转存和下载。")
         case .manualCookie:
-            return "如果二维码无法提取，可以粘贴 pan.quark.cn Cookie 作为兜底。"
+            return L10n.text("如果二维码无法提取，可以粘贴 pan.quark.cn Cookie 作为兜底。")
         }
     }
 
@@ -470,7 +475,7 @@ struct CloudAuthView: View {
                             .scaledToFit()
                             .frame(width: 214, height: 214)
                             .background(.white)
-                            .accessibilityLabel("登录二维码")
+                            .accessibilityLabel(L10n.text("登录二维码"))
                             .accessibilityIdentifier("cloud.auth.qrcode")
                     } else if isWorking {
                         ProgressView()
@@ -483,7 +488,7 @@ struct CloudAuthView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("使用\(request.provider.displayName) App 扫描二维码，并在手机上确认登录。")
+                    Text(L10n.text("使用{0} App 扫描二维码，并在手机上确认登录。", ["\(request.provider.localizedDisplayName)"]))
                         .font(.headline)
 
                     Text(qrTokenDescription)
@@ -495,13 +500,13 @@ struct CloudAuthView: View {
                         Button {
                             refreshQRCode()
                         } label: {
-                            Label("刷新二维码", systemImage: "arrow.clockwise")
+                            Label(L10n.text("刷新二维码"), systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.bordered)
                         .disabled(isWorking)
 
                         if qrSession != nil || baiduQRSession != nil {
-                            Label("等待确认", systemImage: "dot.radiowaves.left.and.right")
+                            Label(L10n.text("等待确认"), systemImage: "dot.radiowaves.left.and.right")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -511,9 +516,9 @@ struct CloudAuthView: View {
 
             if !CloudAuthQRCodeProviderPolicy.supportsLogin(request.provider) {
                 ContentUnavailableView(
-                    "暂不支持这种扫码方式",
+                    L10n.text("暂不支持这种扫码方式"),
                     systemImage: "externaldrive.badge.xmark",
-                    description: Text("请选择网页扫码或手动粘贴登录信息。")
+                    description: Text(L10n.text("请选择网页扫码或手动粘贴登录信息。"))
                 )
             }
         }
@@ -551,10 +556,10 @@ struct CloudAuthView: View {
                         ) { image in
                             if request.provider == .ali {
                                 aliWebQRImage = image
-                                statusMessage = "请使用阿里云盘 App 扫描二维码并确认登录。"
+                                statusMessage = L10n.text("请使用阿里云盘 App 扫描二维码并确认登录。")
                             } else {
                                 ucWebQRImage = image
-                                statusMessage = "请使用手机 UC 浏览器扫描二维码并确认登录。"
+                                statusMessage = L10n.text("请使用手机 UC 浏览器扫描二维码并确认登录。")
                             }
                         } onCookieSnapshot: { cookie in
                             if request.provider == .uc {
@@ -594,9 +599,9 @@ struct CloudAuthView: View {
                         VStack(spacing: 12) {
                             ProgressView()
                                 .controlSize(.large)
-                            Text("正在提取登录二维码")
+                            Text(L10n.text("正在提取登录二维码"))
                                 .font(.callout.weight(.semibold))
-                            Text("二维码加载完成后会自动显示。")
+                            Text(L10n.text("二维码加载完成后会自动显示。"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -623,7 +628,7 @@ struct CloudAuthView: View {
                         refreshUCWebLogin()
                     }
                 } label: {
-                    Label("刷新二维码", systemImage: "arrow.clockwise")
+                    Label(L10n.text("刷新二维码"), systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
                 .disabled(isWorking)
@@ -631,7 +636,7 @@ struct CloudAuthView: View {
                 Button {
                     mode = .cookie
                 } label: {
-                    Label(request.provider == .ali ? "粘贴 Token" : "手动粘贴", systemImage: "doc.on.clipboard")
+                    Label(request.provider == .ali ? L10n.text("粘贴 Token") : L10n.text("手动粘贴"), systemImage: "doc.on.clipboard")
                 }
                 .buttonStyle(.bordered)
                 .disabled(isWorking)
@@ -641,20 +646,20 @@ struct CloudAuthView: View {
 
     private var webLoginTitle: String {
         switch request.provider {
-        case .ali: return "阿里云盘扫码登录"
-        case .p115: return "115 扫码登录"
-        default: return "UC 网页扫码登录"
+        case .ali: return L10n.text("阿里云盘扫码登录")
+        case .p115: return L10n.text("115 扫码登录")
+        default: return L10n.text("UC 网页扫码登录")
         }
     }
 
     private var webLoginDescription: String {
         switch request.provider {
         case .ali:
-            return "扫码确认后自动读取阿里云盘登录 Token，并继续当前播放。"
+            return L10n.text("扫码确认后自动读取阿里云盘登录 Token，并继续当前播放。")
         case .p115:
-            return "使用 115生活 App 扫码确认后，自动读取并验证 Cookie。"
+            return L10n.text("使用 115生活 App 扫码确认后，自动读取并验证 Cookie。")
         default:
-            return "网页登录成功后保存 Cookie，Wogg UC 分享会使用它播放。"
+            return L10n.text("网页登录成功后保存 Cookie，Wogg UC 分享会使用它播放。")
         }
     }
 
@@ -671,47 +676,44 @@ struct CloudAuthView: View {
     }
 
     private var capturedWebCredentialLabel: String {
-        request.provider == .ali ? "已读取到 Token" : "已读取到 Cookie"
+        request.provider == .ali ? L10n.text("已读取到 Token") : L10n.text("已读取到 Cookie")
     }
 
     private var webLoginPrompt: String {
         if request.provider == .ali {
-            return isWorking ? "正在保存阿里云盘 Token..." : "请使用阿里云盘 App 扫码"
+            return isWorking ? L10n.text("正在保存阿里云盘 Token...") : L10n.text("请使用阿里云盘 App 扫码")
         }
         if request.provider == .p115 {
-            return isWorking ? "正在验证 115 账户..." : "打开 115生活 App → 扫一扫"
+            return isWorking ? L10n.text("正在验证 115 账户...") : L10n.text("打开 115生活 App → 扫一扫")
         }
-        return isWorking ? "正在验证个人盘账户..." : "请使用手机 UC 浏览器扫码"
+        return isWorking ? L10n.text("正在验证个人盘账户...") : L10n.text("请使用手机 UC 浏览器扫码")
     }
 
     private var webLoginConfirmationDescription: String {
         switch request.provider {
         case .ali:
-            return "确认登录后将自动保存 Token，无需手动粘贴。"
+            return L10n.text("确认登录后将自动保存 Token，无需手动粘贴。")
         case .p115:
-            return "请勿使用微信或系统相机；确认登录后将自动继续当前剧集。"
+            return L10n.text("请勿使用微信或系统相机；确认登录后将自动继续当前剧集。")
         default:
-            return "确认登录后将自动验证并继续转存，无需手动保存。"
+            return L10n.text("确认登录后将自动验证并继续转存，无需手动保存。")
         }
     }
 
     private var cookiePanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(manualAuthTitle)
-                .font(.headline)
-
             Text(manualAuthDescription)
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            SecureField(cookiePlaceholder, text: $manualCookie)
-                .textFieldStyle(.roundedBorder)
+            FormFieldLabel(title: manualAuthTitle, requirement: .required)
+            SettingsPasswordField(cookiePlaceholder, text: $manualCookie)
 
             HStack {
                 Button {
                     saveCookie()
                 } label: {
-                    Label(isWorking ? "保存中..." : manualAuthButtonTitle, systemImage: "checkmark.circle")
+                    Label(isWorking ? L10n.text("保存中...") : manualAuthButtonTitle, systemImage: "checkmark.circle")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(palette.accent)
@@ -720,7 +722,7 @@ struct CloudAuthView: View {
                 Button {
                     manualCookie = ""
                 } label: {
-                    Label("清空", systemImage: "trash")
+                    Label(L10n.text("清空"), systemImage: "trash")
                 }
                 .buttonStyle(.bordered)
                 .disabled(manualCookie.isEmpty || isWorking)
@@ -739,7 +741,7 @@ struct CloudAuthView: View {
 
             Spacer()
 
-            Button("关闭") {
+            Button(L10n.text("关闭")) {
                 dismiss()
             }
             .buttonStyle(.bordered)
@@ -787,17 +789,17 @@ struct CloudAuthView: View {
     private var cookiePlaceholder: String {
         switch request.provider {
         case .ali:
-            return "粘贴 refresh_token，或 access_token/open_token"
+            return L10n.text("粘贴 refresh_token，或 access_token/open_token")
         case .p115:
-            return "例如：UID=...; CID=...; SEID=..."
+            return L10n.text("例如：UID=...; CID=...; SEID=...")
         case .pikpak:
-            return "粘贴 access_token，或包含 access_token/refresh_token/device_id 的 JSON"
+            return L10n.text("粘贴 access_token，或包含 access_token/refresh_token/device_id 的 JSON")
         case .uc:
-            return "例如：__puus=...; ...（drive.uc.cn Cookie）"
+            return L10n.text("例如：__puus=...; ...（drive.uc.cn Cookie）")
         case .baidu:
-            return "例如：BDUSS=...; STOKEN=..."
+            return L10n.text("例如：BDUSS=...; STOKEN=...")
         default:
-            return "例如：kps=...; __puus=...; puus=..."
+            return L10n.text("例如：kps=...; __puus=...; puus=...")
         }
     }
 
@@ -829,19 +831,19 @@ struct CloudAuthView: View {
     private var pendingShareCookieMessage: String {
         switch request.provider {
         case .uc:
-            return "网页扫码一次保存 UC Cookie；随后会先请求个人盘原文件，失败后才使用智能播放或转码。"
+            return L10n.text("网页扫码一次保存 UC Cookie；随后会先请求个人盘原文件，失败后才使用智能播放或转码。")
         case .quark:
-            return "夸克分享播放需要 Cookie；扫码 Token 仅用于个人网盘登录。"
+            return L10n.text("夸克分享播放需要 Cookie；扫码 Token 仅用于个人网盘登录。")
         case .ali:
-            return "阿里云盘分享播放需要 refresh_token / access_token；也可到设置页分别填写。"
+            return L10n.text("阿里云盘分享播放需要 refresh_token / access_token；也可到设置页分别填写。")
         case .p115:
-            return "115 分享播放需要 115 Cookie。"
+            return L10n.text("115 分享播放需要 115 Cookie。")
         case .pikpak:
-            return "PikPak 播放需要 access_token；也可以在设置页填写 refresh_token/device_id。"
+            return L10n.text("PikPak 播放需要 access_token；也可以在设置页填写 refresh_token/device_id。")
         case .baidu:
-            return "百度网盘播放需要账号 Cookie；推荐直接扫码登录。"
+            return L10n.text("百度网盘播放需要账号 Cookie；推荐直接扫码登录。")
         default:
-            return "\(request.provider.displayName) 分享播放需要 Cookie。"
+            return L10n.text("{0} 分享播放需要 Cookie。", ["\(request.provider.localizedDisplayName)"])
         }
     }
 
@@ -851,7 +853,7 @@ struct CloudAuthView: View {
         lastAliWebTokenCandidate = ""
         webLoginReloadID = UUID()
         isWorking = false
-        statusMessage = "正在加载阿里云盘登录二维码..."
+        statusMessage = L10n.text("正在加载阿里云盘登录二维码...")
     }
 
     private func refreshP115WebLogin() {
@@ -861,7 +863,7 @@ struct CloudAuthView: View {
         webCookie = ""
         webLoginReloadID = UUID()
         isWorking = true
-        statusMessage = "正在生成 115 客户端登录二维码..."
+        statusMessage = L10n.text("正在生成 115 客户端登录二维码...")
         DiagnosticLog.write("[P115_AUTH] qrcode_session_started")
 
         Task {
@@ -870,7 +872,7 @@ struct CloudAuthView: View {
                 await MainActor.run {
                     p115QRSession = session
                     isWorking = false
-                    statusMessage = "请打开 115生活 App，在 App 内使用“扫一扫”并确认登录。"
+                    statusMessage = L10n.text("请打开 115生活 App，在 App 内使用“扫一扫”并确认登录。")
                     startP115QRCodePolling(session)
                 }
             } catch {
@@ -896,13 +898,13 @@ struct CloudAuthView: View {
                         break
                     case .scanned:
                         await MainActor.run {
-                            statusMessage = "二维码已扫描，请在 115生活 App 中确认登录。"
+                            statusMessage = L10n.text("二维码已扫描，请在 115生活 App 中确认登录。")
                         }
                     case .credential(let credential):
                         await MainActor.run {
                             isWorking = true
                             webCookie = credential.secret
-                            statusMessage = "扫码已确认，正在验证 115 账户..."
+                            statusMessage = L10n.text("扫码已确认，正在验证 115 账户...")
                             DiagnosticLog.write("[P115_AUTH] cookie_candidate_captured source=qrcode_api")
                         }
                         await complete(credential)
@@ -923,13 +925,13 @@ struct CloudAuthView: View {
     private var qrTokenDescription: String {
         switch request.provider {
         case .uc:
-            return "此扫码授权用于补充高清原片候选；普通分享播放仍以网页授权为主。"
+            return L10n.text("此扫码授权用于补充高清原片候选；普通分享播放仍以网页授权为主。")
         case .quark:
-            return "此扫码授权用于补充电视端播放能力；普通分享播放仍需要网页授权。"
+            return L10n.text("此扫码授权用于补充电视端播放能力；普通分享播放仍需要网页授权。")
         case .baidu:
-            return "扫码确认后保存百度网盘登录 Cookie，用于临时转存并获取原画直链。"
+            return L10n.text("扫码确认后保存百度网盘登录 Cookie，用于临时转存并获取原画直链。")
         default:
-            return "此扫码授权用于补充播放能力；分享链接仍会优先使用网页授权。"
+            return L10n.text("此扫码授权用于补充播放能力；分享链接仍会优先使用网页授权。")
         }
     }
 
@@ -942,7 +944,7 @@ struct CloudAuthView: View {
         lastUCWebCookieCandidate = ""
         webLoginReloadID = UUID()
         isWorking = true
-        statusMessage = "正在生成 UC 网盘登录二维码..."
+        statusMessage = L10n.text("正在生成 UC 网盘登录二维码...")
 
         Task {
             do {
@@ -950,7 +952,7 @@ struct CloudAuthView: View {
                 await MainActor.run {
                     ucWebQRImage = NSImage(data: session.qrImageData)
                     isWorking = false
-                    statusMessage = "请使用手机 UC 浏览器扫描二维码并确认登录。"
+                    statusMessage = L10n.text("请使用手机 UC 浏览器扫描二维码并确认登录。")
                     startUCWebLoginPolling(session)
                 }
             } catch {
@@ -974,7 +976,7 @@ struct CloudAuthView: View {
                     if let ticket = try await client.pollServiceTicket(token: session.token) {
                         await MainActor.run {
                             isWorking = true
-                            statusMessage = "扫码已确认，正在登录 UC 网盘并验证个人盘账户..."
+                            statusMessage = L10n.text("扫码已确认，正在登录 UC 网盘并验证个人盘账户...")
                         }
                         do {
                             let cookie = try await client.exchangeServiceTicketForCookie(ticket)
@@ -987,7 +989,7 @@ struct CloudAuthView: View {
                             await MainActor.run {
                                 isWorking = false
                                 ucWebLoginServiceTicket = ticket
-                                statusMessage = "UC 登录信息未能直接验证，正在尝试网页登录。"
+                                statusMessage = L10n.text("UC 登录信息未能直接验证，正在尝试网页登录。")
                             }
                         }
                         return
@@ -1007,7 +1009,7 @@ struct CloudAuthView: View {
         qrSession = nil
         baiduQRSession = nil
         isWorking = true
-        statusMessage = request.provider == .quark ? "正在获取 Token 二维码..." : "正在获取扫码二维码..."
+        statusMessage = request.provider == .quark ? L10n.text("正在获取 Token 二维码...") : L10n.text("正在获取扫码二维码...")
 
         Task {
             do {
@@ -1016,14 +1018,14 @@ struct CloudAuthView: View {
                     guard CloudAuthBaiduQRCodePresentation.image(from: session) != nil else {
                         await MainActor.run {
                             isWorking = false
-                            statusMessage = "百度返回的二维码图片无法识别，请刷新重试。"
+                            statusMessage = L10n.text("百度返回的二维码图片无法识别，请刷新重试。")
                         }
                         return
                     }
                     await MainActor.run {
                         baiduQRSession = session
                         isWorking = false
-                        statusMessage = "二维码已生成，请用百度网盘 App 扫码并确认登录。"
+                        statusMessage = L10n.text("二维码已生成，请用百度网盘 App 扫码并确认登录。")
                         startBaiduPolling(session)
                     }
                     return
@@ -1032,7 +1034,7 @@ struct CloudAuthView: View {
                 await MainActor.run {
                     qrSession = session
                     isWorking = false
-                    statusMessage = request.provider == .quark ? "Token 二维码已生成，请用夸克 App 扫码确认。" : "二维码已生成，请用\(request.provider.displayName) App 扫码确认。"
+                    statusMessage = request.provider == .quark ? L10n.text("Token 二维码已生成，请用夸克 App 扫码确认。") : L10n.text("二维码已生成，请用{0} App 扫码确认。", ["\(request.provider.localizedDisplayName)"])
                     startPolling(session)
                 }
             } catch {
@@ -1054,7 +1056,7 @@ struct CloudAuthView: View {
                     if let credential = try await BaiduQRLoginClient().poll(session) {
                         await MainActor.run {
                             isWorking = true
-                            statusMessage = "扫码已确认，正在验证百度网盘账户..."
+                            statusMessage = L10n.text("扫码已确认，正在验证百度网盘账户...")
                         }
                         await complete(credential)
                         return
@@ -1080,7 +1082,7 @@ struct CloudAuthView: View {
                     if let credential = try await QuarkTVDriver(provider: request.provider).pollQRCodeSession(session) {
                         await MainActor.run {
                             isWorking = true
-                            statusMessage = request.provider == .quark ? "Token 扫码已确认，正在验证..." : "扫码已确认，正在验证 Token..."
+                            statusMessage = request.provider == .quark ? L10n.text("Token 扫码已确认，正在验证...") : L10n.text("扫码已确认，正在验证 Token...")
                         }
                         await complete(credential)
                         return
@@ -1102,7 +1104,7 @@ struct CloudAuthView: View {
         quarkWebLoginTicketURL = nil
         quarkWebQRReloadID = UUID()
         isWorking = true
-        statusMessage = "正在生成夸克登录二维码..."
+        statusMessage = L10n.text("正在生成夸克登录二维码...")
 
         Task {
             do {
@@ -1110,7 +1112,7 @@ struct CloudAuthView: View {
                 await MainActor.run {
                     quarkWebQRImage = NSImage(data: session.qrImageData)
                     isWorking = false
-                    statusMessage = "二维码已生成，请用夸克 App 扫码确认。"
+                    statusMessage = L10n.text("二维码已生成，请用夸克 App 扫码确认。")
                     startQuarkWebLoginPolling(session)
                 }
             } catch {
@@ -1126,7 +1128,7 @@ struct CloudAuthView: View {
         pollingTask?.cancel()
         qrSession = nil
         quarkStep = .tvToken
-        statusMessage = "QuarkTV Token 是可选能力，不影响夸克分享播放。"
+        statusMessage = L10n.text("QuarkTV Token 是可选能力，不影响夸克分享播放。")
     }
 
     private func showQuarkCookieQRCode() {
@@ -1146,7 +1148,7 @@ struct CloudAuthView: View {
                         await MainActor.run {
                             quarkWebLoginTicketURL = CloudAuthQuarkWebLoginClient.ticketLoginURL(serviceTicket: ticket)
                             quarkWebQRReloadID = UUID()
-                            statusMessage = "扫码已确认，正在读取夸克 Cookie..."
+                            statusMessage = L10n.text("扫码已确认，正在读取夸克 Cookie...")
                         }
                         return
                     }
@@ -1163,7 +1165,7 @@ struct CloudAuthView: View {
         let cookie = manualCookie.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cookie.isEmpty else { return }
         isWorking = true
-        statusMessage = request.provider == .ali ? "正在保存 Token..." : "正在验证 Cookie..."
+        statusMessage = request.provider == .ali ? L10n.text("正在保存 Token...") : L10n.text("正在验证 Cookie...")
 
         Task {
             if request.provider == .ali {
@@ -1181,33 +1183,33 @@ struct CloudAuthView: View {
     private var manualAuthTitle: String {
         switch request.provider {
         case .ali:
-            return "粘贴阿里云盘 Token"
+            return L10n.text("粘贴阿里云盘 Token")
         case .pikpak:
-            return "粘贴 PikPak Token"
+            return L10n.text("粘贴 PikPak Token")
         case .baidu:
-            return "粘贴百度网盘 Cookie"
+            return L10n.text("粘贴百度网盘 Cookie")
         default:
-            return "粘贴 \(request.provider.displayName) Cookie"
+            return L10n.text("粘贴 {0} Cookie", ["\(request.provider.localizedDisplayName)"])
         }
     }
 
     private var manualAuthDescription: String {
         switch request.provider {
         case .ali:
-            return "可粘贴 refresh_token，或 access_token/open_token/default_drive_id；保存后在播放时由阿里接口校验。"
+            return L10n.text("可粘贴 refresh_token，或 access_token/open_token/default_drive_id；保存后在播放时由阿里接口校验。")
         case .p115:
-            return "115 分享播放使用 Cookie；Open API access_token 可选，用于转存后的个人文件转码。"
+            return L10n.text("115 分享播放使用 Cookie；Open API access_token 可选，用于转存后的个人文件转码。")
         case .pikpak:
-            return "可粘贴 access_token，或包含 access_token/refresh_token/device_id 的 JSON；保存后在播放时校验。"
+            return L10n.text("可粘贴 access_token，或包含 access_token/refresh_token/device_id 的 JSON；保存后在播放时校验。")
         case .baidu:
-            return "推荐使用扫码登录；手动粘贴时至少需要有效的 BDUSS，保存前会验证个人盘账户。"
+            return L10n.text("推荐使用扫码登录；手动粘贴时至少需要有效的 BDUSS，保存前会验证个人盘账户。")
         default:
-            return "\(request.provider.displayName) 分享播放优先使用 Cookie。保存前会调用网盘接口验证，验证失败不会写入。"
+            return L10n.text("{0} 分享播放优先使用 Cookie。保存前会调用网盘接口验证，验证失败不会写入。", ["\(request.provider.localizedDisplayName)"])
         }
     }
 
     private var manualAuthButtonTitle: String {
-        request.provider == .ali || request.provider == .pikpak ? "保存" : "验证并保存"
+        request.provider == .ali || request.provider == .pikpak ? L10n.text("保存") : L10n.text("验证并保存")
     }
 
     private static func p115Credential(from value: String) -> CloudCredential {
@@ -1255,7 +1257,7 @@ struct CloudAuthView: View {
 
         lastUCWebCookieCandidate = normalized
         isWorking = true
-        statusMessage = "检测到 UC 登录信息，正在验证个人盘账户..."
+        statusMessage = L10n.text("检测到 UC 登录信息，正在验证个人盘账户...")
 
         Task {
             do {
@@ -1273,7 +1275,7 @@ struct CloudAuthView: View {
                     isWorking = false
                     webCookie = ""
                     if CloudAuthCookieValidationPolicy.isGuestLoginError(error.localizedDescription) {
-                        statusMessage = "当前仍是 UC 访客状态，请扫描二维码并在手机上确认登录。"
+                        statusMessage = L10n.text("当前仍是 UC 访客状态，请扫描二维码并在手机上确认登录。")
                     } else {
                         statusMessage = authErrorMessage(error)
                     }
@@ -1291,13 +1293,13 @@ struct CloudAuthView: View {
 
         let credential = CloudAuthAliCredentialParser.credential(from: normalized)
         guard credential.refreshToken?.isEmpty == false || credential.accessToken?.isEmpty == false else {
-            statusMessage = "阿里云盘登录成功，但未读取到可用 Token，请刷新二维码重试。"
+            statusMessage = L10n.text("阿里云盘登录成功，但未读取到可用 Token，请刷新二维码重试。")
             return
         }
 
         lastAliWebTokenCandidate = normalized
         isWorking = true
-        statusMessage = "扫码已确认，正在保存阿里云盘 Token..."
+        statusMessage = L10n.text("扫码已确认，正在保存阿里云盘 Token...")
 
         Task {
             await complete(credential)
@@ -1311,7 +1313,7 @@ struct CloudAuthView: View {
         webCookie = normalized
         quarkWebCookieValidationStarted = true
         isWorking = true
-        statusMessage = "已读取到夸克 Cookie，正在验证..."
+        statusMessage = L10n.text("已读取到夸克 Cookie，正在验证...")
 
         Task {
             await complete(.cookie(provider: .quark, value: normalized))
@@ -1377,7 +1379,7 @@ struct CloudAuthView: View {
     private func authErrorMessage(_ error: Error) -> String {
         UserFacingErrorPresenter.message(
             for: error,
-            context: .authorization(providerName: request.provider.displayName)
+            context: .authorization(providerName: request.provider.localizedDisplayName)
         )
     }
 }
@@ -1597,14 +1599,14 @@ private struct CloudCookieQRLoginView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             onError(UserFacingErrorPresenter.message(
                 for: error,
-                context: .authorization(providerName: provider.displayName)
+                context: .authorization(providerName: provider.localizedDisplayName)
             ))
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             onError(UserFacingErrorPresenter.message(
                 for: error,
-                context: .authorization(providerName: provider.displayName)
+                context: .authorization(providerName: provider.localizedDisplayName)
             ))
         }
 
@@ -1634,11 +1636,11 @@ private struct CloudCookieQRLoginView: NSViewRepresentable {
                     self?.deliveredServiceTicket = nil
                     self?.onError(UserFacingErrorPresenter.message(
                         for: error,
-                        context: .authorization(providerName: DriveProvider.uc.displayName)
+                        context: .authorization(providerName: DriveProvider.uc.localizedDisplayName)
                     ))
                 } else if (result as? Bool) != true {
                     self?.deliveredServiceTicket = nil
-                    self?.onError("UC 登录确认失败：登录页面尚未准备好，请刷新二维码重试。")
+                    self?.onError(L10n.text("UC 登录确认失败：登录页面尚未准备好，请刷新二维码重试。"))
                 }
             }
         }
@@ -1693,7 +1695,7 @@ private struct CloudCookieQRLoginView: NSViewRepresentable {
                 } else if let error {
                     self?.onError(UserFacingErrorPresenter.message(
                         for: error,
-                        context: .authorization(providerName: self?.provider.displayName ?? "网盘")
+                        context: .authorization(providerName: self?.provider.localizedDisplayName ?? L10n.text("网盘"))
                     ))
                 }
             }
@@ -2084,19 +2086,19 @@ enum CloudAuthQuarkWebLoginError: LocalizedError, UserFacingDescribedError {
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            return "夸克网页登录接口返回异常。"
+            return L10n.text("夸克网页登录接口返回异常。")
         case .missingToken:
-            return "夸克网页登录接口未返回扫码 Token。"
+            return L10n.text("夸克网页登录接口未返回扫码 Token。")
         case .missingQRCode:
-            return "无法生成夸克网页登录二维码。"
+            return L10n.text("无法生成夸克网页登录二维码。")
         }
     }
     var userFacingDescription: String {
         switch self {
         case .invalidResponse:
-            return "夸克登录服务返回异常，请稍后重试。"
+            return L10n.text("夸克登录服务返回异常，请稍后重试。")
         case .missingToken, .missingQRCode:
-            return "夸克登录二维码尚未准备好，请刷新后重试。"
+            return L10n.text("夸克登录二维码尚未准备好，请刷新后重试。")
         }
     }
 }
@@ -2232,23 +2234,23 @@ enum CloudAuthUCWebLoginError: LocalizedError, UserFacingDescribedError {
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            return "UC 网页登录接口返回异常。"
+            return L10n.text("UC 网页登录接口返回异常。")
         case .missingToken:
-            return "UC 网页登录接口未返回扫码 Token。"
+            return L10n.text("UC 网页登录接口未返回扫码 Token。")
         case .missingQRCode:
-            return "无法生成 UC 网盘登录二维码。"
+            return L10n.text("无法生成 UC 网盘登录二维码。")
         case .missingCookie:
-            return "UC 登录已确认，但接口未返回有效登录 Cookie。"
+            return L10n.text("UC 登录已确认，但接口未返回有效登录 Cookie。")
         }
     }
     var userFacingDescription: String {
         switch self {
         case .invalidResponse:
-            return "UC 登录服务返回异常，请稍后重试。"
+            return L10n.text("UC 登录服务返回异常，请稍后重试。")
         case .missingToken, .missingQRCode:
-            return "UC 登录二维码尚未准备好，请刷新后重试。"
+            return L10n.text("UC 登录二维码尚未准备好，请刷新后重试。")
         case .missingCookie:
-            return "UC 扫码已确认，但登录信息尚未获取成功，请刷新二维码重试。"
+            return L10n.text("UC 扫码已确认，但登录信息尚未获取成功，请刷新二维码重试。")
         }
     }
 }

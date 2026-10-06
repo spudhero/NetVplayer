@@ -195,6 +195,17 @@ def quickjs_runtime_components(manifest_path: Path) -> list[dict[str, str]]:
     }]
 
 
+def smb_components(manifest_path: Path) -> list[dict[str, str]]:
+    if not manifest_path.is_file():
+        return []
+    return [{
+        "key": component_key("smb", item["name"], item["version"], item["source"]),
+        "kind": "library", "name": item["name"], "version": item["version"],
+        "purl": f"pkg:generic/{item['name']}@{item['version']}",
+        "source": item["source"], "revision": item["revision"], "license": item["license"],
+    } for item in read_json(manifest_path).get("components", [])]
+
+
 def deduplicated_components(values: list[dict[str, str]]) -> list[dict[str, str]]:
     unique = {value["key"]: value for value in values}
     return [unique[key] for key in sorted(unique)]
@@ -230,12 +241,14 @@ def create_documents(
     libmpv_manifest = app_bundle / "Contents/Resources/ThirdPartyLicenses/libmpv-runtime.json"
     node_runtime_manifest = app_bundle / "Contents/Resources/NodeRuntime/runtime-manifest.json"
     quickjs_runtime_manifest = app_bundle / "Contents/Resources/QuickJSRuntime/runtime-manifest.json"
+    smb_manifest = app_bundle / "Contents/Resources/ThirdPartyLicenses/smb-runtime.json"
     components = deduplicated_components(
         swift_components(package_resolved)
         + npm_components(torrent_lock)
         + libmpv_components(libmpv_manifest)
         + node_runtime_components(node_runtime_manifest)
         + quickjs_runtime_components(quickjs_runtime_manifest)
+        + smb_components(smb_manifest)
     )
 
     evidence = {

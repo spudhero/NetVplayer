@@ -4,15 +4,18 @@
 import Foundation
 import DriveEngine
 import Models
+import ProxyServer
 
 public enum PlaybackProxyBypassReason: String, Sendable {
     case localProxy = "local-proxy"
     case localStream = "local-stream"
+    case localFileResource = "local-file-resource"
     case localNodeProvider = "local-node-provider"
     case quarkDownloadCDN = "quark-download-cdn"
     case cloudDriveHeaders = "cloud-drive-headers"
     case directHLS = "direct-hls"
     case directMedia = "direct-media"
+    case bilibiliSignedMedia = "bilibili-signed-media"
     case ucOpenAPIStreamingCDN = "uc-openapi-streaming-cdn"
     case ucSmartPlaySignedURL = "uc-smart-play-signed-url"
     case quarkSmartPlaySignedURL = "quark-smart-play-signed-url"
@@ -26,7 +29,7 @@ public enum PlaybackProxyPolicy {
     ]
     private static let chunkedRelayMinimumSize: Int64 = 512 * 1024 * 1024
 
-    public static func bypassReason(for spec: PlaySpec) -> PlaybackProxyBypassReason? {
+    public static func bypassReason(for spec: PlaySpec, proxyServer: ProxyServer = .shared) -> PlaybackProxyBypassReason? {
         guard let url = URL(string: spec.url),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
@@ -34,11 +37,13 @@ public enum PlaybackProxyPolicy {
             return nil
         }
 
+        if proxyServer.isRegisteredSeekableResource(url: spec.url) { return .localFileResource }
+
         if host == "127.0.0.1" || host == "localhost" {
             if url.path == "/proxy" {
                 return .localProxy
             }
-            if url.path == "/stream" {
+            if url.path == "/stream" || url.path.hasPrefix("/stream/") {
                 return .localStream
             }
             if url.path.lowercased().hasPrefix("/spider/") {
@@ -83,11 +88,15 @@ public enum PlaybackProxyPolicy {
             return .cloudDriveHeaders
         }
 
+        if host == "bilivideo.com" || host.hasSuffix(".bilivideo.com") {
+            return .bilibiliSignedMedia
+        }
+
         if isDirectHLS(url: url, spec: spec) {
             return .directHLS
         }
 
-        if directMediaExtensions.contains(url.pathExtension.lowercased()) {
+        if directMediaExtensions.contains(url.pathExtension.lowercased()) || isDeclaredDirectMedia(format: spec.format) {
             return .directMedia
         }
 
@@ -96,7 +105,8 @@ public enum PlaybackProxyPolicy {
 
     public static func shouldAttemptWebSniff(
         for spec: PlaySpec,
-        sourceResolvedDirectMedia: Bool
+        sourceResolvedDirectMedia: Bool,
+        proxyServer: ProxyServer = .shared
     ) -> Bool {
         guard !sourceResolvedDirectMedia,
               let url = URL(string: spec.url),
@@ -104,7 +114,7 @@ public enum PlaybackProxyPolicy {
               scheme == "http" || scheme == "https" else {
             return false
         }
-        return bypassReason(for: spec) == nil
+        return bypassReason(for: spec, proxyServer: proxyServer) == nil
     }
 
     public static func shouldUseRemoteStreamProxy(for spec: PlaySpec) -> Bool {
@@ -175,6 +185,15 @@ public enum PlaybackProxyPolicy {
             || host == "zijieapi.douyinbyte.com"
             || host == "vip.dytt-cinema.com"
             || host == "vip.dytt-cine.com"
+            || host == "vip.dytt-see.com"
+            || host == "vip.dytt-tvs.com"
+            || host == "hd.kuktxu.com"
+            || (["v13.wsyzym3u8.com", "v15.wsyzym3u8.com"].contains(host)
+                && url.scheme?.lowercased() == "https"
+                && (url.port == nil || url.port == 443)
+                && url.user == nil && url.password == nil)
+            || host == "play.ly166.com"
+            || host == "svip.xgplay4.com"
             || host == "play.phimgood.com"
             || host == "hhjx.hhplayer.com"
             || host == "py1080p.com"
@@ -266,7 +285,7 @@ public enum PlaybackProxyPolicy {
         switch reason {
         case .directHLS, .directMedia:
             return true
-        case .localProxy, .localStream, .localNodeProvider, .quarkDownloadCDN, .cloudDriveHeaders, .ucOpenAPIStreamingCDN, .ucSmartPlaySignedURL, .quarkSmartPlaySignedURL:
+        case .localProxy, .localStream, .localFileResource, .localNodeProvider, .quarkDownloadCDN, .cloudDriveHeaders, .bilibiliSignedMedia, .ucOpenAPIStreamingCDN, .ucSmartPlaySignedURL, .quarkSmartPlaySignedURL:
             return false
         }
     }
@@ -327,5 +346,14 @@ public enum PlaybackProxyPolicy {
             || lowerRawURL.contains(".m3u8")
             || lowerFormat.contains("hls")
             || lowerFormat.contains("mpegurl")
+    }
+
+    private static func isDeclaredDirectMedia(format: String) -> Bool {
+        let value = format.lowercased().split(separator: ";", maxSplits: 1).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return directMediaExtensions.contains(value) || [
+            "video/mp4", "video/webm", "video/x-matroska", "video/quicktime",
+            "video/x-flv", "video/mp2t", "audio/mp4", "audio/mpeg", "audio/flac", "audio/wav"
+        ].contains(value)
     }
 }

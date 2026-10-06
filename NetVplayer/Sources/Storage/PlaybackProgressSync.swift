@@ -31,6 +31,8 @@ public struct PlaybackProgressRecord: Codable, Identifiable, Sendable, Equatable
     public var driveProvider: String
     public var driveReferenceURL: String
     public var driveRoute: String
+    public var sourceFingerprint: String?
+    public var configId: Int?
 
     public init(
         historyKey: String,
@@ -45,7 +47,9 @@ public struct PlaybackProgressRecord: Codable, Identifiable, Sendable, Equatable
         updatedAt: Date,
         driveProvider: String = "",
         driveReferenceURL: String = "",
-        driveRoute: String = ""
+        driveRoute: String = "",
+        sourceFingerprint: String? = nil,
+        configId: Int? = nil
     ) {
         self.historyKey = historyKey
         self.progressKey = progressKey
@@ -60,17 +64,19 @@ public struct PlaybackProgressRecord: Codable, Identifiable, Sendable, Equatable
         self.driveProvider = driveProvider
         self.driveReferenceURL = Self.safeDriveReference(driveReferenceURL)
         self.driveRoute = driveRoute
+        self.sourceFingerprint = sourceFingerprint
+        self.configId = configId
     }
 
     public init(history: History) {
         let driveReferenceURL = Self.safeDriveReference(history.driveReferenceURL)
         let episodeKey = Self.episodeKey(for: history)
-        let progressKey = driveReferenceURL.isEmpty
+        let legacyProgressKey = driveReferenceURL.isEmpty
             ? [history.siteKey, history.vodId, history.vodFlag, episodeKey].joined(separator: "|")
             : driveReferenceURL
         self.init(
             historyKey: history.key,
-            progressKey: progressKey,
+            progressKey: history.sourceFingerprint.isEmpty ? legacyProgressKey : LibrarySourceIdentity.key(source: history.sourceFingerprint, siteKey: history.key, vodID: episodeKey),
             siteKey: history.siteKey,
             vodId: history.vodId,
             vodName: history.vodName,
@@ -81,7 +87,9 @@ public struct PlaybackProgressRecord: Codable, Identifiable, Sendable, Equatable
             updatedAt: history.createTime,
             driveProvider: history.driveProvider,
             driveReferenceURL: driveReferenceURL,
-            driveRoute: history.driveRoute
+            driveRoute: history.driveRoute,
+            sourceFingerprint: history.sourceFingerprint.isEmpty ? nil : history.sourceFingerprint,
+            configId: history.configId
         )
     }
 
@@ -112,7 +120,8 @@ public enum PlaybackProgressSyncPolicy {
 
         for record in export.records {
             if let index = indexes[record.progressKey] {
-                guard record.updatedAt > items[index].createTime else { continue }
+                guard (record.sourceFingerprint ?? "") == items[index].sourceFingerprint,
+                      record.updatedAt > items[index].createTime else { continue }
                 items[index].position = record.position
                 items[index].duration = record.duration
                 items[index].createTime = record.updatedAt
@@ -121,7 +130,8 @@ public enum PlaybackProgressSyncPolicy {
                     items[index].driveReferenceURL = record.driveReferenceURL
                     items[index].driveRoute = record.driveRoute
                 }
-            } else if !record.driveReferenceURL.isEmpty {
+            } else if !record.driveReferenceURL.isEmpty,
+                      !items.contains(where: { $0.key == record.historyKey }) {
                 let history = History(
                     key: record.historyKey.isEmpty ? record.progressKey : record.historyKey,
                     siteKey: record.siteKey,
@@ -134,6 +144,8 @@ public enum PlaybackProgressSyncPolicy {
                     driveProvider: record.driveProvider,
                     driveReferenceURL: record.driveReferenceURL,
                     driveRoute: record.driveRoute,
+                    configId: record.configId ?? 0,
+                    sourceFingerprint: record.sourceFingerprint ?? "",
                     createTime: record.updatedAt
                 )
                 indexes[record.progressKey] = items.count

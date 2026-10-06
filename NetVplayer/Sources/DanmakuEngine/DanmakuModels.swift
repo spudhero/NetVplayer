@@ -176,6 +176,7 @@ public struct DanmakuMatch: Codable, Identifiable, Sendable, Equatable {
     public var siteKey: String
     public var confidence: Double
     public var track: DanmakuTrack
+    public var version: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -185,7 +186,8 @@ public struct DanmakuMatch: Codable, Identifiable, Sendable, Equatable {
         year: Int? = nil,
         siteKey: String = "",
         confidence: Double = 1.0,
-        track: DanmakuTrack
+        track: DanmakuTrack,
+        version: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -195,6 +197,7 @@ public struct DanmakuMatch: Codable, Identifiable, Sendable, Equatable {
         self.siteKey = siteKey
         self.confidence = min(1, max(0, confidence))
         self.track = track
+        self.version = version
     }
 }
 

@@ -54,7 +54,7 @@ public struct CredentialRiskAssessment: Codable, Sendable, Equatable, Identifiab
                     siteKey: site.key,
                     siteName: site.name,
                     riskLevel: .high,
-                    reason: "token.json 凭据经第三方 proxy 路径转发",
+                    reason: L10n.text("token.json 凭据经第三方 proxy 路径转发"),
                     redactedEvidence: ext,
                     detectedFields: detected.isEmpty ? ["token.json"] : detected,
                     thirdPartyDomains: domains
@@ -65,7 +65,7 @@ public struct CredentialRiskAssessment: Codable, Sendable, Equatable, Identifiab
                     siteKey: site.key,
                     siteName: site.name,
                     riskLevel: .low,
-                    reason: "token.json 凭据直连或未启用 proxy，仍需用户确认来源可信",
+                    reason: L10n.text("token.json 凭据直连或未启用 proxy，仍需用户确认来源可信"),
                     redactedEvidence: ext,
                     detectedFields: detected.isEmpty ? ["token.json"] : detected,
                     thirdPartyDomains: domains
@@ -75,7 +75,7 @@ public struct CredentialRiskAssessment: Codable, Sendable, Equatable, Identifiab
                 siteKey: site.key,
                 siteName: site.name,
                 riskLevel: .unaudited,
-                reason: "token.json proxy 模式未识别",
+                reason: L10n.text("token.json proxy 模式未识别"),
                 redactedEvidence: ext,
                 detectedFields: detected.isEmpty ? ["token.json"] : detected,
                 thirdPartyDomains: domains
@@ -87,7 +87,7 @@ public struct CredentialRiskAssessment: Codable, Sendable, Equatable, Identifiab
                 siteKey: site.key,
                 siteName: site.name,
                 riskLevel: .safe,
-                reason: "未发现 cookie/token 字段",
+                reason: L10n.text("未发现 cookie/token 字段"),
                 redactedEvidence: ext
             )
         }
@@ -97,7 +97,7 @@ public struct CredentialRiskAssessment: Codable, Sendable, Equatable, Identifiab
                 siteKey: site.key,
                 siteName: site.name,
                 riskLevel: .safe,
-                reason: "凭据字段只在本地配置中出现，未发现第三方域名",
+                reason: L10n.text("凭据字段只在本地配置中出现，未发现第三方域名"),
                 redactedEvidence: ext,
                 detectedFields: detected
             )
@@ -107,7 +107,7 @@ public struct CredentialRiskAssessment: Codable, Sendable, Equatable, Identifiab
             siteKey: site.key,
             siteName: site.name,
             riskLevel: .low,
-            reason: "凭据字段与第三方站点 URL 同时出现，需确认是否只用于网站 session",
+            reason: L10n.text("凭据字段与第三方站点 URL 同时出现，需确认是否只用于网站 session"),
             redactedEvidence: ext,
             detectedFields: detected,
             thirdPartyDomains: domains

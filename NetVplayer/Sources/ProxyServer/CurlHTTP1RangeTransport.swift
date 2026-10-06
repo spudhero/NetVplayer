@@ -52,6 +52,69 @@ enum CurlRangeTransport {
         timeout: TimeInterval
     ) async throws -> Result {
         let endpoint = await endpointResolver.endpoint(for: url)
+        return try await request(url: url, headers: headers, timeout: timeout, endpoint: endpoint)
+    }
+
+    static func getHLSOverIPv6(
+        url: URL,
+        address: String,
+        headers: [String: String],
+        timeout: TimeInterval
+    ) async throws -> Result {
+        guard HLSIPv6Recovery.supports(url) else { throw URLError(.unsupportedURL) }
+        return try await getResolvedIPv6(url: url, address: address, headers: headers, timeout: timeout)
+    }
+
+    static func getCMSOverIPv6(
+        url: URL,
+        address: String,
+        headers: [String: String],
+        timeout: TimeInterval
+    ) async throws -> Result {
+        guard CMSIPv6Recovery.supports(url) else { throw URLError(.unsupportedURL) }
+        return try await getResolvedIPv6(url: url, address: address, headers: headers, timeout: timeout)
+    }
+
+    static func getSourceResource(
+        url: URL, headers: [String: String], timeout: TimeInterval
+    ) async throws -> Result {
+        guard CMSIPv6Recovery.supports(url) || SourceResourceTransport.supportsPoster(url) else {
+            throw URLError(.unsupportedURL)
+        }
+        return try await request(
+            url: url.absoluteString, headers: headers, timeout: timeout,
+            endpoint: nil, restrictToResolvedEndpoint: true
+        )
+    }
+
+    private static func getResolvedIPv6(
+        url: URL,
+        address: String,
+        headers: [String: String],
+        timeout: TimeInterval
+    ) async throws -> Result {
+        guard HLSIPv6Recovery.isPublicIPv6(address),
+              let host = url.host else {
+            throw URLError(.unsupportedURL)
+        }
+        let endpoint = CurlDirectEndpoint(
+            resolveEntry: "\(host):443:[\(address)]",
+            interfaceName: "",
+            address: address
+        )
+        return try await request(
+            url: url.absoluteString, headers: headers, timeout: timeout,
+            endpoint: endpoint, restrictToResolvedEndpoint: true
+        )
+    }
+
+    private static func request(
+        url: String,
+        headers: [String: String],
+        timeout: TimeInterval,
+        endpoint: CurlDirectEndpoint?,
+        restrictToResolvedEndpoint: Bool = false
+    ) async throws -> Result {
         let cancellation = CurlCancellationFlag()
         return try await withTaskCancellationHandler {
             do {
@@ -60,6 +123,7 @@ enum CurlRangeTransport {
                     headers: headers,
                     timeout: timeout,
                     endpoint: endpoint,
+                    restrictToResolvedEndpoint: restrictToResolvedEndpoint,
                     cancellation: cancellation
                 )
                 try Task.checkCancellation()
@@ -93,6 +157,7 @@ enum CurlRangeTransport {
         headers: [String: String],
         timeout: TimeInterval,
         endpoint: CurlDirectEndpoint?,
+        restrictToResolvedEndpoint: Bool = false,
         cancellation: CurlCancellationFlag
     ) async throws -> Result {
         try await withCheckedThrowingContinuation { continuation in
@@ -103,6 +168,7 @@ enum CurlRangeTransport {
                         headers: headers,
                         timeout: timeout,
                         endpoint: endpoint,
+                        restrictToResolvedEndpoint: restrictToResolvedEndpoint,
                         cancellation: cancellation
                     ))
                 } catch {
@@ -117,6 +183,7 @@ enum CurlRangeTransport {
         headers: [String: String],
         timeout: TimeInterval,
         endpoint: CurlDirectEndpoint?,
+        restrictToResolvedEndpoint: Bool,
         cancellation: CurlCancellationFlag
     ) throws -> Result {
         let userAgent = header("User-Agent", in: headers)
@@ -156,6 +223,7 @@ enum CurlRangeTransport {
                                             rangePointer,
                                             resolveEntryPointer,
                                             interfaceNamePointer,
+                                            restrictToResolvedEndpoint ? 1 : 0,
                                             CLong(max(1, Int(timeout * 1_000))),
                                             cancellation.pointer,
                                             &bytes,

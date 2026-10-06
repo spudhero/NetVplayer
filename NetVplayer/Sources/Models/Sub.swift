@@ -20,4 +20,17 @@ public struct Sub: Codable, Identifiable, Sendable {
         self.format = format
         self.flag = flag
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, url, lang, format, flag
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        url = try container.decode(String.self, forKey: .url)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        lang = try container.decodeIfPresent(String.self, forKey: .lang) ?? ""
+        format = try container.decodeIfPresent(String.self, forKey: .format) ?? ""
+        flag = try container.decodeIfPresent(Int.self, forKey: .flag) ?? 0
+    }
 }

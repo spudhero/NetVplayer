@@ -52,7 +52,7 @@ public struct ProviderRuntimeSyncResult: Sendable {
 /// Startup restores verified local packages before checking the signed catalog
 /// for newer compatible support packages.
 public actor ProviderRuntimeBootstrap {
-    public let manager: ProviderManager
+    public nonisolated let manager: ProviderManager
     private var distribution: ProviderDistributionClient?
     private var distributionSession: URLSession?
     private let distributionVerifier: ProviderDistributionIndexVerifier?
@@ -112,6 +112,7 @@ public actor ProviderRuntimeBootstrap {
     /// Re-registers exact source identities from active, verified packages.
     /// Provider processes are launched lazily by the first operation.
     public func registerInstalledProviders() async {
+        guard !(await manager.isDisabled()) else { return }
         let documents = await installedManifests()
         for document in documents {
             await SpiderReplacementRegistry.shared.registerRemote(
@@ -168,13 +169,19 @@ public actor ProviderRuntimeBootstrap {
 
     /// Restores offline packages, then installs the newest compatible release
     /// for every Provider declared by the signed distribution index.
+    /// Publishes the verified latest-version catalog before downloads, and each failure before continuing the batch.
     public func synchronizeAvailableProviders(
+        onCatalogLoaded: @escaping @Sendable ([ProviderRelease]) async -> Void = { _ in },
+        onInstallFailure: @escaping @Sendable (ProviderRuntimeSyncFailure) async -> Void = { _ in },
         progress: @escaping ProviderInstallProgressHandler = { _ in }
     ) async throws -> ProviderRuntimeSyncResult {
         guard let distribution else {
             throw ProviderRuntimeBootstrapError.distributionNotConfigured
         }
 
+        if await manager.isDisabled() {
+            return ProviderRuntimeSyncResult(catalog: [], installed: [], installedOrUpdated: [], failures: [])
+        }
         await registerInstalledProviders()
         var activeDocuments = await installedManifests()
         await progress(ProviderInstallProgress(
@@ -199,12 +206,10 @@ public actor ProviderRuntimeBootstrap {
         var installedOrUpdated: [ProviderVersionReference] = []
         var failures: [ProviderRuntimeSyncFailure] = []
 
-        for release in latestByProvider.values.sorted(by: {
-            if $0.providerID == $1.providerID {
-                return ProviderManifestVerifier.compareVersions($0.version, $1.version) < 0
-            }
-            return $0.providerID < $1.providerID
-        }) {
+        let latestReleases = latestByProvider.values.sorted { $0.providerID < $1.providerID }
+        await onCatalogLoaded(latestReleases.map(\.release))
+
+        for release in latestReleases {
             if let activeVersion = activeVersions[release.providerID],
                ProviderManifestVerifier.compareVersions(activeVersion, release.version) >= 0 {
                 continue
@@ -224,10 +229,12 @@ public actor ProviderRuntimeBootstrap {
                 activeVersions[release.providerID] = release.version
                 installedOrUpdated.append(reference)
             } catch {
-                failures.append(ProviderRuntimeSyncFailure(
+                let failure = ProviderRuntimeSyncFailure(
                     release: reference,
                     message: error.localizedDescription
-                ))
+                )
+                failures.append(failure)
+                await onInstallFailure(failure)
             }
         }
 

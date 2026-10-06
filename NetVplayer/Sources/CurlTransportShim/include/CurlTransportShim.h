@@ -25,6 +25,7 @@ int32_t nvp_curl_range_get(
     const char *range,
     const char *resolve_entry,
     const char *interface_name,
+    int32_t restrict_to_resolved_endpoint,
     long timeout_milliseconds,
     const int32_t *cancel_flag,
     uint8_t **out_bytes,

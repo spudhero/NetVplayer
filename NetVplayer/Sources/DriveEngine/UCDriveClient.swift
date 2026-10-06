@@ -35,6 +35,15 @@ public struct UCShareFile: Sendable {
     public let isFile: Bool
     public let shareFIDToken: String
 
+    public var isPlayableMedia: Bool {
+        DriveMediaClassifier.isPlayableMedia(
+            name: name,
+            formatType: formatType,
+            isDirectory: isDirectory,
+            isFile: isFile
+        )
+    }
+
     public var isPlayableVideo: Bool {
         UCPlayableFileClassifier.isPlayableVideo(
             name: name,
@@ -251,7 +260,7 @@ public final class UCDriveClient: @unchecked Sendable {
                 for item in result.list {
                     if item.isDirectory {
                         directoryQueue.append(item.fid)
-                    } else if item.isPlayableVideo {
+                    } else if item.isPlayableMedia {
                         playableFiles.append(UCPlayableFile(file: item, stoken: result.stoken))
                     } else if item.isKnownNonVideoAsset {
                         filteredAssetNames.append(item.name)
@@ -441,28 +450,34 @@ public final class UCDriveClient: @unchecked Sendable {
         guard let savedFile = savedResult.savedFile else {
             throw DriveEngineError.noDownloadURL(playable.file.name)
         }
-        let playResult = try await personalPlayResultWaitingIfNeeded(
+        return try await fetchSavedPersonalPlayURLResult(
             for: savedFile,
             cookie: savedResult.updatedCookie
         )
-        guard playResult.playbackRoute == DrivePlaybackRoute.ucSmartPlay else {
-            throw DriveEngineError.noDownloadURL(playable.file.name)
-        }
-        return playResult
     }
 
     func fetchSavedPersonalPlayURLResult(
         for savedFile: DriveSavedFileRecord,
         cookie: String
     ) async throws -> UCDownloadResult {
-        let playResult = try await personalPlayResultWaitingIfNeeded(
-            for: savedFile,
-            cookie: cookie
-        )
-        guard playResult.playbackRoute == DrivePlaybackRoute.ucSmartPlay else {
-            throw DriveEngineError.noDownloadURL(savedFile.originalName)
+        do {
+            let playResult = try await personalPlayResultWaitingIfNeeded(
+                for: savedFile,
+                cookie: cookie
+            )
+            guard playResult.playbackRoute == DrivePlaybackRoute.ucSmartPlay else {
+                throw DriveEngineError.noDownloadURL(savedFile.originalName)
+            }
+            return playResult
+        } catch {
+            if Self.shouldInvalidateSavedRecord(error) {
+                try? await DriveSavedFileStore.shared.remove(cacheKey: savedFile.cacheKey)
+                DiagnosticLog.write(
+                    "[UC_SAVED_CACHE] invalidated cacheKey=\(savedFile.cacheKey) fid=\(savedFile.savedFID) reason=personal-transcode-stale"
+                )
+            }
+            throw error
         }
-        return playResult
     }
 
     private func validateDownloadURL(_ url: String, record: DriveSavedFileRecord, cookie: String, mode: DownloadProbeMode = .strictOriginalSize) async throws -> String? {
@@ -561,8 +576,8 @@ private extension UCDriveClient {
         let isDirectory: Bool
         let isFile: Bool
 
-        var isPlayableVideoObject: Bool {
-            UCPlayableFileClassifier.isPlayableVideo(
+        var isPlayableMediaObject: Bool {
+            DriveMediaClassifier.isPlayableMedia(
                 name: name,
                 formatType: "",
                 isDirectory: isDirectory,
@@ -797,7 +812,7 @@ private extension UCDriveClient {
             let listed = try await listPersonalFiles(parentFID: parentFID, cookie: activeCookie)
             activeCookie = listed.updatedCookie
 
-            let exactMatches = listed.files.filter { $0.isPlayableVideoObject && $0.name == fileName }
+            let exactMatches = listed.files.filter { $0.isPlayableMediaObject && $0.name == fileName }
             if let size,
                let exact = exactMatches.first(where: { $0.size == size }) {
                 return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
@@ -805,7 +820,7 @@ private extension UCDriveClient {
             if let exact = exactMatches.first {
                 return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
             }
-            if let folded = listed.files.first(where: { $0.isPlayableVideoObject && $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
+            if let folded = listed.files.first(where: { $0.isPlayableMediaObject && $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
                 return PersonalFileLookupResult(file: folded, updatedCookie: activeCookie)
             }
 
@@ -838,7 +853,7 @@ private extension UCDriveClient {
                 }
             }
 
-            if candidate.isPlayableVideoObject {
+            if candidate.isPlayableMediaObject {
                 return PersonalFileLookupResult(file: candidate, updatedCookie: activeCookie)
             }
 
@@ -1609,21 +1624,7 @@ private extension UCDriveClient {
     }
 
     static func shouldInvalidateSavedRecord(_ error: Error) -> Bool {
-        guard case .api(.uc, let statusCode, let code, let message) = error as? DriveEngineError else {
-            return false
-        }
-        if statusCode == 404 || statusCode == 410 {
-            return true
-        }
-        if let code, [31005, 32003, 32004, 41017].contains(code) {
-            return true
-        }
-        let lower = message.lowercased()
-        return lower.contains("not exist")
-            || lower.contains("not found")
-            || lower.contains("不存在")
-            || lower.contains("文件已删除")
-            || lower.contains("无权限")
+        DriveEngineError.invalidatesSavedRecord(error, provider: .uc)
     }
 
     static func firstString(in json: [String: Any], keys: [String]) -> String? {

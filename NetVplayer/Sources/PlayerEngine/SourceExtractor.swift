@@ -57,7 +57,7 @@ public enum SourceManagerError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .unsupported(let support):
-            return support.reason.isEmpty ? "不支持的播放源类型: \(support.kind)" : support.reason
+            return support.reason.isEmpty ? L10n.text("不支持的播放源类型: {0}", ["\(support.kind)"]) : support.reason
         }
     }
 }
@@ -94,7 +94,7 @@ public final class SourceManager: @unchecked Sendable {
     public func support(for url: String) -> SourceSupport {
         let rawTrimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawTrimmed.isEmpty else {
-            return SourceSupport(kind: "empty", status: .unsupported, reason: "播放地址为空")
+            return SourceSupport(kind: "empty", status: .unsupported, reason: L10n.text("播放地址为空"))
         }
         if rawTrimmed.lowercased().hasPrefix("netvplayer-unavailable:") {
             return Self.unavailableSupport(for: rawTrimmed)
@@ -103,7 +103,7 @@ public final class SourceManager: @unchecked Sendable {
             return SourceSupport(
                 kind: "pending",
                 status: .unsupported,
-                reason: "网盘目录正在后台展开，请稍候"
+                reason: L10n.text("网盘目录正在后台展开，请稍候")
             )
         }
 
@@ -111,7 +111,7 @@ public final class SourceManager: @unchecked Sendable {
 
         let lowerTrimmed = trimmed.lowercased()
         if lowerTrimmed.hasPrefix("115://") || lowerTrimmed.hasPrefix("p115://") {
-            return SourceSupport(kind: "115", status: .supported, reason: "115 网盘分享链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "115", status: .supported, reason: L10n.text("115 网盘分享链接将由 SourceExtractor 转换为可播放地址"))
         }
 
         let urlObject = Self.normalizedURL(trimmed)
@@ -134,110 +134,110 @@ public final class SourceManager: @unchecked Sendable {
         if let reference = DriveFileReference.parse(trimmed) {
             switch reference.provider {
             case .quark:
-                return SourceSupport(kind: "quark", status: .supported, reason: "夸克网盘文件将由 SourceExtractor 转换为可播放地址")
+                return SourceSupport(kind: "quark", status: .supported, reason: L10n.text("夸克网盘文件将由 SourceExtractor 转换为可播放地址"))
             case .uc:
-                return SourceSupport(kind: "uc", status: .supported, reason: "UC 网盘文件将由 SourceExtractor 转换为可播放地址")
+                return SourceSupport(kind: "uc", status: .supported, reason: L10n.text("UC 网盘文件将由 SourceExtractor 转换为可播放地址"))
             case .ali:
-                return SourceSupport(kind: "ali", status: .supported, reason: "阿里云盘文件将由 SourceExtractor 转换为可播放地址")
+                return SourceSupport(kind: "ali", status: .supported, reason: L10n.text("阿里云盘文件将由 SourceExtractor 转换为可播放地址"))
             case .p115:
-                return SourceSupport(kind: "115", status: .supported, reason: "115 网盘文件将由 SourceExtractor 转换为可播放地址")
+                return SourceSupport(kind: "115", status: .supported, reason: L10n.text("115 网盘文件将由 SourceExtractor 转换为可播放地址"))
             case .pikpak:
-                return SourceSupport(kind: "pikpak", status: .supported, reason: "PikPak 个人文件将由 SourceExtractor 转换为可播放地址")
+                return SourceSupport(kind: "pikpak", status: .supported, reason: L10n.text("PikPak 个人文件将由 SourceExtractor 转换为可播放地址"))
             case .baidu:
-                return SourceSupport(kind: "baidu", status: .supported, reason: "百度网盘文件将转存到个人盘并通过原画直链播放")
+                return SourceSupport(kind: "baidu", status: .supported, reason: L10n.text("百度网盘文件将转存到个人盘并通过原画直链播放"))
             case .alist:
-                return SourceSupport(kind: "alist", status: .supported, reason: "AList 文件将由 SourceExtractor 转换为直链")
+                return SourceSupport(kind: "alist", status: .supported, reason: L10n.text("AList 文件将由 SourceExtractor 转换为直链"))
             case .webdav:
-                return SourceSupport(kind: "webdav", status: .supported, reason: "WebDAV 文件将由 SourceExtractor 转换为直链")
+                return SourceSupport(kind: "webdav", status: .supported, reason: L10n.text("WebDAV 文件将由 SourceExtractor 转换为直链"))
             case .bilibili:
-                return SourceSupport(kind: "bilibili", status: .supported, reason: "Bilibili 播放地址将由 SourceExtractor 转换为媒体地址")
+                return SourceSupport(kind: "bilibili", status: .supported, reason: L10n.text("Bilibili 播放地址将由 SourceExtractor 转换为媒体地址"))
             default:
-                return SourceSupport(kind: reference.provider.rawValue, status: .unsupported, reason: "\(reference.provider.displayName) 暂未适配完整播放")
+                return SourceSupport(kind: reference.provider.rawValue, status: .unsupported, reason: L10n.text("{0} 暂未适配完整播放", ["\(reference.provider.localizedDisplayName)"]))
             }
         }
         if scheme == "quark" {
-            return SourceSupport(kind: "quark", status: .supported, reason: "夸克网盘分享链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "quark", status: .supported, reason: L10n.text("夸克网盘分享链接将由 SourceExtractor 转换为可播放地址"))
         }
         if scheme == "uc" {
-            return SourceSupport(kind: "uc", status: .supported, reason: "UC 网盘分享链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "uc", status: .supported, reason: L10n.text("UC 网盘分享链接将由 SourceExtractor 转换为可播放地址"))
         }
         if scheme == "ali" {
-            return SourceSupport(kind: "ali", status: .supported, reason: "阿里云盘分享链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "ali", status: .supported, reason: L10n.text("阿里云盘分享链接将由 SourceExtractor 转换为可播放地址"))
         }
         if scheme == "115" || scheme == "p115" {
-            return SourceSupport(kind: "115", status: .supported, reason: "115 网盘分享链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "115", status: .supported, reason: L10n.text("115 网盘分享链接将由 SourceExtractor 转换为可播放地址"))
         }
         if scheme == "pikpak" {
-            return SourceSupport(kind: "pikpak", status: .supported, reason: "PikPak 个人文件链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "pikpak", status: .supported, reason: L10n.text("PikPak 个人文件链接将由 SourceExtractor 转换为可播放地址"))
         }
         if scheme == "baidu" {
-            return SourceSupport(kind: "baidu", status: .supported, reason: "百度网盘分享链接将转存到个人盘并通过原画直链播放")
+            return SourceSupport(kind: "baidu", status: .supported, reason: L10n.text("百度网盘分享链接将转存到个人盘并通过原画直链播放"))
         }
         if scheme == "alist" {
-            return SourceSupport(kind: "alist", status: .supported, reason: "AList 文件将由 SourceExtractor 转换为直链")
+            return SourceSupport(kind: "alist", status: .supported, reason: L10n.text("AList 文件将由 SourceExtractor 转换为直链"))
         }
         if scheme == "webdav" || scheme == "webdavs" {
-            return SourceSupport(kind: "webdav", status: .supported, reason: "WebDAV 文件将由 SourceExtractor 转换为直链")
+            return SourceSupport(kind: "webdav", status: .supported, reason: L10n.text("WebDAV 文件将由 SourceExtractor 转换为直链"))
         }
         if scheme == "bilibili" {
-            return SourceSupport(kind: "bilibili", status: .supported, reason: "Bilibili 播放地址将由 SourceExtractor 转换为媒体地址")
+            return SourceSupport(kind: "bilibili", status: .supported, reason: L10n.text("Bilibili 播放地址将由 SourceExtractor 转换为媒体地址"))
         }
         if ProxyPushExtractor.isPushProxy(url: urlObject) {
-            return SourceSupport(kind: "push-proxy", status: .supported, reason: "第三方 Quark/UC push 代理地址将映射到原始分享链接")
+            return SourceSupport(kind: "push-proxy", status: .supported, reason: L10n.text("第三方 Quark/UC push 代理地址将映射到原始分享链接"))
         }
         let unsupportedByScheme: [String: String] = [
-            "thunder": "迅雷链接首版暂不支持",
-            "magnet": "磁力链接首版暂不支持",
-            "ed2k": "电驴链接首版暂不支持",
-            "tvbus": "TVBus 直播源首版暂不支持",
-            "mitv": "MiTV 直播源首版暂不支持",
-            "p2p": "P2P 直播源首版暂不支持",
-            "torrent": "BT 种子首版暂不支持",
-            "jianpian": "荐片特殊源首版暂不支持",
-            "push": "Push 特殊源首版暂不支持",
-            "youtube": "YouTube 特殊源首版暂不支持"
+            "thunder": L10n.text("迅雷链接首版暂不支持"),
+            "magnet": L10n.text("磁力链接首版暂不支持"),
+            "ed2k": L10n.text("电驴链接首版暂不支持"),
+            "tvbus": L10n.text("TVBus 直播源首版暂不支持"),
+            "mitv": L10n.text("MiTV 直播源首版暂不支持"),
+            "p2p": L10n.text("P2P 直播源首版暂不支持"),
+            "torrent": L10n.text("BT 种子首版暂不支持"),
+            "jianpian": L10n.text("荐片特殊源首版暂不支持"),
+            "push": L10n.text("Push 特殊源首版暂不支持"),
+            "youtube": L10n.text("YouTube 特殊源首版暂不支持")
         ]
         if let reason = unsupportedByScheme[scheme] {
             return SourceSupport(kind: scheme, status: .unsupported, reason: reason)
         }
 
         if host.contains("pan.quark.cn") || host.contains("v.quark.cn") {
-            return SourceSupport(kind: "quark", status: .supported, reason: "夸克网盘分享链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "quark", status: .supported, reason: L10n.text("夸克网盘分享链接将由 SourceExtractor 转换为可播放地址"))
         }
         if Self.isUCWebShareURL(urlObject) {
-            return SourceSupport(kind: "uc", status: .supported, reason: "UC 网盘分享链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "uc", status: .supported, reason: L10n.text("UC 网盘分享链接将由 SourceExtractor 转换为可播放地址"))
         }
         if host.contains("aliyundrive.com") || host.contains("alipan.com") {
-            return SourceSupport(kind: "ali", status: .supported, reason: "阿里云盘分享链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "ali", status: .supported, reason: L10n.text("阿里云盘分享链接将由 SourceExtractor 转换为可播放地址"))
         }
         if host.contains("115.com") || host.contains("115cdn.com") {
-            return SourceSupport(kind: "115", status: .supported, reason: "115 网盘分享链接将由 SourceExtractor 转换为可播放地址")
+            return SourceSupport(kind: "115", status: .supported, reason: L10n.text("115 网盘分享链接将由 SourceExtractor 转换为可播放地址"))
         }
         if host.contains("mypikpak.com") {
-            return SourceSupport(kind: "pikpak", status: .supported, reason: "PikPak 链接已识别；个人文件可播放，公开分享消费接口仍需真实抓包验证")
+            return SourceSupport(kind: "pikpak", status: .supported, reason: L10n.text("PikPak 链接已识别；个人文件可播放，公开分享消费接口仍需真实抓包验证"))
         }
         if host.contains("pan.baidu.com") {
-            return SourceSupport(kind: "baidu", status: .supported, reason: "百度网盘分享链接将转存到个人盘并通过原画直链播放")
+            return SourceSupport(kind: "baidu", status: .supported, reason: L10n.text("百度网盘分享链接将转存到个人盘并通过原画直链播放"))
         }
         let unsupportedByHost: [(match: String, kind: String, reason: String)] = [
-            ("pan.xunlei.com", "xunlei", "迅雷云盘分享链接已识别；需要账号授权、验证码/恢复文件与播放接口真实样本，当前暂未适配播放解析"),
-            ("123pan.com", "cloud123", "123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析"),
-            ("123pan.cn", "cloud123", "123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析"),
-            ("123684.com", "cloud123", "123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析"),
-            ("123865.com", "cloud123", "123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析"),
-            ("123952.com", "cloud123", "123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析"),
-            ("123912.com", "cloud123", "123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析"),
-            ("yun.139.com", "mobile", "中国移动云盘分享链接已识别；需要账号授权与播放接口真实样本，当前暂未适配播放解析"),
-            ("caiyun.139.com", "mobile", "中国移动云盘分享链接已识别；需要账号授权与播放接口真实样本，当前暂未适配播放解析"),
-            ("feixin.10086.cn", "mobile", "中国移动云盘分享链接已识别；需要账号授权与播放接口真实样本，当前暂未适配播放解析"),
-            ("cloud.189.cn", "tianyi", "天翼云盘分享链接已识别；需要账号授权与播放接口真实样本，当前暂未适配播放解析")
+            ("pan.xunlei.com", "xunlei", L10n.text("迅雷云盘分享链接已识别；需要账号授权、验证码/恢复文件与播放接口真实样本，当前暂未适配播放解析")),
+            ("123pan.com", "cloud123", L10n.text("123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析")),
+            ("123pan.cn", "cloud123", L10n.text("123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析")),
+            ("123684.com", "cloud123", L10n.text("123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析")),
+            ("123865.com", "cloud123", L10n.text("123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析")),
+            ("123952.com", "cloud123", L10n.text("123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析")),
+            ("123912.com", "cloud123", L10n.text("123 网盘分享链接已进入支持矩阵，当前暂未适配播放解析")),
+            ("yun.139.com", "mobile", L10n.text("中国移动云盘分享链接已识别；需要账号授权与播放接口真实样本，当前暂未适配播放解析")),
+            ("caiyun.139.com", "mobile", L10n.text("中国移动云盘分享链接已识别；需要账号授权与播放接口真实样本，当前暂未适配播放解析")),
+            ("feixin.10086.cn", "mobile", L10n.text("中国移动云盘分享链接已识别；需要账号授权与播放接口真实样本，当前暂未适配播放解析")),
+            ("cloud.189.cn", "tianyi", L10n.text("天翼云盘分享链接已识别；需要账号授权与播放接口真实样本，当前暂未适配播放解析"))
         ]
         if let matched = unsupportedByHost.first(where: { host.contains($0.match) }) {
             return SourceSupport(kind: matched.kind, status: .unsupported, reason: matched.reason)
         }
 
         if host.contains("youtube.com") || host.contains("youtu.be") {
-            return SourceSupport(kind: "youtube", status: .unsupported, reason: "YouTube 特殊源首版暂不支持")
+            return SourceSupport(kind: "youtube", status: .unsupported, reason: L10n.text("YouTube 特殊源首版暂不支持"))
         }
         if ["http", "https", "file"].contains(scheme) {
             return SourceSupport(kind: "direct", status: .passthrough)
@@ -254,7 +254,7 @@ public final class SourceManager: @unchecked Sendable {
         return SourceSupport(
             kind: "unavailable",
             status: .unsupported,
-            reason: reason?.isEmpty == false ? reason! : "该资源当前不可用"
+            reason: reason?.isEmpty == false ? reason! : L10n.text("该资源当前不可用")
         )
     }
 
@@ -572,7 +572,7 @@ public final class AListSourceExtractor: SourceExtractorProtocol {
         let data = object["data"] as? [String: Any] ?? [:]
         let rawURL = firstString(data, keys: ["raw_url", "url", "download_url"])
         guard !rawURL.isEmpty else {
-            throw SourceManagerError.unsupported(SourceSupport(kind: "alist", status: .unsupported, reason: "AList 未返回可播放直链"))
+            throw SourceManagerError.unsupported(SourceSupport(kind: "alist", status: .unsupported, reason: L10n.text("AList 未返回可播放直链")))
         }
         return SourceFetchResult(url: rawURL, headers: request.headers, isDirectMedia: true, metadata: ["provider": DriveProvider.alist.rawValue])
     }
@@ -624,7 +624,7 @@ public final class BiliSourceExtractor: SourceExtractorProtocol {
         let data = object["data"] as? [String: Any] ?? [:]
         let mediaURL = BiliSourceExtractor.playbackURL(from: data)
         guard !mediaURL.isEmpty else {
-            throw SourceManagerError.unsupported(SourceSupport(kind: "bilibili", status: .unsupported, reason: "Bilibili 未返回可播放地址"))
+            throw SourceManagerError.unsupported(SourceSupport(kind: "bilibili", status: .unsupported, reason: L10n.text("Bilibili 未返回可播放地址")))
         }
         return SourceFetchResult(url: mediaURL, headers: headers, isDirectMedia: true, metadata: ["provider": DriveProvider.bilibili.rawValue])
     }
@@ -662,7 +662,7 @@ private struct AListSourceRequest {
     init(url: String) throws {
         guard let components = URLComponents(string: url),
               components.scheme?.lowercased() == "alist" else {
-            throw SourceManagerError.unsupported(SourceSupport(kind: "alist", status: .unsupported, reason: "无效的 AList 播放地址"))
+            throw SourceManagerError.unsupported(SourceSupport(kind: "alist", status: .unsupported, reason: L10n.text("无效的 AList 播放地址")))
         }
         let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
         self.server = query["server"] ?? ""
@@ -679,7 +679,7 @@ private struct WebDAVSourceRequest {
     init(url: String) throws {
         guard let components = URLComponents(string: url),
               ["webdav", "webdavs"].contains(components.scheme?.lowercased() ?? "") else {
-            throw SourceManagerError.unsupported(SourceSupport(kind: "webdav", status: .unsupported, reason: "无效的 WebDAV 播放地址"))
+            throw SourceManagerError.unsupported(SourceSupport(kind: "webdav", status: .unsupported, reason: L10n.text("无效的 WebDAV 播放地址")))
         }
         let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
         self.url = query["url"] ?? url
@@ -694,7 +694,7 @@ private struct BiliSourceRequest {
     init(url: String) throws {
         guard let components = URLComponents(string: url),
               components.scheme?.lowercased() == "bilibili" else {
-            throw SourceManagerError.unsupported(SourceSupport(kind: "bilibili", status: .unsupported, reason: "无效的 Bilibili 播放地址"))
+            throw SourceManagerError.unsupported(SourceSupport(kind: "bilibili", status: .unsupported, reason: L10n.text("无效的 Bilibili 播放地址")))
         }
         let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
         self.aid = query["aid"] ?? ""

@@ -6,7 +6,7 @@ OUTPUT_DIR="${1:-$ROOT_DIR/artifacts/visual-regression/player-hud}"
 INSTALL_DIR="/Applications"
 APP_BINARY="$INSTALL_DIR/NetVplayer.app/Contents/MacOS/NetVplayerApp"
 FIXTURE_PATH="$ROOT_DIR/docs/design/player-ui/assets/w700d1q75cms.jpg"
-STATES=(normal settings-drawer episode-drawer skip-dialog warning error loading buffering hud-hidden)
+STATES=(normal settings-drawer subtitle-settings episode-drawer skip-dialog warning error loading buffering hud-hidden ended time-preview chapter-navigation chapter-preview)
 VIEWPORTS=(1480x833 1200x675)
 
 mkdir -p "$OUTPUT_DIR"

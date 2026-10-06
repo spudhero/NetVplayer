@@ -26,8 +26,8 @@ struct HistoryView: View {
 
                 if appState.historyItems.isEmpty {
                     AppUnavailableState(
-                        title: "无播放历史",
-                        message: "观看过的影片会按最近播放时间显示在这里。",
+                        title: L10n.text("无播放历史"),
+                        message: L10n.text("观看过的影片会按最近播放时间显示在这里。"),
                         systemImage: "clock.badge.questionmark"
                     )
                 } else {
@@ -64,9 +64,9 @@ struct HistoryView: View {
     private var pageHeader: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("播放历史")
+                Text(L10n.text("播放历史"))
                     .font(.system(size: 22, weight: .bold))
-                Text(appState.historyItems.isEmpty ? "最近观看的内容会出现在这里" : "共 \(appState.historyItems.count) 条记录")
+                Text(appState.historyItems.isEmpty ? L10n.text("最近观看的内容会出现在这里") : L10n.text("共 {0} 条记录", ["\(appState.historyItems.count)"]))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(palette.muted)
             }
@@ -77,7 +77,7 @@ struct HistoryView: View {
                 Button(role: .destructive) {
                     appState.clearHistory()
                 } label: {
-                    Label("清空历史", systemImage: "trash")
+                    Label(L10n.text("清空历史"), systemImage: "trash")
                         .font(.system(size: 12, weight: .semibold))
                         .padding(.horizontal, 13)
                         .frame(height: 36)
@@ -115,7 +115,7 @@ private struct HistoryPosterCard: View {
         }
         .contextMenu {
             Button(role: .destructive, action: onRemove) {
-                Label("从播放历史中删除", systemImage: "trash")
+                Label(L10n.text("从播放历史中删除"), systemImage: "trash")
             }
         }
         .scaleEffect(isHovered ? 1.018 : 1)
@@ -187,12 +187,12 @@ private struct HistoryPosterCard: View {
                 .foregroundStyle(palette.foreground)
                 .lineLimit(1)
 
-            Text("已观看 \(Int(item.progress * 100))%")
+            Text(L10n.text("已观看 {0}%", ["\(Int(item.progress * 100))"]))
                 .font(.system(size: HomeVisualPolicy.posterMetadataFontSize, weight: .semibold))
                 .foregroundStyle(palette.accent)
                 .lineLimit(1)
 
-            Text(item.createTime.formatted(date: .numeric, time: .shortened))
+            Text(item.createTime.formatted(Date.FormatStyle(date: .numeric, time: .shortened).locale(L10n.locale)))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(palette.muted.opacity(HomeVisualPolicy.mutedTextOpacity))
                 .lineLimit(1)
@@ -209,7 +209,7 @@ private struct HistoryPosterCard: View {
         }
         .buttonStyle(.plain)
         .contentShape(Circle())
-        .help("从播放历史中删除 \(item.vodName)")
-        .accessibilityLabel("从播放历史中删除 \(item.vodName)")
+        .help(L10n.text("从播放历史中删除 {0}", ["\(item.vodName)"]))
+        .accessibilityLabel(L10n.text("从播放历史中删除 {0}", ["\(item.vodName)"]))
     }
 }

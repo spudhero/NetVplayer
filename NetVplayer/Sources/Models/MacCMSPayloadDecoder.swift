@@ -172,6 +172,8 @@ private final class MacCMSXMLDelegate: NSObject, XMLParserDelegate {
             sawList = true
             result.page = Self.int(attributeDict["page"], fallback: 1)
             result.pagecount = Self.int(attributeDict["pagecount"], fallback: 1)
+            result.pageCountIsKnown = attributeDict["pagecount"] != nil && result.pagecount > 0
+            result.pageIsKnown = attributeDict["page"] != nil && result.page > 0
             result.total = Self.int(attributeDict["recordcount"] ?? attributeDict["total"], fallback: 0)
         case "class":
             sawClass = true

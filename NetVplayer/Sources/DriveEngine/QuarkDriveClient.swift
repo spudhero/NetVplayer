@@ -17,23 +17,43 @@ public enum DriveEngineError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .invalidShareURL(let url):
-            return "无效的网盘分享链接: \(url)"
+            return L10n.text("无效的网盘分享链接: {0}", ["\(url)"])
         case .unsupported(let message):
             return message
         case .loginRequired(let provider):
-            return "\(provider.displayName) 完整播放需要授权。请完成授权后重试。"
+            return L10n.text("{0} 完整播放需要授权。请完成授权后重试。", ["\(provider.localizedDisplayName)"])
         case .noPlayableFile(let share):
-            return "网盘分享中没有找到可播放视频文件: \(share)"
+            return L10n.text("网盘分享中没有找到可播放视频文件: {0}", ["\(share)"])
         case .noDownloadURL(let fileName):
-            return "网盘没有返回完整播放地址: \(fileName)。可能是 Cookie 过期、账号无权限，或该文件只能转存后播放。"
+            return L10n.text("网盘没有返回完整播放地址: {0}。可能是 Cookie 过期、账号无权限，或该文件只能转存后播放。", ["\(fileName)"])
         case .officialPlayURLPending(let fileName):
-            return "已转存成功，但夸克只返回下载 CDN，正在等待官方播放地址: \(fileName)。请稍后重试，或先在夸克网盘 App 中打开一次该文件后再试。"
+            return L10n.text("已转存成功，但夸克只返回下载 CDN，正在等待官方播放地址: {0}。请稍后重试，或先在夸克网盘 App 中打开一次该文件后再试。", ["\(fileName)"])
         case .api(let provider, let statusCode, let code, let message):
             if let code {
-                return "\(provider.displayName) 接口错误 HTTP \(statusCode) / \(code): \(message)"
+                return L10n.text("{0} 接口错误 HTTP {1} / {2}: {3}", ["\(provider.localizedDisplayName)", "\(statusCode)", "\(code)", "\(message)"])
             }
-            return "\(provider.displayName) 接口错误 HTTP \(statusCode): \(message)"
+            return L10n.text("{0} 接口错误 HTTP {1}: {2}", ["\(provider.localizedDisplayName)", "\(statusCode)", "\(message)"])
         }
+    }
+
+    public static func invalidatesSavedRecord(_ error: Error, provider: DriveProvider? = nil) -> Bool {
+        guard let driveError = error as? DriveEngineError,
+              case .api(let errorProvider, let statusCode, let code, let message) = driveError,
+              provider == nil || provider == errorProvider else {
+            return false
+        }
+        if statusCode == 404 || statusCode == 410 {
+            return true
+        }
+        if let code, [31005, 32003, 32004, 41017].contains(code) {
+            return true
+        }
+        let lower = message.lowercased()
+        return lower.contains("not exist")
+            || lower.contains("not found")
+            || lower.contains("不存在")
+            || lower.contains("文件已删除")
+            || lower.contains("无权限")
     }
 }
 
@@ -89,6 +109,15 @@ public struct QuarkShareFile: Sendable {
         self.isDirectory = isDirectory
         self.isFile = isFile
         self.shareFIDToken = shareFIDToken
+    }
+
+    public var isPlayableMedia: Bool {
+        DriveMediaClassifier.isPlayableMedia(
+            name: name,
+            formatType: formatType,
+            isDirectory: isDirectory,
+            isFile: isFile
+        )
     }
 
     public var isPlayableVideo: Bool {
@@ -325,7 +354,7 @@ public final class QuarkDriveClient: @unchecked Sendable {
                 for item in result.list {
                     if item.isDirectory {
                         directoryQueue.append(item.fid)
-                    } else if item.isPlayableVideo {
+                    } else if item.isPlayableMedia {
                         playableFiles.append(QuarkPlayableFile(file: item, stoken: result.stoken))
                     } else if item.isKnownNonVideoAsset {
                         filteredAssetNames.append(item.name)
@@ -372,7 +401,8 @@ public final class QuarkDriveClient: @unchecked Sendable {
             fid: playable.file.fid,
             fidToken: playable.file.shareFIDToken,
             fileName: playable.file.name,
-            collectionName: collectionName
+            collectionName: collectionName,
+            formatType: playable.file.formatType
         )
     }
 
@@ -435,6 +465,13 @@ public final class QuarkDriveClient: @unchecked Sendable {
 
     public func fetchSavedDownloadURLResult(for playable: QuarkPlayableFile, share: QuarkShareRequest, cookie: String) async throws -> QuarkDownloadResult {
         var activeCookie = cookie
+        // An explicit video type takes precedence over a disguised audio extension.
+        let preferAudioOriginal = !playable.file.isPlayableVideo && DriveMediaClassifier.isPlayableAudio(
+            name: playable.file.name,
+            formatType: playable.file.formatType,
+            isDirectory: playable.file.isDirectory,
+            isFile: playable.file.isFile
+        )
         let identity = DriveSavedFileNaming.identity(provider: .quark, pwdID: share.pwdID, file: playable.file)
         let folder = try await ensureTransferFolder(for: share, cookie: activeCookie)
         activeCookie = folder.updatedCookie
@@ -447,7 +484,7 @@ public final class QuarkDriveClient: @unchecked Sendable {
                 DiagnosticLog.write("[QUARK_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(cached.savedFID) reason=transfer-folder-mismatch")
             } else {
                 do {
-                    return try await personalPlayResultWaitingIfNeeded(for: cached, cookie: activeCookie)
+                    return try await personalPlayResultWaitingIfNeeded(for: cached, cookie: activeCookie, preferAudioOriginal: preferAudioOriginal)
                 } catch {
                     if Self.shouldInvalidateSavedRecord(error) {
                         try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
@@ -544,7 +581,7 @@ public final class QuarkDriveClient: @unchecked Sendable {
         activeCookie = transferResult.updatedCookie
 
         do {
-            return try await personalPlayResultWaitingIfNeeded(for: savedFile, cookie: activeCookie)
+            return try await personalPlayResultWaitingIfNeeded(for: savedFile, cookie: activeCookie, preferAudioOriginal: preferAudioOriginal)
         } catch {
             if Self.shouldInvalidateSavedRecord(error) {
                 try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
@@ -602,13 +639,14 @@ private extension QuarkDriveClient {
         let size: Int64
         let fileType: Int
         let category: Int
+        let formatType: String
         let isDirectory: Bool
         let isFile: Bool
 
-        var isPlayableVideoObject: Bool {
-            QuarkPlayableFileClassifier.isPlayableVideo(
+        var isPlayableMediaObject: Bool {
+            DriveMediaClassifier.isPlayableMedia(
                 name: name,
-                formatType: "",
+                formatType: formatType,
                 isDirectory: isDirectory,
                 isFile: isFile
             )
@@ -838,7 +876,7 @@ private extension QuarkDriveClient {
             let listed = try await listPersonalFiles(parentFID: parentFID, cookie: activeCookie)
             activeCookie = listed.updatedCookie
 
-            let exactMatches = listed.files.filter { $0.isPlayableVideoObject && $0.name == fileName }
+            let exactMatches = listed.files.filter { $0.isPlayableMediaObject && $0.name == fileName }
             if let size,
                let exact = exactMatches.first(where: { $0.size == size }) {
                 return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
@@ -846,7 +884,7 @@ private extension QuarkDriveClient {
             if let exact = exactMatches.first {
                 return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
             }
-            if let folded = listed.files.first(where: { $0.isPlayableVideoObject && $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
+            if let folded = listed.files.first(where: { $0.isPlayableMediaObject && $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
                 return PersonalFileLookupResult(file: folded, updatedCookie: activeCookie)
             }
 
@@ -862,7 +900,7 @@ private extension QuarkDriveClient {
         activeCookie = appFolder.updatedCookie
 
         if let candidate = appFolder.files.first(where: { $0.fid == candidateFID }) {
-            DiagnosticLog.write("[QUARK_SAVED_CACHE] save candidate fid=\(candidateFID) name=\(candidate.name) dir=\(candidate.isDirectory) fileType=\(candidate.fileType) category=\(candidate.category) size=\(candidate.size)")
+            DiagnosticLog.write("[QUARK_SAVED_CACHE] save candidate fid=\(candidateFID) name=\(candidate.name) dir=\(candidate.isDirectory) fileType=\(candidate.fileType) category=\(candidate.category) format=\(candidate.formatType) size=\(candidate.size)")
 
             let nested = try? await findPersonalFileRecursively(
                 fileName: originalFileName,
@@ -879,7 +917,7 @@ private extension QuarkDriveClient {
                 }
             }
 
-            if candidate.isPlayableVideoObject {
+            if candidate.isPlayableMediaObject {
                 return PersonalFileLookupResult(file: candidate, updatedCookie: activeCookie)
             }
 
@@ -945,7 +983,10 @@ private extension QuarkDriveClient {
         return latest
     }
 
-    func personalPlayResult(for record: DriveSavedFileRecord, cookie: String) async throws -> QuarkDownloadResult {
+    func personalPlayResult(for record: DriveSavedFileRecord, cookie: String, preferAudioOriginal: Bool) async throws -> QuarkDownloadResult {
+        if preferAudioOriginal {
+            return try await personalDownloadFallbackResult(for: record, cookie: cookie, reason: "audio-original")
+        }
         var fallbackURL: String?
         var activeCookie = cookie
         do {
@@ -977,12 +1018,12 @@ private extension QuarkDriveClient {
         }
     }
 
-    func personalPlayResultWaitingIfNeeded(for record: DriveSavedFileRecord, cookie: String) async throws -> QuarkDownloadResult {
+    func personalPlayResultWaitingIfNeeded(for record: DriveSavedFileRecord, cookie: String, preferAudioOriginal: Bool) async throws -> QuarkDownloadResult {
         var lastError: Error?
 
         for attempt in 0..<pendingPlayPolls {
             do {
-                return try await personalPlayResult(for: record, cookie: cookie)
+                return try await personalPlayResult(for: record, cookie: cookie, preferAudioOriginal: preferAudioOriginal)
             } catch {
                 if Self.shouldInvalidateSavedRecord(error) || !Self.shouldWaitForPersonalPlayback(error) {
                     throw error
@@ -1126,6 +1167,7 @@ private extension QuarkDriveClient {
             size: int64Value(raw["size"]) ?? 0,
             fileType: fileType,
             category: category,
+            formatType: stringValue(raw["format_type"]) ?? "",
             isDirectory: isDirectory,
             isFile: isFile
         )
@@ -1450,21 +1492,7 @@ private extension QuarkDriveClient {
     }
 
     static func shouldInvalidateSavedRecord(_ error: Error) -> Bool {
-        guard case .api(.quark, let statusCode, let code, let message) = error as? DriveEngineError else {
-            return false
-        }
-        if statusCode == 404 || statusCode == 410 {
-            return true
-        }
-        if let code, [31005, 32003, 32004, 41017].contains(code) {
-            return true
-        }
-        let lower = message.lowercased()
-        return lower.contains("not exist")
-            || lower.contains("not found")
-            || lower.contains("不存在")
-            || lower.contains("文件已删除")
-            || lower.contains("无权限")
+        DriveEngineError.invalidatesSavedRecord(error, provider: .quark)
     }
 
     static func firstString(in json: [String: Any], keys: [String]) -> String? {

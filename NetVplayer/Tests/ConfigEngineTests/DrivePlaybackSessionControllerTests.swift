@@ -123,6 +123,35 @@ private func sessionSpec(
 }
 
 @MainActor
+@Test func testRefreshedDriveLoadRejectsOldCallbacksAndDegradesBeforeFirstFrame() throws {
+    let plan = aliSessionPlan()
+    let controller = DrivePlaybackSessionController()
+    let candidate = try #require(plan.primaryCandidate)
+    let generation = controller.begin(plan: plan, candidateID: candidate.id)
+    let original = try #require(controller.prepareSubmission(for:
+        sessionSpec(plan: plan, candidate: candidate, generation: generation)
+    ))
+    #expect(controller.requestFailure(for: original, message: "HTTP 401") == .started(candidate))
+    #expect(controller.requestFailure(for: original, message: "HTTP 401") == .coalesced)
+
+    // Even if the provider returns the same URL, this is a different load.
+    let refreshed = try #require(controller.prepareSubmission(for: original))
+    #expect(refreshed.url == original.url)
+    #expect(!controller.confirmStarted(spec: original))
+    #expect(controller.requestFailure(for: original, message: "HTTP 401") == .stale)
+    #expect(controller.requestRefreshFailure(for: original) == .stale)
+    #expect(controller.requestFailure(for: refreshed, message: "HTTP 401") == .started(plan.candidates[1]))
+
+    let fallback = try #require(controller.prepareSubmission(for:
+        sessionSpec(plan: plan, candidate: plan.candidates[1], generation: generation)
+    ))
+    #expect(controller.requestFailure(for: refreshed, message: "HTTP 401") == .stale)
+    #expect(controller.confirmStarted(spec: fallback))
+    controller.cancel()
+    #expect(controller.prepareSubmission(for: fallback) == nil)
+}
+
+@MainActor
 @Test func testDrivePlaybackSessionManualSelectionNeverAutoSwitches() throws {
     let plan = aliSessionPlan()
     let controller = DrivePlaybackSessionController()

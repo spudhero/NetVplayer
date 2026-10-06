@@ -34,6 +34,19 @@ static void NVConfigureOpenGLContext(NSOpenGLContext *context) {
         return nil;
     }
 
+    [self restoreOpenGLSurface];
+    return self;
+}
+
+- (void)dealloc {
+    [self releaseOpenGLSurface];
+}
+
+- (BOOL)restoreOpenGLSurface {
+    if (_backingView) {
+        return YES;
+    }
+
     NSOpenGLPixelFormatAttribute attributes[] = {
         NSOpenGLPFAOpenGLProfile,
         NSOpenGLProfileVersion3_2Core,
@@ -47,24 +60,42 @@ static void NVConfigureOpenGLContext(NSOpenGLContext *context) {
     };
     NSOpenGLPixelFormat *pixelFormat = [[NSOpenGLPixelFormat alloc] initWithAttributes:attributes];
     if (!pixelFormat) {
-        return self;
+        return NO;
     }
 
-    _backingView = [[NVMPVBackingOpenGLView alloc] initWithFrame:self.bounds
-                                                    pixelFormat:pixelFormat];
-    if (!_backingView) {
-        return self;
+    NVMPVBackingOpenGLView *backingView = [[NVMPVBackingOpenGLView alloc] initWithFrame:self.bounds
+                                                                            pixelFormat:pixelFormat];
+    if (!backingView) {
+        return NO;
     }
-    _backingView.owner = self;
-    _backingView.wantsBestResolutionOpenGLSurface = YES;
-    _backingView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    NVConfigureOpenGLContext(_backingView.openGLContext);
-    [self addSubview:_backingView];
-    return self;
+    backingView.owner = self;
+    backingView.wantsBestResolutionOpenGLSurface = YES;
+    backingView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    NVConfigureOpenGLContext(backingView.openGLContext);
+    [self addSubview:backingView];
+    _backingView = backingView;
+    return YES;
+}
+
+- (void)releaseOpenGLSurface {
+    NVMPVBackingOpenGLView *backingView = _backingView;
+    if (!backingView) {
+        return;
+    }
+
+    _backingView = nil;
+    backingView.owner = nil;
+    NSOpenGLContext *context = backingView.openGLContext;
+    if ([NSOpenGLContext currentContext] == context) {
+        [NSOpenGLContext clearCurrentContext];
+    }
+    [context clearDrawable];
+    [backingView clearGLContext];
+    [backingView removeFromSuperview];
 }
 
 - (BOOL)isOpenGLAvailable {
-    return _backingView != nil;
+    return _backingView != nil && _backingView.openGLContext != nil;
 }
 
 - (NSInteger)openGLSurfaceOrder {

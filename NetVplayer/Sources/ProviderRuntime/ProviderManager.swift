@@ -40,10 +40,17 @@ public actor ProviderManager {
     private let store: ProviderPackageStore
     private let httpSession: URLSession?
     private let maximumHTTPResponseBytes: Int
+    private var maintenanceBusy = false
+    private var installsInFlight = 0
+    private var launchesInFlight = 0
+    private var requestsInFlight = 0
+    private var retiredSessions: [ProviderProcessClient] = []
+    private var retirementsInFlight = 0
     private var sessions: [String: ProviderProcessClient] = [:]
     private var initializedSites: [String: Data] = [:]
     private var launches: [String: [Date]] = [:]
     private var operationGates: [String: ProviderOperationGate] = [:]
+    private var lifecycleGates: [String: ProviderOperationGate] = [:]
 
     public init(
         store: ProviderPackageStore,
@@ -57,7 +64,23 @@ public actor ProviderManager {
 
     @discardableResult
     public func install(packageDirectory: URL, document: SignedProviderManifest) async throws -> URL {
+        let gate = lifecycleGate(providerID: document.manifest.providerID)
+        return try await gate.run { [self] in
+            try await installUnlocked(packageDirectory: packageDirectory, document: document)
+        }
+    }
+
+    private func installUnlocked(
+        packageDirectory: URL,
+        document: SignedProviderManifest
+    ) async throws -> URL {
+        guard !maintenanceBusy else { throw ProviderMaintenanceError.busy }
+        installsInFlight += 1
+        defer { installsInFlight -= 1 }
         let installed = try await store.install(packageDirectory: packageDirectory, document: document)
+        if let old = sessions.removeValue(forKey: document.manifest.providerID) {
+            try await stopRetaining(old)
+        }
         let stateDirectory = try await store.stateDirectory(providerID: document.manifest.providerID)
         let command = try ProviderCommandBuilder.command(
             manifest: document.manifest,
@@ -86,15 +109,13 @@ public actor ProviderManager {
                 hostCapabilities: document.manifest.hostCapabilities
             )
             try await store.activate(providerID: document.manifest.providerID, version: document.manifest.version)
-            if let old = sessions.updateValue(client, forKey: document.manifest.providerID) {
-                await old.stop()
-            }
+            sessions[document.manifest.providerID] = client
             initializedSites.removeValue(forKey: document.manifest.providerID)
             operationGates.removeValue(forKey: document.manifest.providerID)
             launches[document.manifest.providerID] = []
             return installed
         } catch {
-            await client.stop(graceful: false)
+            try? await stopRetaining(client, graceful: false)
             throw error
         }
     }
@@ -106,6 +127,9 @@ public actor ProviderManager {
         allowedSourcePolicies: Set<ProviderSourcePolicy>? = nil,
         progress: @escaping ProviderInstallProgressHandler = { _ in }
     ) async throws -> URL {
+        guard !maintenanceBusy else { throw ProviderMaintenanceError.busy }
+        installsInFlight += 1
+        defer { installsInFlight -= 1 }
         let downloaded = try await distribution.downloadAndExtract(release, progress: progress)
         do {
             await progress(ProviderInstallProgress(
@@ -144,13 +168,18 @@ public actor ProviderManager {
     }
 
     public func request(_ request: ProviderRequest, timeout: Duration = .seconds(15)) async throws -> ProviderResponse {
+        guard !maintenanceBusy else { throw ProviderMaintenanceError.busy }
+        requestsInFlight += 1
+        defer { requestsInFlight -= 1 }
         let client = try await session(providerID: request.providerID)
         do {
             return try await client.request(request, timeout: timeout)
         } catch let error as ProviderProcessError {
             switch error {
             case .terminated, .notRunning:
+                guard let current = sessions[request.providerID], current === client else { throw error }
                 sessions.removeValue(forKey: request.providerID)
+                try await stopRetaining(client, graceful: false)
                 initializedSites.removeValue(forKey: request.providerID)
                 guard request.operation != .action, request.operation != .cancel,
                       request.operation != .shutdown, request.operation != .destroy else {
@@ -162,9 +191,11 @@ public actor ProviderManager {
                 }
                 return try await replacement.request(request, timeout: timeout)
             case .timedOut, .invalidResponse, .writeFailed:
-                await client.stop(graceful: false)
-                sessions.removeValue(forKey: request.providerID)
-                initializedSites.removeValue(forKey: request.providerID)
+                try? await stopRetaining(client, graceful: false)
+                if let current = sessions[request.providerID], current === client {
+                    sessions.removeValue(forKey: request.providerID)
+                    initializedSites.removeValue(forKey: request.providerID)
+                }
                 throw error
             default:
                 throw error
@@ -237,11 +268,53 @@ public actor ProviderManager {
         )
     }
 
+    public func isDisabled() async -> Bool { await store.isDisabled() }
+    public func storageUsage() async throws -> ProviderStorageUsage { try await store.storageUsage() }
+    public func prepareMaintenance(_ mode: ProviderMaintenanceMode) async throws -> ProviderMaintenancePlan {
+        guard !maintenanceBusy, installsInFlight == 0, launchesInFlight == 0, requestsInFlight == 0, retirementsInFlight == 0 else { throw ProviderMaintenanceError.busy }
+        return try await store.prepareMaintenance(mode)
+    }
+    public func performMaintenance(_ plan: ProviderMaintenancePlan) async throws -> Bool {
+        guard !maintenanceBusy, installsInFlight == 0, launchesInFlight == 0, requestsInFlight == 0, retirementsInFlight == 0 else { throw ProviderMaintenanceError.busy }
+        maintenanceBusy = true
+        defer { maintenanceBusy = false }
+        for client in Array(sessions.values) + retiredSessions { try await client.stopAndConfirmExit() }
+        retiredSessions.removeAll()
+        sessions.removeAll(); initializedSites.removeAll(); operationGates.removeAll()
+        return try await store.executeMaintenance(planID: plan.id)
+    }
+    public func recoverMaintenance() async throws {
+        guard !maintenanceBusy, installsInFlight == 0, launchesInFlight == 0, requestsInFlight == 0, retirementsInFlight == 0 else { throw ProviderMaintenanceError.busy }
+        maintenanceBusy = true
+        defer { maintenanceBusy = false }
+        for client in Array(sessions.values) + retiredSessions { try await client.stopAndConfirmExit() }
+        retiredSessions.removeAll()
+        sessions.removeAll(); initializedSites.removeAll(); operationGates.removeAll()
+        try await store.recoverMaintenance()
+    }
+    public func enableComponents() async throws {
+        guard !maintenanceBusy else { throw ProviderMaintenanceError.busy }
+        try await store.setDisabled(false)
+    }
+
+    private func stopRetaining(_ client: ProviderProcessClient, graceful: Bool = true) async throws {
+        retirementsInFlight += 1
+        defer { retirementsInFlight -= 1 }
+        if !retiredSessions.contains(where: { $0 === client }) { retiredSessions.append(client) }
+        await client.stop(graceful: graceful)
+        do {
+            try await client.stopAndConfirmExit()
+            retiredSessions.removeAll { $0 === client }
+        } catch {
+            throw error
+        }
+    }
+
     public func shutdown(providerID: String) async {
         operationGates.removeValue(forKey: providerID)
         guard let client = sessions.removeValue(forKey: providerID) else { return }
         initializedSites.removeValue(forKey: providerID)
-        await client.stop()
+        try? await stopRetaining(client)
     }
 
     public func shutdownAll() async {
@@ -249,7 +322,7 @@ public actor ProviderManager {
         sessions.removeAll()
         initializedSites.removeAll()
         operationGates.removeAll()
-        for client in active { await client.stop() }
+        for client in active { try? await stopRetaining(client) }
     }
 
     /// Returns active packages that still pass signature, compatibility, and
@@ -269,15 +342,41 @@ public actor ProviderManager {
     }
 
     public func rollback(providerID: String) async throws {
+        let gate = lifecycleGate(providerID: providerID)
+        try await gate.run { [self] in
+            try await rollbackUnlocked(providerID: providerID)
+        }
+    }
+
+    private func rollbackUnlocked(providerID: String) async throws {
+        guard !maintenanceBusy, installsInFlight == 0, launchesInFlight == 0, requestsInFlight == 0, retirementsInFlight == 0 else { throw ProviderMaintenanceError.busy }
+        installsInFlight += 1
+        defer { installsInFlight -= 1 }
         operationGates.removeValue(forKey: providerID)
-        if let client = sessions.removeValue(forKey: providerID) { await client.stop(graceful: false) }
+        if let client = sessions.removeValue(forKey: providerID) { try await stopRetaining(client) }
         initializedSites.removeValue(forKey: providerID)
         _ = try await store.rollback(providerID: providerID)
-        _ = try await session(providerID: providerID)
+        _ = try await sessionUnlocked(providerID: providerID)
     }
 
     private func session(providerID: String) async throws -> ProviderProcessClient {
+        let gate = lifecycleGate(providerID: providerID)
+        return try await gate.run { [self] in
+            try await sessionUnlocked(providerID: providerID)
+        }
+    }
+
+    private func sessionUnlocked(providerID: String) async throws -> ProviderProcessClient {
+        guard !maintenanceBusy else { throw ProviderMaintenanceError.busy }
+        launchesInFlight += 1
+        defer { launchesInFlight -= 1 }
+        guard !(await store.isDisabled()) else { throw ProviderMaintenanceError.busy }
+        for retired in retiredSessions { try await retired.stopAndConfirmExit() }
+        retiredSessions.removeAll()
         if let existing = sessions[providerID], await existing.isRunning { return existing }
+        if let stale = sessions.removeValue(forKey: providerID) {
+            try await stopRetaining(stale, graceful: false)
+        }
         try permitLaunch(providerID: providerID)
         let (root, document) = try await store.activePackage(providerID: providerID)
         guard document.manifest.providerID == providerID else { throw ProviderManagerError.providerMismatch }
@@ -292,18 +391,29 @@ public actor ProviderManager {
             httpSession: httpSession,
             maximumHTTPResponseBytes: maximumHTTPResponseBytes
         )
-        let response = try await client.request(
-            ProviderRequest(providerID: providerID, operation: .handshake),
-            timeout: Self.handshakeTimeout(for: document.manifest.runtime)
-        )
-        try validateHandshake(
-            response,
-            providerID: providerID,
-            protocolVersion: document.manifest.protocolVersion,
-            hostCapabilities: document.manifest.hostCapabilities
-        )
-        sessions[providerID] = client
-        return client
+        do {
+            let response = try await client.request(
+                ProviderRequest(providerID: providerID, operation: .handshake),
+                timeout: Self.handshakeTimeout(for: document.manifest.runtime)
+            )
+            try validateHandshake(
+                response,
+                providerID: providerID,
+                protocolVersion: document.manifest.protocolVersion,
+                hostCapabilities: document.manifest.hostCapabilities
+            )
+            sessions[providerID] = client
+            return client
+        } catch {
+            try? await stopRetaining(client, graceful: false)
+            throw error
+        }
+    }
+
+    private func lifecycleGate(providerID: String) -> ProviderOperationGate {
+        let gate = lifecycleGates[providerID] ?? ProviderOperationGate()
+        lifecycleGates[providerID] = gate
+        return gate
     }
 
     static func handshakeTimeout(for runtime: ProviderRuntimeKind) -> Duration {

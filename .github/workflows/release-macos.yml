@@ -69,6 +69,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Validate TMDB application credential and online metadata
+        shell: bash
+        env:
+          NETVPLAYER_TMDB_READ_ACCESS_TOKEN: ${{ secrets.NETVPLAYER_TMDB_READ_ACCESS_TOKEN }}
+          NETVPLAYER_TMDB_API_KEY: ${{ secrets.NETVPLAYER_TMDB_API_KEY }}
+        run: python3 script/package_tmdb_credentials.py --validate-only --require --verify-online
+
       - name: Install libmpv development files
         run: brew install mpv
 
@@ -153,6 +160,8 @@ jobs:
         id: package
         shell: bash
         env:
+          NETVPLAYER_TMDB_READ_ACCESS_TOKEN: ${{ secrets.NETVPLAYER_TMDB_READ_ACCESS_TOKEN }}
+          NETVPLAYER_TMDB_API_KEY: ${{ secrets.NETVPLAYER_TMDB_API_KEY }}
           NETVPLAYER_NODE_RUNTIME_CACHE: ${{ runner.temp }}/netvplayer-node-runtime-cache
           NETVPLAYER_NPM_CACHE: ${{ runner.temp }}/netvplayer-npm-cache
           NETVPLAYER_QUICKJS_RUNTIME_CACHE: ${{ runner.temp }}/netvplayer-quickjs-runtime-cache
@@ -173,6 +182,7 @@ jobs:
           /usr/bin/ditto -x -k "$archive" "$extracted_output"
 
           extracted_app="$extracted_output/NetVplayer.app"
+          python3 script/package_tmdb_credentials.py --app-bundle "$extracted_app" --audit-only --require
           codesign --verify --deep --strict --verbose=2 "$extracted_app"
           archive_version="$(plutil -extract CFBundleShortVersionString raw "$extracted_app/Contents/Info.plist")"
           if [[ "$archive_version" != "$GITHUB_REF_NAME" ]]; then

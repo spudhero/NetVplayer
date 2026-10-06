@@ -31,6 +31,11 @@ the tag triggers the release workflow, which publishes only after the packaged
 and re-extracted application passes architecture, version, signature, SBOM,
 checksum, and source-free checks.
 
+Public releases also require the project's TMDB application credential. Follow
+[TMDB setup](TMDB_SETUP.md) to apply and configure the repository Secret. The
+release workflow verifies online movie/TV metadata before packaging and checks
+the credential in the re-extracted application before publication.
+
 ## Reports
 
 Public issues must not include cookies, authorization headers, signed media

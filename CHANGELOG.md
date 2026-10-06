@@ -4,6 +4,76 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### 1.1.0（发布准备，尚未发布）
+
+本次候选版本汇总以下主干变更，构建号为 14。版本概览见[候选发布说明](RELEASE_NOTES_1.1.0.md)。
+
+#### 2026-10-06
+
+- 修复章节与时间轴预览在切换位置时暂时显示其他时间点画面的问题：只显示当前时间点的图片，未取到时显示加载状态，迟到请求不会覆盖新位置。
+- 修复光影首页附加海报请求失败时整页报错，以及部分海报服务在 macOS 上的连接兼容问题；复用有效请求路线，减少重复等待，并补齐新播放线路的 HLS 中转。
+- 播放扩展补齐 AI 短漫剧的分类、分页、搜索、详情和选集解析；播放器支持由扩展提供有效密钥的 CENC/AES-CTR 视频，换片清理旧参数。
+
+#### 2026-10-04
+
+- 起播稳定后后台预取章节和时间轴预览，重复打开共用取帧任务与有界缓存，已缓存画面立即显示；低缓冲、跳转和换片时优先保护播放。补齐 macOS 本地网络用途说明及中英文打包资源。
+- 统一网盘和 NAS 的传输策略与后台带宽判断，保留各来源及 MP3、WAV、FLAC 等格式的读取窗口；修复取消预热影响当前播放、缓存范围误报和切换线路沿用旧参数的问题，NAS 下一条预热复用已缓存文件头。
+- 直播增加缓冲余量，结合实际停滞和连接错误对当前频道执行有界恢复；迅雷可选预加载改为后台升级，增加文件大小、磁盘和令牌有效期保护，私有测试包可要求附带 SDK。
+- 修正直播短连接恢复的 HLS/HTTP 参数位置；夸克按实际文件头区分改名视频与音频后缀，避免缩小视频传输窗口；百度旧历史优先复用同一文件的个人盘转存记录，原分享失效后仍可播放已保存文件，记录失效再恢复分享并转存。
+- 阿里原画视频增加有界并行读取与独立连接池，维持已有缓存预算；歌曲和转码继续使用各自的传输策略。真实原画流畅度仍在验收，未发布。
+
+- 修复推荐海报跳转搜索后输入为空、仍显示历史与热搜的问题：自动填入片名并显示搜索进度和结果；连续点击不同海报、修改输入和清空输入保持正常。
+- 修复搜索结果打开其他来源的影片详情后变为 0：保留搜索关键字、结果顺序和分页状态；从搜索进入播放并返回详情后，关闭详情仍回到原搜索结果。
+- 章节入口与字幕、音轨等播放器控件统一样式；章节面板显示画面预览、名称、时间范围和当前章节，支持前后章节跳转与滚动浏览。
+- 时间轴章节标记改为可悬停预览、点击精确跳转的圆点；拖动保持自由定位，紧凑窗口使用较矮预览卡片。画面预览独立取帧，失败不影响章节跳转。
+
+#### 2026-10-03
+
+- 播放结束提示统一播放器玻璃面板与按钮样式，并适配紧凑窗口；选集顶部显示当前条目或影片的真实海报。
+- 修复部分 FLAC／音乐封面被图片站防盗链拒绝而黑屏：封面复用详情页图片请求和解码规则，独立于音频取流；图片不可用时显示音乐背景。换歌取消旧图片，防止封面串到下一首。
+- 默认账号存储改为本机加密库，免费 ad-hoc 更新不再反复申请钥匙串授权；公开 1.0.12 的明文登录自动迁移并校验后清理，凭据与密钥不进入应用导出备份。装过后续开发构建的旧钥匙串账号仅静默兼容，无法读取时提示重新登录一次。
+- 应用内确认、历史来源选择、账号授权和编辑弹窗统一跟随当前主题，保留取消与原有操作说明。
+- 密码、Cookie 和 Token 输入增加显隐按钮，离开页面或应用失去活跃状态后恢复隐藏；账号与文件位置表单标明必填、选填和按需填写，并解释访客连接、公开目录及默认值。
+- 播放器字幕面板直接展示和选择主／副字幕轨道；倍速与画面比例改为列表点选并标记当前值。播放设置按播放、字幕、弹幕和更多分类，字幕样式、位置与同步分组排列。
+- 音乐合集支持按来源列表顺序切换上一首、下一首和自动连播，混合 MP3、WAV、FLAC 等格式仍保持同一歌曲队列。
+- 修复播放音频封面时调节音量或静音可能导致播放器死锁的问题，运行中的音频偏好改为异步提交。
+- 网盘原文件取流保持指定的直接连接路线；按压缩音频和无损音频设置传输窗口，下一首预加载缓存连续文件头并复用已有数据，减少起播等待和供数不足导致的卡顿。
+- 修复跳到末尾前短片尾后误弹结束面板的问题；确认真实播放到结尾时正常续播，结束后保留有效进度与时长。
+- 视频和音频统一按当前选集列表的可见顺序执行上一条、下一条、自动连播和预加载，直到列表末尾；正序/倒序一致。取消按文件名、季集号、版本或目录隐藏筛选，修复列表有条目却提示没有下一集的问题。
+
+#### 2026-10-02
+
+- 修复媒体库中英文片名、原文片名和官方别名匹配；无年份时仅自动选择类型一致的唯一精确候选。自动来源在 TMDB 无结果、歧义或失败后继续豆瓣，正常豆瓣影片页自动恢复，真正验证码保留人工操作。
+- 海报右上角新增“待确认／查找”，核对候选后点击“保存修正”完成关联；海报墙、候选窗口、滚动条和进度统一跟随主题。
+- 修复媒体库误显示隐藏目录权限错误、SMB 会话失效和 NAS 资源二次代理导致的播放失败；有界分块预读减少高码率播放的协议往返，退出或跳转时取消预读。
+- 凭据错误按账号隔离；可选个人 TMDB 覆盖读取失败时仍可使用有效项目凭据，NAS 自身凭据错误继续正常报告。
+- 启动时先恢复同一地址上次成功保存的有效点播配置，再后台检查更新；临时网络或 TLS 握手失败按 2、5、10 秒最多重试三次，失败保留配置并提示原因。后台更新合并外部列表后保存，下次加载生效；切换或删除来源会取消旧恢复任务。
+- 详情页与播放器共用正序/倒序；上一集、下一集、自动连播和下一集预加载遵循当前排序，首尾按钮同步更新，切换排序不会改变当前播放进度。
+- 点击切集后立即显示目标集与“正在切换”，准备期间不再沿用上一集的时间轴和缓冲数据；取消或关闭会拒绝晚到的预加载结果。夸克音频直接获取个人盘原文件，省去先请求视频接口再回退的等待。
+- 修复网盘音频合集被误判为无资源的问题；MP3、FLAC、WAV 等音频可进入分享展开和原文件播放链路，图片、歌词文件与压缩包仍不作为播放条目。
+- 纯音频缺少播放接口封面时，确认没有视频轨道后显示剧集或详情封面；封面加载失败不影响音频播放，换片清理旧图。
+- 修复自动下一集等待预加载时闪出结束面板的问题，取消或关闭后不再接收晚到切集；宽泛电影分类中的明确季集支持连播，已知上传副本保留手选。
+- 将“数据源设置”整理为“内容来源”：同页分为在线内容、网盘账号、NAS / 本地、搜索与检查，支持快速定位并保留表单输入。补充 Xtream、直播列表和资料来源的用途说明；统一主题卡片、输入框及自适应文件位置/媒体库弹窗。网盘明确区分凭据填写、保存与验证，中英文文案同步更新。
+- 播放器支持主/副双字幕，分别选择轨道、调整位置和按影片保存延迟；文字字幕可调整字体、颜色、描边与背景，图片字幕按可用能力显示位置与缩放。
+- 新增默认关闭的在线字幕搜索；用户启用并填写自己的 ASSRT 令牌后，可手动搜索、下载并选择 ZIP 中的字幕，加载到主或副字幕。令牌在本机加密保存，不进入应用导出备份。
+- 普通与紧凑播放器增加章节菜单、前后章节跳转和时间轴标记；没有章节的媒体自动隐藏入口，换片后旧菜单不能操作新视频。
+- 对部分未声明 HLS 的起播格式错误增加一次有界识别与恢复；播放器参数按来源、用户、会话和传输规则合并，换片恢复默认值，并可查看脱敏的参数来源。
+- 统一普通、流式、下载、扩展和文件服务请求的重定向规则，跨源不转发鉴权，保留正确的方法与请求体语义；切换内容源或直播源后拒绝旧加载结果。
+- 修复点播列表点击线路旁刷新按钮后无法继续翻页的问题；刷新返回相同海报时仍能继续加载下一页，连续刷新不会重复请求或越过最后一页。
+- 修复切换视频源或离开列表后旧海报请求继续占用下载位置的问题；仍被其他卡片使用的同图请求保持共享。本机完整构建恢复此前课堂分类和手机推送实现，玩偶请求增加有效镜像回退及地址复用。
+- 新增 WebDAV、AList、OpenList、SMB 和本地目录的文件服务配置、连接测试、目录浏览与播放；账号密码在本机加密保存，本地目录使用系统授权。首页刷新按钮移到线路选择器旁，按当前视图刷新目录或媒体库并支持取消。
+- 文件服务可添加多个电影、剧集或混合媒体库，优先读取本地 NFO/图片，支持增量扫描、季集聚合、多版本电影、自动/TMDB/豆瓣/仅本地来源和手动修正。修正保留续播身份，失败扫描保留索引；备份兼容旧格式。TMDB 应用凭据由发布方配置，个人覆盖可选；豆瓣验证时暂停并提供正常网页验证入口。
+- 直播配置支持从 JSON 内选择具体直播源，设置页和直播窗口共用选源菜单并记住选择；修复外层配置地址覆盖源地址、切源请求竞争，以及频道列表请求遗漏请求头的问题。单个源失败后仍可切换或重试。
+- 修复 SMB 动态库导致的应用打包失败；独立携带 SMB 许可证、固定版本源码和依赖清单，并核对打包完整性。
+- 首次安装播放扩展时自动进入“设置 → 扩展支持”并展开高级诊断，在联网前提示需要访问 GitHub；按组件展示真实下载量、百分比和安装阶段，全部启用成功 1.5 秒后自动收起。失败保留原因和重试入口，切页不重复跳回，手动展开或收起优先。
+- 历史与收藏按来源配置隔离，旧记录只在来源唯一时自动迁移；删除历史后，同一播放会话的延迟保存不会重新创建记录。
+- 多站搜索支持按来源继续加载、失败重试与去重；重复搜索复用进行中的任务，成功页使用有界短时缓存，刷新与账号切换正确失效。
+- 点播与直播共享音量、静音偏好；弹幕按播放时钟显示，支持候选选择、文件导入、逐集绑定与偏移保存。
+- 直播增加有界 XMLTV 导入、Xtream 当前/下一节目和按需加载的节目指南；导入失败保留上次可用数据。
+- 修复连续跳转、长 GOP 视频定位及授权回调的会话归属；过期或重复的授权结果不会恢复到已经离开的影片。
+- 文件列表按保守规则建立统一剧集导航；播放结束后可从头重播、手动下一集和重试未完成列表，自动连播等待完整列表。
+- 普通与紧凑播放器增加进度时间预览，失焦、尺寸和全屏变化会清理交互状态；全屏过渡失败后可恢复操作。
+
 ### [1.0.12](https://github.com/spudhero/NetVplayer/releases/tag/1.0.12) - 2026-09-23
 
 - 分类与推荐列表在 5 分钟内直接复用结果，5 至 30 分钟先显示缓存再后台刷新，并恢复同一筛选组合已经加载的连续分页；刷新按钮可主动获取最新内容。
@@ -69,6 +139,75 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### 1.1.0 (release preparation, unpublished)
+
+This candidate includes the main-branch changes below and uses build 14. See the [candidate release notes](RELEASE_NOTES_1.1.0.md) for an overview.
+
+#### 2026-10-06
+
+- Fix chapter and timeline previews briefly showing a frame from another time after moving the pointer. Display only the requested frame, show loading while it is unavailable, and reject late results for previous positions.
+- Keep a valid Guangying home page when optional artwork enrichment fails, restore poster connection compatibility on macOS, reuse working catalog connections, and relay the newly observed HLS route.
+- Add AI drama browsing, pagination, search, details, and episode resolution through the playback extension. Support CENC/AES-CTR media with a valid extension-provided key and clear its options when changing media.
+
+#### 2026-10-04
+
+- Prefetch chapter and timeline previews after playback stabilizes, share pending requests and a bounded cache, and display cached frames immediately. Protect playback during low buffering, seeks, and media changes; include localized macOS local-network usage descriptions.
+
+- Centralize drive and NAS transfer policies and background bandwidth decisions while retaining source and MP3/WAV/FLAC read windows. Fix preload cancellation affecting playback, overstated cached ranges, and stale route settings; reuse cached NAS file headers for the next item.
+- Increase live buffering and use observed stalls and connection errors for bounded channel recovery. Upgrade optional Xunlei preloads in the background with file-size, disk-space and token-expiry guards; private test builds can require the SDK.
+- Correct the HLS/HTTP option layers used for live connection recovery. Use probed containers to keep renamed Quark videos out of small audio transfer windows. Reuse exact Baidu personal-file mappings so saved files remain playable after the original share expires; reopen and transfer the share only when that mapping is unavailable.
+- Add bounded parallel ranges and a separate connection pool for Ali original videos within the existing cache budget. Audio and transcoded streams retain their own policies. Real original-stream smoothness remains under validation; this change is unreleased.
+
+- Fix recommendation posters opening search with an empty field and the history/trending page. Fill the title and show search progress and results; switching posters, editing the query and clearing it continue to work.
+- Fix search results disappearing after opening a title from another source. Preserve the query, result order and pagination; starting playback from search and closing its restored detail returns to the original results.
+- Match the chapter control to the player’s subtitle and audio controls. Show frame previews, names, time ranges and the current chapter in a scrollable panel with previous/next navigation.
+- Replace timeline ticks with chapter dots that show previews on hover and seek to exact chapter starts on click. Keep dragging continuous and use a shorter preview card in compact windows. Decode previews separately; failed previews do not block chapter navigation.
+
+#### 2026-10-03
+
+- Match playback completion panels and buttons to the player HUD, including compact windows. Show the actual episode or title poster in the episode drawer.
+- Fix black screens for music whose covers are rejected by image-server hotlink protection. Load and decode covers with the detail-page image policy independently of audio transfers, show a music backdrop when unavailable, and cancel old cover requests when changing tracks.
+- Store accounts in a local encrypted vault so free ad-hoc updates do not repeatedly request Keychain access. Automatically migrate plaintext sign-ins from public 1.0.12 and remove old copies only after verification; exclude credentials and keys from app exports. Silently import Keychain accounts from later development builds when possible, otherwise ask the affected account to sign in again.
+- Apply the current theme to in-app confirmations, history source selection, account authorization, and editor dialogs while preserving cancellation and action descriptions.
+- Add visibility buttons to password, Cookie, and Token fields and hide values again when leaving the view or the app becomes inactive. Mark required, optional, and conditional fields, with guidance for guest connections, public folders, and defaults.
+- Show and select primary/secondary subtitle tracks directly. Select playback speed and aspect ratio from lists with the current choice marked. Organize playback settings into Playback, Subtitles, Danmaku, and More, with subtitle appearance, position, and timing grouped separately.
+- Support previous/next navigation and automatic advancement in music collections using source list order, including mixed MP3, WAV and FLAC files.
+- Prevent playback deadlocks when changing volume or mute while rendering audio artwork by submitting runtime audio preferences asynchronously.
+- Keep cloud original-file transfers on their selected direct route. Use separate transfer windows for compressed and lossless audio, preload contiguous file headers and reuse cached data to reduce startup waits and buffering caused by insufficient delivery.
+- Advance normally after confirmed playback through a short tail following a seek, and retain the last valid position and duration after playback ends.
+- Use the visible episode list order for previous/next, automatic advancement and preloading in both video and audio collections, through the final entry. Ascending/descending order stays consistent; filenames, episode numbers, versions and folders no longer create hidden navigation subsets.
+
+#### 2026-10-02
+
+- Fix media library matching across translated titles, original titles, and official aliases. Without a year, only a unique exact title and media type match is selected. Automatic metadata continues to Douban after TMDB misses, ambiguity, or failures; normal Douban pages resume automatically while actual verification remains manual.
+- Add direct confirmation and search buttons on posters. Select a candidate and save the correction to associate it; the poster wall, candidate sheet, scrollbars, and progress follow the shared theme.
+- Fix hidden directory errors leaking into the library, stale SMB sessions, and NAS playback failures caused by wrapping registered resources in another proxy. Bounded reads and one-chunk prefetch reduce round trips and cancel on exit or seeking.
+- Scope credential errors to each account. A failed optional personal TMDB override can fall back to a valid application credential, while NAS account failures remain visible.
+- Restore the last valid saved VOD configuration for the same URL before checking for updates in the background. Retry temporary network or TLS handshake failures up to three times after 2, 5 and 10 seconds, retaining saved sites and reporting failures. Persist complete updates with merged external lists for the next load, and cancel stale recovery tasks when switching or removing a source.
+- Share ascending/descending order between details and the player. Previous/next navigation, automatic advancement and next-episode preloading follow the selected order, including boundary button states, without changing the current playback position.
+- Show the target episode and switching state immediately, without reusing the previous episode's timeline or buffering metrics during preparation. Reject late preloaded results after cancellation or closing. Quark audio requests the personal original file directly, avoiding an unnecessary video-endpoint fallback.
+- Fix cloud-drive audio collections incorrectly appearing empty. MP3, FLAC, WAV and other audio files enter share expansion and original-file playback, while images, lyrics sidecars and archives remain excluded.
+- Show episode or detail artwork for audio without player-provided artwork, after confirming the media has no video track. Artwork failures do not interrupt audio, and switching media clears the previous image.
+- Prevent the ended panel from appearing while automatic next-episode playback waits for preloading. Cancellation and closing reject late transitions; explicit episode labels support series on broad movie shelves, with known upload copies remaining manually selectable.
+- Reorganize Data Sources as Content Sources, with same-page groups for Online Content, Cloud Drive Accounts, NAS / Local, and Search & Checks. Quick navigation preserves form input. Explain Xtream, channel lists, and metadata sources; unify themed cards, fields, and adaptive file-location/library dialogs. Distinguish entered, saved, and verified cloud credentials, with matching Chinese and English copy.
+- Add primary and secondary subtitles with independent track selection, positions and per-media delays. Text subtitles support font, color, border and background controls; bitmap subtitles expose supported position and scale controls.
+- Add opt-in online subtitle search using the user's ASSRT token, with manual downloads and file selection from ZIP archives for either subtitle slot. Encrypt the token locally and exclude it from app exports.
+- Add chapter menus, previous/next navigation and timeline markers to regular and compact players. Hide controls when chapters are unavailable and reject stale menus after media changes.
+- Recover once from selected startup format errors when a bounded probe identifies undeclared HLS. Resolve player options by source, user, session and transport priority, restore defaults between media, and show redacted option origins.
+- Unify redirect behavior for ordinary, streaming, download, extension and file-service requests, isolate cross-origin credentials and preserve method/body semantics. Reject retired content and live-source loading results.
+- Add configuration, connection tests, browsing, and playback for WebDAV, AList, OpenList, SMB, and local folders. Encrypt credentials locally and retain local access in system bookmarks. Place refresh beside the source picker, with directory/library refresh and cancellation.
+- Add multiple movie, TV, and mixed libraries per file service, local NFO/artwork priority, incremental scans, seasons and movie versions, Automatic/TMDB/Douban/Local Only metadata, and manual corrections. Preserve resume identities, retain indexes after failed scans, and support older backups. Publisher builds provide the TMDB application credential with optional personal overrides; Douban verification pauses matching and opens a normal verification browser.
+- Add a persistent live-source picker to Settings and the live player for JSON configurations. Keep configuration and playlist URLs distinct, preserve request headers, and discard stale responses after source switches. Failed sources remain switchable and retryable.
+- Fix packaging with the SMB dynamic library, including separate license texts, pinned source archives, dependency records and integrity checks.
+- First-time playback extension setup opens Settings → Extension Support and expands advanced diagnostics, with GitHub connectivity guidance before network requests. Each component shows actual download bytes, percentages and installation stages; diagnostics collapse 1.5 seconds after every component is enabled. Failures retain reasons and retry actions, navigation is not repeated, and manual disclosure choices take precedence.
+- Scope history and favorites to their source configuration, migrate legacy records only when the source is unambiguous, and prevent delayed saves from recreating history deleted during the same playback session.
+- Add per-source search pagination, retries and deduplication. Reuse in-flight searches and bounded, short-lived successful-page caches, with explicit refresh and credential invalidation.
+- Share volume and mute preferences between video and live playback. Drive danmaku with the playback clock and support candidate selection, file import, episode bindings and saved offsets.
+- Add bounded XMLTV imports, Xtream current/next programme information and an on-demand programme guide. Failed imports retain the previous usable data.
+- Correct request ownership for consecutive seeks, long-GOP playback and authorization callbacks. Stale or duplicate authorization results cannot resume a film the user has left.
+- Build conservative file episode queues shared by navigation and preloading. Finished playback supports replay from the beginning, manual next episode and incomplete-list retries; automatic advancement waits for a complete list.
+- Add timeline time previews to regular and compact players, reset interaction state on focus, size and fullscreen changes, and recover from failed fullscreen transitions.
 
 ### [1.0.12](https://github.com/spudhero/NetVplayer/releases/tag/1.0.12) - 2026-09-23
 

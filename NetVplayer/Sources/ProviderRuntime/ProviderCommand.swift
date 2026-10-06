@@ -58,7 +58,7 @@ public enum ProviderCommandBuilder {
         case .python:
             guard let runtimePath = manifest.runtimeExecutable else { throw ProviderCommandError.runtimeMissing }
             executable = try ProviderManifestVerifier.resolve(relativePath: runtimePath, inside: packageRoot)
-            arguments = ["-I", "-S", runner.path, "--provider", entrypoint.path]
+            arguments = ["-I", "-B", "-S", runner.path, "--provider", entrypoint.path]
             if let providerClass = manifest.providerClass, !providerClass.isEmpty {
                 arguments += ["--class", providerClass]
             }

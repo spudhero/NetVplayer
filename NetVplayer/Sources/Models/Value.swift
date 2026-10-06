@@ -14,6 +14,9 @@ public struct SearchResult: Identifiable, Sendable {
     public var page: Int
     public var hasMore: Bool
     public var durationMs: Int
+    public var effectiveKeyword: String
+    public var pageCountIsKnown: Bool
+    public var isCached: Bool = false
 
     public var id: String { siteKey }
 
@@ -26,7 +29,9 @@ public struct SearchResult: Identifiable, Sendable {
         errorCategory: AppFailureCategory? = nil,
         page: Int = 1,
         hasMore: Bool = false,
-        durationMs: Int = 0
+        durationMs: Int = 0,
+        effectiveKeyword: String = "",
+        pageCountIsKnown: Bool = true
     ) {
         self.siteName = siteName
         self.siteKey = siteKey
@@ -37,5 +42,7 @@ public struct SearchResult: Identifiable, Sendable {
         self.page = page
         self.hasMore = hasMore
         self.durationMs = max(0, durationMs)
+        self.effectiveKeyword = effectiveKeyword
+        self.pageCountIsKnown = pageCountIsKnown
     }
 }

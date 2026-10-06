@@ -4,7 +4,7 @@
 import Foundation
 
 /// EPG 节目条目
-public struct EpgItem: Codable, Identifiable, Sendable {
+public struct EpgItem: Codable, Identifiable, Sendable, Equatable {
     public var title: String
     public var start: Date
     public var end: Date
@@ -20,17 +20,30 @@ public struct EpgItem: Codable, Identifiable, Sendable {
     /// 是否正在播出
     public var isLive: Bool {
         let now = Date()
-        return now >= start && now <= end
+        return now >= start && now < end
     }
 }
 
 /// EPG 数据
-public struct EpgData: Codable, Sendable {
+public struct EpgData: Codable, Sendable, Equatable {
     public var channelName: String
     public var items: [EpgItem]
 
     public init(channelName: String = "", items: [EpgItem] = []) {
         self.channelName = channelName
         self.items = items
+    }
+}
+
+public enum EpgAvailability: String, Sendable { case available, empty, stale, unavailable, unconfigured }
+
+public struct EpgLoadResult: Sendable {
+    public var data: EpgData
+    public var availability: EpgAvailability
+    public var message: String?
+    public init(data: EpgData, availability: EpgAvailability, message: String? = nil) {
+        self.data = data
+        self.availability = availability
+        self.message = message
     }
 }

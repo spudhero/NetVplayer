@@ -1,3 +1,4 @@
+import Models
 // NetVplayerApp/Views/ThemedScrollView.swift
 // Theme-aware scroll indicators that never cover app content.
 
@@ -318,7 +319,7 @@ private struct ThemedScrollbar: View {
             .animation(.easeOut(duration: 0.14), value: isHovered)
             .animation(.easeOut(duration: 0.10), value: dragGrabOffset != nil)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("滚动条")
+            .accessibilityLabel(L10n.text("滚动条"))
             .accessibilityValue("\(Int(layout.progress * 100))%")
         }
     }

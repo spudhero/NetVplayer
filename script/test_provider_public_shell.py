@@ -144,6 +144,7 @@ def main() -> int:
             "script/test_macos_release_workflow.py",
             "script/test_app_update_release.py",
             "script/test_package_sentry_resources.py",
+            "script/test_package_tmdb_credentials.py",
         ],
     )
     sandbox_output = run_step(

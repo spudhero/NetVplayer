@@ -2,6 +2,7 @@
 // Aliyun Drive share/file references to playable links.
 
 import Foundation
+import Storage
 import Models
 import Networking
 import DriveEngine
@@ -24,15 +25,15 @@ public final class AliShareExtractor: SourceExtractorProtocol {
             let env = ProcessInfo.processInfo.environment
             let refreshToken = [
                 env["NETVPLAYER_ALI_REFRESH_TOKEN"] ?? "",
-                UserDefaults.standard.string(forKey: AliShareExtractor.refreshTokenDefaultsKey) ?? ""
+                UserPreferences.shared.aliRefreshToken
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             let accessToken = [
                 env["NETVPLAYER_ALI_ACCESS_TOKEN"] ?? "",
-                UserDefaults.standard.string(forKey: AliShareExtractor.accessTokenDefaultsKey) ?? ""
+                UserPreferences.shared.aliAccessToken
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             let openToken = [
                 env["NETVPLAYER_ALI_OPEN_TOKEN"] ?? "",
-                UserDefaults.standard.string(forKey: AliShareExtractor.openTokenDefaultsKey) ?? ""
+                UserPreferences.shared.aliOpenToken
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             let defaultDriveID = [
                 env["NETVPLAYER_ALI_DEFAULT_DRIVE_ID"] ?? "",
@@ -63,9 +64,9 @@ public final class AliShareExtractor: SourceExtractorProtocol {
             )
         },
         credentialUpdateHandler: @escaping @Sendable (CloudCredential) -> Void = { credential in
-            UserDefaults.standard.set(credential.refreshToken ?? "", forKey: AliShareExtractor.refreshTokenDefaultsKey)
-            UserDefaults.standard.set(credential.accessToken ?? "", forKey: AliShareExtractor.accessTokenDefaultsKey)
-            UserDefaults.standard.set(credential.metadata["open_token"] ?? "", forKey: AliShareExtractor.openTokenDefaultsKey)
+            UserPreferences.shared.aliRefreshToken = credential.refreshToken ?? ""
+            UserPreferences.shared.aliAccessToken = credential.accessToken ?? ""
+            UserPreferences.shared.aliOpenToken = credential.metadata["open_token"] ?? ""
             UserDefaults.standard.set(credential.metadata["default_drive_id"] ?? "", forKey: AliShareExtractor.defaultDriveIDDefaultsKey)
             UserDefaults.standard.set(credential.metadata["ali_auth_domain"] ?? "", forKey: AliShareExtractor.authDomainDefaultsKey)
             UserDefaults.standard.set(credential.metadata["user_id"] ?? "", forKey: AliShareExtractor.userIDDefaultsKey)

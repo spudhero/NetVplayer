@@ -1,7 +1,40 @@
 import Testing
 import Models
 import DriveEngine
+import PlayerEngine
 @testable import NetVplayerApp
+
+@Test func playbackAvailabilityAllowsSixVMagnetsOnlyThroughTheirSiteResolver() {
+    let episode = Episode(name: "第01集", url: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")
+    for api in ["csp_SixVGuard", "SixVGuard", "csp_Xb6v", "Xb6v"] {
+        let site = Site(key: "custom", name: "新6V", type: 3, api: api)
+        #expect(VodPlaybackAvailabilityPolicy.episodeSupport(for: episode, site: site).status == .supported)
+    }
+    for site in [nil, Site(key: "新6V", name: "新6V", type: 3, api: "csp_Unknown"),
+                 Site(key: "新6V", name: "新6V", type: 1, api: "csp_SixVGuard")] {
+        #expect(VodPlaybackAvailabilityPolicy.episodeSupport(for: episode, site: site).status == .unsupported)
+    }
+    #expect(SourceManager.shared.support(for: episode.url).status == .unsupported)
+}
+
+@Test func playbackAvailabilityExpandsOnlyTheSelectedMagnetBundle() throws {
+    let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    let bundle = Episode(name: "01-04", url: magnet)
+    let site = Site(key: "新6V", name: "新6V", type: 3, api: "csp_SixVGuard")
+    let files = [Episode(name: "01.mkv", url: magnet + "&netvplayer_file=2"),
+                 Episode(name: "02.mkv", url: magnet + "&netvplayer_file=0")]
+    let detail = Vod(vodId: "series", vodName: "Series", vodPlayFrom: "网页$$$磁力",
+                     vodPlayUrl: "第01集$https://media.example.test/1.mp4$$$01-04$\(magnet)#其他种子$magnet:?xt=other")
+    #expect(VodPlaybackAvailabilityPolicy.needsMagnetExpansion(bundle, site: site))
+    #expect(!VodPlaybackAvailabilityPolicy.needsMagnetExpansion(files[0], site: site))
+    let expanded = try #require(VodPlaybackAvailabilityPolicy.expanding(bundle, with: files, flag: "磁力", in: detail))
+    let lines = VodPlaybackAvailabilityPolicy.visibleLines(in: expanded)
+    #expect(lines[0].episodes.first?.url == "https://media.example.test/1.mp4")
+    #expect(lines[1].episodes.map(\.name) == ["01.mkv", "02.mkv", "其他种子"])
+    #expect(lines[1].episodes.prefix(2).map(\.url) == files.map(\.url))
+    #expect(VodPlaybackAvailabilityPolicy.expanding(bundle, with: files, flag: "不存在", in: detail) == nil)
+    #expect(VodPlaybackAvailabilityPolicy.expanding(bundle, with: [], flag: "磁力", in: detail) == nil)
+}
 
 @Test func playbackAvailabilityKeepsValidEpisodesAndDropsEmptyLines() {
     let quark148 = driveEpisodeURL(provider: .quark, fileName: "仙逆.148.4K.mp4", index: 148)

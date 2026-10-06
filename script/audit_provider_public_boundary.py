@@ -21,6 +21,7 @@ PRIVATE_PROVIDER_STAGING_PREFIX = "private-providers/"
 SPIDER_ENGINE_PREFIX = "NetVplayer/Sources/SpiderEngine/"
 PUBLIC_PROVIDER_SOURCE_FILES = (
     f"{SPIDER_ENGINE_PREFIX}NativeProviders.swift",
+    f"{SPIDER_ENGINE_PREFIX}FileServiceNativeProvider.swift",
 )
 MIXED_BOUNDARY_FILES: tuple[str, ...] = ()
 LEGACY_EXECUTABLE_LOADERS: tuple[str, ...] = ()

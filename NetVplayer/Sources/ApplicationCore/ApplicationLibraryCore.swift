@@ -82,7 +82,8 @@ public struct HistoryPlaybackIntent: Sendable {
     }
 
     public func episode(from episodes: [Episode], history: History) -> Episode {
-        PlaybackLinkage.preferredEpisode(from: history, episodes: episodes) ?? fallbackEpisode
+        PlaybackLinkage.preferredEpisode(from: history, episodes: episodes)
+            ?? (episodes.isEmpty ? fallbackEpisode : Episode(name: "", url: ""))
     }
 }
 

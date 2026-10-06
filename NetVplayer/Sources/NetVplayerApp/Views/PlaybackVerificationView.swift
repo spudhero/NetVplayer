@@ -9,7 +9,7 @@ struct PlaybackVerificationView: View {
 
     @Environment(\.appThemePalette) private var palette
     @State private var reloadID = UUID()
-    @State private var statusMessage = "请完成页面中的滑块验证"
+    @State private var statusMessage = L10n.text("请完成页面中的滑块验证")
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +19,7 @@ struct PlaybackVerificationView: View {
                     .foregroundStyle(palette.accent)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("源站验证")
+                    Text(L10n.text("源站验证"))
                         .font(.headline)
                     Text(statusMessage)
                         .font(.caption)
@@ -30,12 +30,12 @@ struct PlaybackVerificationView: View {
 
                 Button {
                     reloadID = UUID()
-                    statusMessage = "请完成页面中的滑块验证"
+                    statusMessage = L10n.text("请完成页面中的滑块验证")
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .help("重新加载")
+                .help(L10n.text("重新加载"))
 
                 Button {
                     onCancel()
@@ -43,7 +43,7 @@ struct PlaybackVerificationView: View {
                     Image(systemName: "xmark")
                 }
                 .buttonStyle(.borderless)
-                .help("关闭")
+                .help(L10n.text("关闭"))
             }
             .padding(.horizontal, 18)
             .frame(height: 56)
@@ -53,7 +53,7 @@ struct PlaybackVerificationView: View {
             PlaybackVerificationWebView(
                 url: request.interaction.url,
                 onVerified: { result in
-                    statusMessage = "验证成功，正在重试播放..."
+                    statusMessage = L10n.text("验证成功，正在重试播放...")
                     onVerified(result)
                 },
                 onFailure: { message in
@@ -68,7 +68,7 @@ struct PlaybackVerificationView: View {
             HStack(spacing: 12) {
                 Spacer()
 
-                Button("取消", role: .cancel) {
+                Button(L10n.text("取消"), role: .cancel) {
                     onCancel()
                 }
 
@@ -77,7 +77,7 @@ struct PlaybackVerificationView: View {
             .frame(height: 62)
         }
         .frame(minWidth: 720, minHeight: 620)
-        .tint(palette.accent)
+        .themedPresentation()
     }
 }
 
@@ -106,7 +106,7 @@ private struct PlaybackVerificationWebView: NSViewRepresentable {
         if let target = URL(string: url) {
             webView.load(URLRequest(url: target, cachePolicy: .reloadIgnoringLocalCacheData))
         } else {
-            onFailure("验证地址无效")
+            onFailure(L10n.text("验证地址无效"))
         }
         return webView
     }
@@ -147,7 +147,7 @@ private struct PlaybackVerificationWebView: NSViewRepresentable {
             guard message.name == Self.messageName,
                   let payload = message.body as? String,
                   let result = PlaybackVerificationResult(jsonPayload: payload) else {
-                onFailure("验证结果无效，请重新完成滑块验证")
+                onFailure(L10n.text("验证结果无效，请重新完成滑块验证"))
                 return
             }
             onVerified(result)

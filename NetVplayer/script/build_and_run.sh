@@ -9,6 +9,18 @@ MIN_SYSTEM_VERSION="14.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPOSITORY_ROOT="$(cd "$ROOT_DIR/.." && pwd)"
+# Keep this machine's project credential outside the checkout. Explicit build
+# environment values take precedence; read only the two supported assignments,
+# without executing the configuration as shell code.
+LOCAL_TMDB_CREDENTIAL_FILE="${NETVPLAYER_TMDB_CREDENTIAL_FILE:-$HOME/.config/netvplayer/tmdb.env}"
+if [[ -z "${NETVPLAYER_TMDB_API_KEY:-}${NETVPLAYER_TMDB_READ_ACCESS_TOKEN:-}" && -f "$LOCAL_TMDB_CREDENTIAL_FILE" ]]; then
+  while IFS= read -r tmdb_config_line || [[ -n "$tmdb_config_line" ]]; do
+    case "$tmdb_config_line" in
+      NETVPLAYER_TMDB_API_KEY=*) export NETVPLAYER_TMDB_API_KEY="${tmdb_config_line#*=}" ;;
+      NETVPLAYER_TMDB_READ_ACCESS_TOKEN=*) export NETVPLAYER_TMDB_READ_ACCESS_TOKEN="${tmdb_config_line#*=}" ;;
+    esac
+  done < "$LOCAL_TMDB_CREDENTIAL_FILE"
+fi
 APP_VERSION="$(plutil -extract CFBundleShortVersionString raw "$ROOT_DIR/Sources/NetVplayerApp/Info.plist")"
 APP_BUILD_NUMBER="$(plutil -extract CFBundleVersion raw "$ROOT_DIR/Sources/NetVplayerApp/Info.plist")"
 if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -21,8 +33,18 @@ if [[ ! "$APP_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
 fi
 INSTALL_DIR="/Applications"
 PACKAGE_PUBLIC=false
+PACKAGE_ONLY=false
+if [[ "$MODE" == "--package-dev" ]]; then
+  PACKAGE_ONLY=true
+  if [[ "${2:-}" != /* || "$2" == "/Applications" || -e "$2/$BUNDLE_NAME.app" ]]; then
+    echo "error: --package-dev requires a fresh absolute output directory outside /Applications" >&2
+    exit 2
+  fi
+  INSTALL_DIR="$2"
+fi
 if [[ "$MODE" == "--package-public" ]]; then
   PACKAGE_PUBLIC=true
+  python3 "$REPOSITORY_ROOT/script/package_tmdb_credentials.py" --validate-only --require
   if [[ "${2:-}" != /* || "$2" == "/Applications" ]]; then
     echo "error: --package-public requires an absolute output directory outside /Applications" >&2
     exit 2
@@ -47,6 +69,21 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_FRAMEWORKS="$APP_CONTENTS/Frameworks"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
+XUNLEI_SDK_DEFAULT="$HOME/Library/Application Support/NetVplayer/ThunderDownloadSDK/libdk.dylib"
+XUNLEI_SDK_SOURCE="${NETVPLAYER_XUNLEI_SDK_LIBRARY:-$XUNLEI_SDK_DEFAULT}"
+XUNLEI_SDK_SHA256="b4215fedabffd3bf65d0707725806b041b38dc34f4a88cfa15490872dfc3189f"
+XUNLEI_SDK_DESTINATION="$APP_RESOURCES/ThunderDownloadSDK/libdk.dylib"
+# Test builds can require acceleration without embedding runtime credentials.
+if [[ "${NETVPLAYER_REQUIRE_XUNLEI_SDK:-0}" == "1" ]]; then
+  if [[ "$PACKAGE_PUBLIC" == true ]]; then
+    echo "error: public packages exclude the optional Xunlei SDK" >&2
+    exit 2
+  fi
+  if [[ ! -f "$XUNLEI_SDK_SOURCE" ]]; then
+    echo "error: required Xunlei SDK is missing; install official Swift SDK 1.0.3 first" >&2
+    exit 2
+  fi
+fi
 INSTALLED_APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 PROVIDER_MANIFEST_PUBLIC_KEY="${NETVPLAYER_PROVIDER_MANIFEST_PUBLIC_KEY_BASE64:-}"
@@ -317,11 +354,11 @@ wait_for_expected_app() {
 }
 
 acquire_run_lock
-if [[ "$PACKAGE_PUBLIC" != true ]]; then
+if [[ "$PACKAGE_PUBLIC" != true && "$PACKAGE_ONLY" != true ]]; then
   stop_existing_apps
 fi
 mkdir -p "$INSTALL_DIR"
-if [[ "$PACKAGE_PUBLIC" != true ]]; then
+if [[ "$PACKAGE_PUBLIC" != true && "$PACKAGE_ONLY" != true ]]; then
   remove_obsolete_app_bundles
 fi
 
@@ -406,6 +443,19 @@ rm -rf "$STAGING_APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_FRAMEWORKS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
+if [[ "$PACKAGE_PUBLIC" != true && -f "$XUNLEI_SDK_SOURCE" ]]; then
+  if [[ "$(shasum -a 256 "$XUNLEI_SDK_SOURCE" | awk '{print $1}')" != "$XUNLEI_SDK_SHA256" ]]; then
+    echo "error: unsupported Xunlei SDK binary; expected official Swift SDK 1.0.3" >&2
+    exit 1
+  fi
+  if ! /usr/bin/lipo -archs "$XUNLEI_SDK_SOURCE" | grep -qw "$NODE_RUNTIME_ARCHITECTURE"; then
+    echo "error: Xunlei SDK does not contain architecture $NODE_RUNTIME_ARCHITECTURE" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$XUNLEI_SDK_DESTINATION")"
+  cp "$XUNLEI_SDK_SOURCE" "$XUNLEI_SDK_DESTINATION"
+  echo "Bundled optional official Xunlei Download SDK 1.0.3"
+fi
 
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -444,6 +494,13 @@ cat >"$INFO_PLIST" <<PLIST
 PLIST
 
 SOURCE_INFO_PLIST="$ROOT_DIR/Sources/NetVplayerApp/Info.plist"
+plutil -insert NSLocalNetworkUsageDescription -string "$(plutil -extract NSLocalNetworkUsageDescription raw "$SOURCE_INFO_PLIST")" "$INFO_PLIST"
+for usage_lproj in "$ROOT_DIR/Resources"/*.lproj; do
+  if [[ -f "$usage_lproj/InfoPlist.strings" ]]; then
+    mkdir -p "$APP_RESOURCES/$(basename "$usage_lproj")"
+    cp "$usage_lproj/InfoPlist.strings" "$APP_RESOURCES/$(basename "$usage_lproj")/InfoPlist.strings"
+  fi
+done
 plutil -insert SUFeedURL -string "$(plutil -extract SUFeedURL raw "$SOURCE_INFO_PLIST")" "$INFO_PLIST"
 plutil -insert SUPublicEDKey -string "$(plutil -extract SUPublicEDKey raw "$SOURCE_INFO_PLIST")" "$INFO_PLIST"
 plutil -insert SUEnableAutomaticChecks -bool NO "$INFO_PLIST"
@@ -488,11 +545,36 @@ rm -f "$APP_ICON_PARTIAL_INFO"
 cp "$LEGACY_APP_ICON_SOURCE" "$APP_RESOURCES/$APP_ICON_FILENAME"
 cp "$APP_ICON_SOURCE" "$APP_RESOURCES/AppIcon-Runtime.png"
 cp -R "$BUILD_RESOURCE_BUNDLE" "$APP_RESOURCES/$APP_RESOURCE_BUNDLE_NAME"
+MODEL_RESOURCE_BUNDLE="$BUILD_BIN_DIR/NetVplayer_Models.bundle"
+if [[ ! -d "$MODEL_RESOURCE_BUNDLE" ]]; then
+  echo "error: localized model resource bundle is missing" >&2
+  exit 1
+fi
+cp -R "$MODEL_RESOURCE_BUNDLE" "$APP_RESOURCES/NetVplayer_Models.bundle"
 /usr/bin/ditto "$SPARKLE_FRAMEWORK_SOURCE" "$APP_FRAMEWORKS/Sparkle.framework"
 mkdir -p "$APP_RESOURCES/ThirdPartyLicenses"
 cp "$SPARKLE_LICENSE_SOURCE" "$APP_RESOURCES/ThirdPartyLicenses/Sparkle.LICENSE"
+SMB_LIBRARY="$BUILD_BIN_DIR/libAMSMB2.dylib"
+SMB_CHECKOUT="$ROOT_DIR/.build/checkouts/AMSMB2"
+if [[ ! -s "$SMB_LIBRARY" ]]; then
+  echo "error: fixed-version SMB dynamic library is missing" >&2
+  exit 1
+fi
+mkdir -p "$APP_FRAMEWORKS/SMB"
+cp "$SMB_LIBRARY" "$APP_FRAMEWORKS/SMB/libAMSMB2.dylib"
+install_name_tool -id '@rpath/SMB/libAMSMB2.dylib' "$APP_FRAMEWORKS/SMB/libAMSMB2.dylib"
+install_name_tool -change '@rpath/libAMSMB2.dylib' '@rpath/SMB/libAMSMB2.dylib' "$APP_BINARY"
+python3 "$REPOSITORY_ROOT/script/package_smb_component.py" --checkout "$SMB_CHECKOUT" --app-bundle "$STAGING_APP_BUNDLE"
+SENTRY_ENVIRONMENT="production"
+SENTRY_BUILD_ID=""
+if [[ "$PACKAGE_PUBLIC" != true ]]; then
+  SENTRY_ENVIRONMENT="development"
+  SENTRY_BUILD_ID="$(xcrun dwarfdump --uuid "$BUILD_BINARY" | awk '{print $2}')"
+fi
 python3 "$REPOSITORY_ROOT/script/package_sentry_resources.py" \
-  --package-root "$ROOT_DIR" --app-bundle "$STAGING_APP_BUNDLE"
+  --package-root "$ROOT_DIR" --app-bundle "$STAGING_APP_BUNDLE" \
+  --environment "$SENTRY_ENVIRONMENT" --build-id "$SENTRY_BUILD_ID"
+python3 "$REPOSITORY_ROOT/script/package_tmdb_credentials.py" --app-bundle "$STAGING_APP_BUNDLE"
 cp -R "$PREPARED_QUICKJS_RUNTIME_ROOT" "$BUNDLED_QUICKJS_RUNTIME_ROOT"
 cp -R "$PREPARED_NODE_RUNTIME_ROOT" "$BUNDLED_NODE_RUNTIME_ROOT"
 mkdir -p "$TORRENT_BRIDGE_DESTINATION"
@@ -507,6 +589,10 @@ if [[ -n "${NETVPLAYER_LIBMPV_PATH:-}" && -z "${NETVPLAYER_LIBMPV_SOURCE:-}" ]];
 fi
 "$REPOSITORY_ROOT/script/vendor_libmpv.sh" "$STAGING_APP_BUNDLE" "$APP_BINARY"
 find "$APP_FRAMEWORKS" -maxdepth 1 -type f -name '*.dylib' -exec codesign --force --sign - {} \;
+codesign --force --sign - "$APP_FRAMEWORKS/SMB/libAMSMB2.dylib"
+if [[ -f "$XUNLEI_SDK_DESTINATION" ]]; then
+  codesign --force --sign - "$XUNLEI_SDK_DESTINATION"
+fi
 SPARKLE_FRAMEWORK="$APP_FRAMEWORKS/Sparkle.framework"
 SPARKLE_VERSION_ROOT="$SPARKLE_FRAMEWORK/Versions/B"
 codesign --force --sign - "$SPARKLE_VERSION_ROOT/XPCServices/Installer.xpc"
@@ -528,6 +614,9 @@ codesign --verify --deep --strict --verbose=2 "$STAGING_APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$SPARKLE_FRAMEWORK"
 codesign --verify --strict --verbose=2 "$BUNDLED_NODE_EXECUTABLE"
 codesign --verify --strict --verbose=2 "$BUNDLED_QUICKJS_EXECUTABLE"
+if [[ -f "$XUNLEI_SDK_DESTINATION" ]]; then
+  codesign --verify --strict --verbose=2 "$XUNLEI_SDK_DESTINATION"
+fi
 if [[ -f "$BUNDLED_QUICKJS_POLYGLOT" ]]; then
   codesign --verify --strict --verbose=2 "$BUNDLED_QUICKJS_POLYGLOT"
 fi
@@ -541,10 +630,18 @@ python3 "$REPOSITORY_ROOT/script/validate_node_runtime.py" \
 python3 "$REPOSITORY_ROOT/script/package_libmpv_runtime_licenses.py" \
   --app-bundle "$STAGING_APP_BUNDLE" \
   --audit-only
+python3 "$REPOSITORY_ROOT/script/package_smb_component.py" \
+  --app-bundle "$STAGING_APP_BUNDLE" --audit-only
 python3 "$REPOSITORY_ROOT/script/generate_release_sbom.py" \
   --app-bundle "$STAGING_APP_BUNDLE" \
   --package-resolved "$ROOT_DIR/Package.resolved" \
   --output-directory "$REPOSITORY_ROOT/dist/sbom"
+if [[ "$PACKAGE_ONLY" == true ]]; then
+  mkdir -p "$INSTALL_DIR"
+  /usr/bin/ditto "$STAGING_APP_BUNDLE" "$APP_BUNDLE"
+  echo "Packaged development app at $APP_BUNDLE"
+  exit 0
+fi
 if [[ "$PACKAGE_PUBLIC" == true ]]; then
   python3 "$REPOSITORY_ROOT/script/audit_source_free_app.py" \
     --repo "$REPOSITORY_ROOT" --app-bundle "$STAGING_APP_BUNDLE"

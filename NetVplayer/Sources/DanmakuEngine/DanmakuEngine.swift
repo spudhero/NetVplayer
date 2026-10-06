@@ -2,6 +2,7 @@
 // Manual danmaku search and local cache. No automatic external requests.
 
 import Foundation
+import CryptoKit
 import Networking
 import Storage
 
@@ -13,11 +14,12 @@ public final class DanmakuEngine: @unchecked Sendable {
     private let cacheFilename = "danmaku_cache.json"
     private let lock = NSLock()
     private var cache: [DanmakuCacheEntry]
+    private var candidateHeaders: [String: [String: String]] = [:]
 
     public init(httpClient: HTTPClient = .shared, storage: StorageManager = .shared) {
         self.httpClient = httpClient
         self.storage = storage
-        self.cache = (try? storage.load([DanmakuCacheEntry].self, from: cacheFilename)) ?? []
+        self.cache = (try? storage.loadBounded([DanmakuCacheEntry].self, from: cacheFilename, maximumBytes: 64 * 1_024 * 1_024)) ?? []
         pruneExpiredLocked()
     }
 
@@ -34,14 +36,23 @@ public final class DanmakuEngine: @unchecked Sendable {
             }
             guard let url = searchURL(for: request, source: source) else { continue }
             do {
-                let response = try await httpClient.get(url: url, headers: source.headers, timeout: 12)
+                let response = try await httpClient.getBounded(url: url, headers: source.headers, maximumBytes: DanmakuPayloadParser.maximumPayloadBytes, timeout: 12)
                 guard (200..<300).contains(response.statusCode),
                       let payload = String(data: response.data, encoding: .utf8),
                       !payload.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     continue
                 }
+                if let candidates = decodeCandidates(payload, source: source, request: request) {
+                    matches.append(contentsOf: candidates)
+                    continue
+                }
+                let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+                let format: DanmakuTrackFormat = trimmed.hasPrefix("<") ? .xml
+                    : (trimmed.hasPrefix("{") || trimmed.hasPrefix("[")) ? .json : trackFormat(for: source.parserType)
+                let parsed = DanmakuPayloadParser.parseWithDiagnostic(payload: payload, format: format)
+                guard parsed.diagnostic.failureCategory == nil, !parsed.cues.isEmpty else { continue }
                 let track = DanmakuTrack(
-                    format: trackFormat(for: source.parserType),
+                    format: format,
                     cacheKey: cacheKey,
                     sourceName: source.name
                 )
@@ -52,6 +63,85 @@ public final class DanmakuEngine: @unchecked Sendable {
             }
         }
         return matches
+    }
+
+    public static func sourceIdentity(_ url: String) -> String {
+        SHA256.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Candidate envelopes carry their own title/year/season/episode/version; selection remains explicit.
+    func decodeCandidates(_ payload: String, source: DanmakuSource, request: DanmakuSearchRequest) -> [DanmakuMatch]? {
+        guard let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = (object["matches"] ?? object["results"] ?? object["episodes"]) as? [[String: Any]] else { return nil }
+        return rows.prefix(24).compactMap { row in
+            guard let title = (row["title"] ?? row["episodeTitle"]) as? String, !title.isEmpty else { return nil }
+            let content = row["payload"] as? String
+            let rawURL = (row["contentURL"] ?? row["url"]) as? String ?? ""
+            let url = URL(string: rawURL, relativeTo: URL(string: source.apiURL))?.absoluteURL
+            guard content != nil || (!rawURL.isEmpty && ["http", "https"].contains(url?.scheme ?? "")) else { return nil }
+            let identity = (try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])) ?? Data()
+            let key = source.id + ":" + Self.sourceIdentity(String(decoding: identity, as: UTF8.self))
+            let format = DanmakuTrackFormat(rawValue: row["format"] as? String ?? "xml") ?? .xml
+            let track = DanmakuTrack(format: format, contentURL: rawURL.isEmpty ? "" : (url?.absoluteString ?? ""), cacheKey: key, sourceName: source.name)
+            if let content {
+                let parsed = DanmakuPayloadParser.parseWithDiagnostic(payload: content, format: format)
+                guard parsed.diagnostic.failureCategory == nil, !parsed.cues.isEmpty else { return nil }
+                var cachedTrack = track
+                cachedTrack.contentURL = ""
+                saveCache(DanmakuCacheEntry(cacheKey: key, track: cachedTrack, payload: content))
+            } else {
+                let origin = URL(string: source.apiURL)
+                let sameOrigin = url?.scheme == origin?.scheme && url?.host == origin?.host && url?.port == origin?.port
+                registerCandidateHeaders(sameOrigin ? source.headers : [:], key: key)
+            }
+            return DanmakuMatch(id: key, title: String(title.prefix(200)), season: row["season"] as? Int,
+                episode: row["episode"] as? Int, year: row["year"] as? Int, siteKey: request.siteKey,
+                track: track, version: (row["version"] as? String).map { String($0.prefix(100)) })
+        }
+    }
+
+    private func registerCandidateHeaders(_ headers: [String: String], key: String) {
+        lock.lock(); defer { lock.unlock() }
+        if candidateHeaders.count >= 64 { candidateHeaders = [:] }
+        candidateHeaders[key] = headers
+    }
+
+    private func headers(for key: String) -> [String: String] {
+        lock.lock(); defer { lock.unlock() }
+        return candidateHeaders[key] ?? [:]
+    }
+
+    public func loadCandidate(_ match: DanmakuMatch) async throws {
+        if cachedPayload(cacheKey: match.track.cacheKey) != nil { return }
+        guard !match.track.contentURL.isEmpty else { throw DanmakuImportError.invalidFile }
+        let response = try await httpClient.getBounded(url: match.track.contentURL, headers: headers(for: match.track.cacheKey),
+            maximumBytes: DanmakuPayloadParser.maximumPayloadBytes, timeout: 12)
+        try Task.checkCancellation()
+        guard let payload = String(data: response.data, encoding: .utf8) else { throw DanmakuImportError.invalidFile }
+        let parsed = DanmakuPayloadParser.parseWithDiagnostic(payload: payload, format: match.track.format)
+        guard parsed.diagnostic.failureCategory == nil, !parsed.cues.isEmpty else { throw DanmakuImportError.invalidFile }
+        // Signed URLs and request headers are kept only for this request, never in the persistent track.
+        var track = match.track
+        track.contentURL = ""
+        saveCache(DanmakuCacheEntry(cacheKey: track.cacheKey, track: track, payload: payload))
+    }
+
+    public func importFile(_ url: URL) throws -> DanmakuMatch {
+        let granted = url.startAccessingSecurityScopedResource()
+        defer { if granted { url.stopAccessingSecurityScopedResource() } }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let data = try handle.read(upToCount: DanmakuPayloadParser.maximumPayloadBytes + 1) ?? Data()
+        guard data.count <= DanmakuPayloadParser.maximumPayloadBytes,
+              let payload = String(data: data, encoding: .utf8) else { throw DanmakuImportError.invalidFile }
+        let format: DanmakuTrackFormat = url.pathExtension.lowercased() == "json" ? .json : .xml
+        let result = DanmakuPayloadParser.parseWithDiagnostic(payload: payload, format: format)
+        guard result.diagnostic.failureCategory == nil, !result.cues.isEmpty else { throw DanmakuImportError.invalidFile }
+        let key = "file:" + Self.sourceIdentity(payload)
+        let track = DanmakuTrack(format: format, cacheKey: key, sourceName: url.lastPathComponent)
+        saveCache(DanmakuCacheEntry(cacheKey: key, track: track, payload: payload))
+        return DanmakuMatch(id: key, title: url.deletingPathExtension().lastPathComponent, track: track)
     }
 
     public func cachedTrack(cacheKey: String) -> DanmakuTrack? {
@@ -110,13 +200,19 @@ public final class DanmakuEngine: @unchecked Sendable {
         lock.lock()
         cache.removeAll { $0.cacheKey == entry.cacheKey }
         cache.append(entry)
-        let snapshot = cache
+        pruneExpiredLocked()
+        try? storage.save(cache, to: cacheFilename)
         lock.unlock()
-        try? storage.save(snapshot, to: cacheFilename)
     }
 
     private func pruneExpiredLocked(now: Date = Date()) {
-        cache.removeAll { $0.isExpired(now: now) }
+        cache.removeAll { $0.isExpired(now: now) || $0.payload.utf8.count > DanmakuPayloadParser.maximumPayloadBytes }
+        cache.sort { $0.createdAt > $1.createdAt }
+        var bytes = 0
+        cache = Array(cache.prefix(64)).filter { entry in
+            bytes += entry.payload.utf8.count
+            return bytes <= 16 * 1_024 * 1_024
+        }
     }
 
     private func match(from request: DanmakuSearchRequest, cacheKey: String, track: DanmakuTrack) -> DanmakuMatch {
@@ -154,3 +250,5 @@ public final class DanmakuEngine: @unchecked Sendable {
         value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
     }
 }
+
+public enum DanmakuImportError: Error, Sendable { case invalidFile }

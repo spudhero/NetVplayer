@@ -10,7 +10,7 @@ enum ToolError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "usage: ProviderPackageTool verify --package DIR --public-key RAW_OR_BASE64_FILE --shell-version VERSION | verify-index --index-url HTTPS_URL --index-public-key FILE [--expect-empty] | probe-distribution --index-url HTTPS_URL --index-public-key FILE --public-key FILE --shell-version VERSION --version VERSION --store DIR | verify-sandbox --manifest FILE --package DIR --state DIR | probe-quickjs --manifest FILE --package DIR --state DIR | probe-quickjs-bili --manifest FILE --package DIR --state DIR [--api-base URL]"
+            return "usage: ProviderPackageTool install --package DIR --public-key FILE --shell-version VERSION --store DIR | verify --package DIR --public-key RAW_OR_BASE64_FILE --shell-version VERSION | verify-index --index-url HTTPS_URL --index-public-key FILE [--expect-empty] | probe-distribution --index-url HTTPS_URL --index-public-key FILE --public-key FILE --shell-version VERSION --version VERSION --store DIR | verify-sandbox --manifest FILE --package DIR --state DIR | probe-quickjs --manifest FILE --package DIR --state DIR | probe-quickjs-bili --manifest FILE --package DIR --state DIR [--api-base URL]"
         case .invalidPublicKey:
             return "public key must contain 32 raw Ed25519 bytes or their Base64 encoding"
         case .probeMismatch(let detail):
@@ -56,7 +56,7 @@ struct ProviderPackageToolMain {
         switch arguments.first {
         case "verify-index", "probe-distribution":
             try await probeDistribution(arguments: arguments)
-        case "verify":
+        case "verify", "install":
             let package = URL(fileURLWithPath: try argument("--package", in: arguments), isDirectory: true)
             let keyURL = URL(fileURLWithPath: try argument("--public-key", in: arguments))
             let shellVersion = try argument("--shell-version", in: arguments)
@@ -70,6 +70,20 @@ struct ProviderPackageToolMain {
                 shellVersion: shellVersion
             )
             try verifier.verify(document, packageRoot: package)
+            if arguments.first == "install" {
+                let store = ProviderPackageStore(
+                    rootURL: URL(fileURLWithPath: try argument("--store", in: arguments), isDirectory: true),
+                    verifier: verifier
+                )
+                let manager = ProviderManager(store: store)
+                do {
+                    _ = try await manager.install(packageDirectory: package, document: document)
+                    await manager.shutdownAll()
+                } catch {
+                    await manager.shutdownAll()
+                    throw error
+                }
+            }
             try printJSON([
                 "ok": true,
                 "provider_id": document.manifest.providerID,

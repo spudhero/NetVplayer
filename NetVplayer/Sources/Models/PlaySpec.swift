@@ -48,6 +48,10 @@ public struct PlaySpec: Sendable {
     public var format: String
     /// 音频无视频画面时由播放器展示的封面图 URL
     public var artwork: String
+    /// 已识别音频文件的备用封面；仅在主媒体加载后确认没有视频轨道时使用
+    public var audioFallbackArtwork: String
+    /// Image-source headers, kept separate from media/CDN credentials.
+    public var artworkHeaders: [String: String]
     /// mpv 专用播放选项，用于处理网盘返回的特殊容器/伪头
     public var mpvOptions: [String: String]
     /// 当前文件应直接开始加载的位置；只作为 mpv loadfile 的文件级选项使用
@@ -58,6 +62,8 @@ public struct PlaySpec: Sendable {
     public var drivePlaybackPlan: DrivePlaybackPlan?
     /// Runtime generation used to reject stale cloud-drive player callbacks.
     public var drivePlaybackSessionGeneration: UInt64?
+    /// Runtime transfer policy; never serialized with Provider payloads or history.
+    public var transferProfile: PlaybackTransferProfile?
     /// DRM 配置
     public var drm: Drm?
     /// 外挂字幕列表
@@ -81,11 +87,14 @@ public struct PlaySpec: Sendable {
         fallbackHeaders: [String: String] = [:],
         format: String = "",
         artwork: String = "",
+        audioFallbackArtwork: String = "",
+        artworkHeaders: [String: String] = [:],
         mpvOptions: [String: String] = [:],
         initialStartPositionSeconds: Double? = nil,
         metadata: [String: String] = [:],
         drivePlaybackPlan: DrivePlaybackPlan? = nil,
         drivePlaybackSessionGeneration: UInt64? = nil,
+        transferProfile: PlaybackTransferProfile? = nil,
         drm: Drm? = nil,
         subs: [Sub] = [],
         danmaku: String = "",
@@ -101,11 +110,14 @@ public struct PlaySpec: Sendable {
         self.fallbackHeaders = fallbackHeaders
         self.format = format
         self.artwork = artwork
+        self.audioFallbackArtwork = audioFallbackArtwork
+        self.artworkHeaders = artworkHeaders
         self.mpvOptions = mpvOptions
         self.initialStartPositionSeconds = initialStartPositionSeconds
         self.metadata = metadata
         self.drivePlaybackPlan = drivePlaybackPlan
         self.drivePlaybackSessionGeneration = drivePlaybackSessionGeneration
+        self.transferProfile = transferProfile
         self.drm = drm
         self.subs = subs
         self.danmaku = danmaku
@@ -119,6 +131,7 @@ public struct PlaySpec: Sendable {
         var spec = self
         if !override.url.isEmpty {
             if override.url != spec.url { spec.contentLength = nil }
+            if override.url != spec.url { spec.transferProfile = nil }
             spec.url = override.url
         }
         if !override.externalAudioURL.isEmpty { spec.externalAudioURL = override.externalAudioURL }
@@ -127,6 +140,8 @@ public struct PlaySpec: Sendable {
         if !override.fallbackHeaders.isEmpty { spec.fallbackHeaders.merge(override.fallbackHeaders) { _, new in new } }
         if !override.format.isEmpty { spec.format = override.format }
         if !override.artwork.isEmpty { spec.artwork = override.artwork }
+        if !override.audioFallbackArtwork.isEmpty { spec.audioFallbackArtwork = override.audioFallbackArtwork }
+        if !override.artworkHeaders.isEmpty { spec.artworkHeaders.merge(override.artworkHeaders) { _, new in new } }
         if !override.mpvOptions.isEmpty { spec.mpvOptions.merge(override.mpvOptions) { _, new in new } }
         if let startPosition = override.initialStartPositionSeconds {
             spec.initialStartPositionSeconds = startPosition
@@ -136,6 +151,7 @@ public struct PlaySpec: Sendable {
         if let generation = override.drivePlaybackSessionGeneration {
             spec.drivePlaybackSessionGeneration = generation
         }
+        if let profile = override.transferProfile { spec.transferProfile = profile }
         if let drm = override.drm { spec.drm = drm }
         if !override.subs.isEmpty { spec.subs = override.subs }
         if !override.danmaku.isEmpty { spec.danmaku = override.danmaku }

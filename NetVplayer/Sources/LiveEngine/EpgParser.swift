@@ -20,12 +20,23 @@ public struct EpgParser: Sendable {
 
     /// 从 XMLTV 数据解析 EPG，支持 gzip 压缩数据
     public static func parse(data: Data) -> [String: EpgData] {
-        let payload = decompressedIfNeeded(data) ?? data
+        (try? parseValidated(data: data)) ?? [:]
+    }
+
+    private static func parseValidated(data: Data) throws -> [String: EpgData] {
+        guard data.count <= 8 * 1_024 * 1_024 else { throw EPGImportError.limitExceeded }
+        let payload: Data
+        if data.starts(with: [0x1f, 0x8b]) {
+            guard let expanded = decompressedIfNeeded(data) else { throw EPGImportError.invalidGzip }
+            payload = expanded
+        } else { payload = data }
+        guard !String(decoding: payload, as: UTF8.self).localizedCaseInsensitiveContains("<!ENTITY") else { throw EPGImportError.invalidXML }
         let delegate = XMLTVDelegate()
         let parser = XMLParser(data: payload)
+        parser.shouldResolveExternalEntities = false
         parser.delegate = delegate
-        guard parser.parse() else {
-            return [:]
+        guard parser.parse(), delegate.sawTV else {
+            throw EPGImportError.invalidXML
         }
         return delegate.makeData()
     }
@@ -66,10 +77,10 @@ public struct EpgParser: Sendable {
         do {
             let response = try await get(url: url, httpClient: httpClient, timeout: timeout)
             try Task.checkCancellation()
-            let parsed = parse(data: response.data)
+            let parsed = try parseValidated(data: response.data)
             let epg = parsed[channelId]
                 ?? parsed[channelId.lowercased()]
-                ?? parsed.values.first
+                ?? (parsed.count == 1 ? parsed.values.first : nil)
                 ?? EpgData(channelName: channelId)
             store(epg, for: cacheKey)
             return epg
@@ -82,7 +93,7 @@ public struct EpgParser: Sendable {
             } else if isTimeout(error) {
                 DiagnosticLog.write("[EPG_FETCH_TIMEOUT] channel=\(channelId) timeout=\(String(format: "%.1f", timeout))s url=\(redactedURL(url))")
             }
-            return EpgData(channelName: channelId)
+            return staleValue(for: cacheKey) ?? EpgData(channelName: channelId)
         }
     }
 
@@ -96,16 +107,28 @@ public struct EpgParser: Sendable {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         guard let entry = cache[key], entry.expiresAt > Date() else {
-            cache.removeValue(forKey: key)
             return nil
         }
         return entry.data
     }
 
+    private static func staleValue(for key: String) -> EpgData? {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        return cache[key]?.data
+    }
+
     private static func store(_ data: EpgData, for key: String) {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        cache[key] = (Date().addingTimeInterval(cacheTTL), data)
+        let bounded = EpgData(channelName: data.channelName, items: Array(data.items.prefix(256)))
+        cache[key] = (Date().addingTimeInterval(cacheTTL), bounded)
+        func cost(_ value: EpgData) -> Int { value.items.reduce(0) { $0 + $1.title.utf8.count + 128 } }
+        var total = cache.values.reduce(0) { $0 + cost($1.data) }
+        for entry in cache.sorted(by: { $0.value.expiresAt < $1.value.expiresAt }) {
+            guard cache.count > 128 || total > 8 * 1_024 * 1_024 else { break }
+            total -= cost(entry.value.data)
+            cache[entry.key] = nil
+        }
     }
 
     private static func buildURL(apiTemplate: String, channelId: String, date: String) -> String {
@@ -122,7 +145,7 @@ public struct EpgParser: Sendable {
     private static func get(url: String, httpClient: HTTPClient, timeout: TimeInterval) async throws -> HTTPResponse {
         try await withThrowingTaskGroup(of: HTTPResponse.self) { group in
             group.addTask {
-                try await httpClient.get(url: url, timeout: timeout, allowsProxyFallback: false)
+                try await httpClient.getBounded(url: url, maximumBytes: 8 * 1_024 * 1_024, timeout: timeout, allowsProxyFallback: false)
             }
             group.addTask {
                 let clampedTimeout = max(timeout, 0.1)
@@ -192,6 +215,7 @@ public struct EpgParser: Sendable {
 
                 let decodedCount = chunkSize - Int(stream.avail_out)
                 if decodedCount > 0 {
+                    guard decodedCount <= 16 * 1_024 * 1_024 - output.count else { return Z_MEM_ERROR }
                     output.append(buffer, count: decodedCount)
                 }
                 if status == Z_STREAM_END {
@@ -209,6 +233,7 @@ public struct EpgParser: Sendable {
 }
 
 private final class XMLTVDelegate: NSObject, XMLParserDelegate {
+    private(set) var sawTV = false
     private struct Programme {
         var channel: String
         var title: String = ""
@@ -230,7 +255,10 @@ private final class XMLTVDelegate: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
+        guard programmes.count < 10_000, channelNames.count < 1_000,
+              attributeDict.values.allSatisfy({ $0.utf8.count <= 4_096 }) else { parser.abortParsing(); return }
         currentElement = elementName
+        if elementName == "tv" { sawTV = true }
         buffer = ""
         switch elementName {
         case "channel":
@@ -248,6 +276,7 @@ private final class XMLTVDelegate: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
+        guard buffer.utf8.count + string.utf8.count <= 4_096 else { parser.abortParsing(); return }
         buffer += string
     }
 

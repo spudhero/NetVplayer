@@ -9,6 +9,8 @@ public enum DrivePlaybackTransitionOutcome: Equatable, Sendable {
 
 @MainActor
 public final class DrivePlaybackSessionController {
+    public static let attemptMetadataKey = "drive.playback.attempt"
+
     private enum Phase: Equatable {
         case idle
         case starting
@@ -24,6 +26,8 @@ public final class DrivePlaybackSessionController {
     private var phase: Phase = .idle
     private var terminalDelivered = false
     private var refreshAttemptedCandidateIDs = Set<String>()
+    private var submissionCount: UInt64 = 0
+    private var activeAttempt: String?
 
     public init() {}
 
@@ -36,12 +40,37 @@ public final class DrivePlaybackSessionController {
         phase = .starting
         terminalDelivered = false
         refreshAttemptedCandidateIDs.removeAll()
+        activeAttempt = nil
         return generation
+    }
+
+    // A refreshed candidate keeps its ID. Each submitted load needs a separate
+    // identity so a failure before its first frame is not treated as an old callback.
+    public func prepareSubmission(for spec: PlaySpec) -> PlaySpec? {
+        guard spec.drivePlaybackSessionGeneration == generation,
+              let candidate = DrivePlaybackRoutePolicy.candidate(for: spec) else { return nil }
+        if case let .switching(_, target) = phase {
+            guard target == candidate.id else { return nil }
+        } else {
+            guard candidate.id == activeCandidateID, phase != .exhausted else { return nil }
+        }
+        submissionCount &+= 1
+        activeAttempt = String(submissionCount)
+        activeCandidateID = candidate.id
+        phase = .starting
+        var submitted = spec
+        submitted.metadata[Self.attemptMetadataKey] = activeAttempt
+        return submitted
+    }
+
+    public func acceptsAttempt(for spec: PlaySpec) -> Bool {
+        spec.drivePlaybackSessionGeneration == generation
+            && spec.metadata[Self.attemptMetadataKey] == activeAttempt
     }
 
     public func requestFailure(for spec: PlaySpec, message: String) -> DrivePlaybackTransitionOutcome {
         guard let plan,
-              spec.drivePlaybackSessionGeneration == generation,
+              acceptsAttempt(for: spec),
               let failed = DrivePlaybackRoutePolicy.candidate(for: spec) else {
             return .stale
         }
@@ -70,7 +99,7 @@ public final class DrivePlaybackSessionController {
     }
 
     public func requestRefreshFailure(for spec: PlaySpec) -> DrivePlaybackTransitionOutcome {
-        guard spec.drivePlaybackSessionGeneration == generation,
+        guard acceptsAttempt(for: spec),
               let failed = DrivePlaybackRoutePolicy.candidate(for: spec) else {
             return .stale
         }
@@ -110,7 +139,7 @@ public final class DrivePlaybackSessionController {
     }
 
     public func confirmStarted(spec: PlaySpec) -> Bool {
-        guard spec.drivePlaybackSessionGeneration == generation,
+        guard acceptsAttempt(for: spec),
               let candidate = DrivePlaybackRoutePolicy.candidate(for: spec) else {
             return false
         }
@@ -130,6 +159,7 @@ public final class DrivePlaybackSessionController {
         manualSelection = false
         phase = .idle
         terminalDelivered = false
+        activeAttempt = nil
     }
 
     private func exhaustOnce() -> DrivePlaybackTransitionOutcome {

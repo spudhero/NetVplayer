@@ -292,3 +292,29 @@ private struct ExpectedSearchFailure: Error {}
     #expect(elapsed >= .milliseconds(900))
     #expect(elapsed < .milliseconds(1_300))
 }
+
+@Test func searchEngineContinuesUnknownPageCountAndRetainsFallbackKeyword() async throws {
+    let decoded = try JSONDecoder().decode(Result.self, from: Data(#"{"list":[{"vod_id":"1","vod_name":"Movie"}]}"#.utf8))
+    #expect(!decoded.pageCountIsKnown)
+    let engine = SearchEngine(maxConcurrentSites: 1) { _, keyword, _, _ in
+        keyword.contains(":") ? Result(list: []) : Result(list: [Vod(vodId: "1", vodName: "Movie Return")])
+    }
+    let site = Site(key: "s", name: "Site", type: 1, api: "https://site.invalid", searchable: 1)
+    for await result in engine.search(keyword: "Movie: Return", sites: [site]) {
+        #expect(result.effectiveKeyword == "Movie Return")
+        #expect(result.hasMore)
+        #expect(!result.pageCountIsKnown)
+    }
+}
+
+@Test func searchEngineUsesRequestedPageOnlyWhenResponseOmitsPage() async throws {
+    let missing = try JSONDecoder().decode(Result.self, from: Data(#"{"list":[{"vod_id":"2"}]}"#.utf8))
+    let explicit = try JSONDecoder().decode(Result.self, from: Data(#"{"page":1,"list":[{"vod_id":"2"}]}"#.utf8))
+    let site = Site(key: "s", name: "Site", type: 1, searchable: 1)
+    for response in [missing, explicit] {
+        let engine = SearchEngine(maxConcurrentSites: 1) { _, _, _, _ in response }
+        for await result in engine.search(keyword: "Movie", sites: [site], page: "2") {
+            #expect(result.page == (response.pageIsKnown ? 1 : 2))
+        }
+    }
+}

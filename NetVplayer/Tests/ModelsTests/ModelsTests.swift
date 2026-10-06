@@ -28,6 +28,42 @@ import Testing
     #expect(result.needParse == false)
 }
 
+@Test(arguments: ["sub", "subs"])
+func testResultDecodesProviderLyricsWithoutOptionalFlag(key: String) throws {
+    let lyricURL = "data:application/x-ass;base64," + Data("[Script Info]\n".utf8).base64EncodedString()
+    let payload = try JSONSerialization.data(withJSONObject: [
+        "url": "https://media.example.test/song.m4a",
+        key: [["name": "Lyrics", "url": lyricURL, "lang": "zh", "format": "ass"]]
+    ])
+    let result = try JSONDecoder().decode(Result.self, from: payload)
+    let subtitle = try #require(result.subs.first)
+    #expect(subtitle.url == lyricURL)
+    #expect(subtitle.lang == "zh")
+    #expect(subtitle.format == "ass")
+    #expect(subtitle.flag == 0)
+
+    let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any])
+    #expect(encoded["sub"] == nil)
+    #expect((encoded["subs"] as? [[String: Any]])?.count == 1)
+}
+
+@Test(arguments: [true, false])
+func testResultPrefersCanonicalSubtitlesIncludingEmptyList(empty: Bool) throws {
+    let payload = try JSONSerialization.data(withJSONObject: [
+        "subs": empty ? [] : [["url": "https://media.example.test/current.ass"]],
+        "sub": [["url": "https://media.example.test/legacy.ass"]]
+    ])
+    let result = try JSONDecoder().decode(Result.self, from: payload)
+    #expect(result.subs.map(\.url) == (empty ? [] : ["https://media.example.test/current.ass"]))
+    #expect(result.subs.first?.name ?? "" == "")
+}
+
+@Test func testSubtitleStillRequiresURL() {
+    #expect(throws: DecodingError.self) {
+        try JSONDecoder().decode(Sub.self, from: Data(#"{"name":"Missing URL"}"#.utf8))
+    }
+}
+
 @Test func testResultRoundTripsManualPlaybackInteraction() throws {
     let interaction = PlaybackInteraction(
         kind: .manualVerification,

@@ -33,6 +33,7 @@ public actor ProviderProcessClient {
     private let command: ProviderCommand
     private let providerID: String
     private let diagnosticWriter: ProviderDiagnosticJSONLWriter
+    private var stoppingProcesses: [Process] = []
     private var process: Process?
     private var inputHandle: FileHandle?
     private var outputHandle: FileHandle?
@@ -253,6 +254,16 @@ public actor ProviderProcessClient {
         }
     }
 
+    public func stopAndConfirmExit() async throws {
+        await stop()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while stoppingProcesses.contains(where: \.isRunning), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        stoppingProcesses.removeAll { !$0.isRunning }
+        guard stoppingProcesses.isEmpty else { throw ProviderMaintenanceError.processRunning }
+    }
+
     public func stop(graceful: Bool = true) async {
         emit(
             level: .info,
@@ -263,6 +274,10 @@ public actor ProviderProcessClient {
         if graceful, let process, process.isRunning {
             let request = ProviderRequest(providerID: command.environment["NETVPLAYER_PROVIDER_ID"] ?? "", operation: .shutdown)
             _ = try? await self.request(request, timeout: .seconds(2))
+            let deadline = ContinuousClock.now.advanced(by: .milliseconds(500))
+            while process.isRunning, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(25))
+            }
         }
         quickJSHostTasks.values.forEach { $0.cancel() }
         quickJSHostTasks.removeAll()
@@ -274,6 +289,8 @@ public actor ProviderProcessClient {
         try? errorHandle?.close()
         outputHandle = nil
         errorHandle = nil
+        if let process, process.isRunning, !stoppingProcesses.contains(where: { $0 === process }) { stoppingProcesses.append(process) }
+        stoppingProcesses.removeAll { !$0.isRunning }
         self.process = nil
         failAll(ProviderProcessError.notRunning)
         emit(level: .info, category: .lifecycle, code: .processStopped)
@@ -511,6 +528,8 @@ public actor ProviderProcessClient {
             processID: process?.processIdentifier,
             terminationStatus: status
         )
+        if let process, process.isRunning, !stoppingProcesses.contains(where: { $0 === process }) { stoppingProcesses.append(process) }
+        stoppingProcesses.removeAll { !$0.isRunning }
         process = nil
         inputHandle = nil
         quickJSHostTasks.values.forEach { $0.cancel() }

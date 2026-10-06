@@ -15,6 +15,15 @@ public enum LiveHLSRelayPolicy {
     public static let directMediaTransport = "direct-live-media"
     public static let localRelayTransport = "local-hls-relay"
     public static let localStreamRelayTransport = "local-stream-relay"
+    public static let quarkParallelPlaybackConcurrency = 60
+    public static let quarkParallelPlaybackSegmentSize: Int64 = 400 * 1024
+    public static let ucParallelPlaybackConcurrency = 140
+    public static let ucParallelPlaybackSegmentSize: Int64 = 97_280
+    public static let ucParallelHTTP2ConnectionLimit = ProxyServer.multiplexedRangeConnectionLimit
+    public static let ucEssentialsPreloadPlaybackConcurrency = 136
+    public static let ucMediaPreloadPlaybackConcurrency = 116
+    public static let baiduParallelPlaybackConcurrency = 5
+    public static let baiduParallelPlaybackSegmentSize: Int64 = 512 * 1024
     private static let driveSizeMetadataKey = "drive.size"
 
     public static func shouldRetryWithLocalRelay(spec: PlaySpec, failureMessage: String) -> Bool {
@@ -44,6 +53,9 @@ public enum LiveHLSRelayPolicy {
             || lower.contains("连接被中断")
             || lower.contains("tls")
             || lower.contains("io error")
+            || lower.contains("connection ended")
+            || lower.contains("hls relay failed")
+            || lower.contains("stream relay failed")
             || lower.contains("unexpected_eof")
             || lower.contains("failed to open")
     }
@@ -72,12 +84,20 @@ public enum LiveHLSRelayPolicy {
     public static func localStreamRelaySpec(
         from spec: PlaySpec,
         proxyServer: ProxyServer = .shared,
-        relayMode: RemoteStreamRelayMode = .buffered
+        relayMode: RemoteStreamRelayMode = .buffered,
+        bufferConfiguration: RemoteStreamBufferConfiguration? = nil
     ) -> PlaySpec? {
-        let contentLength = spec.metadata[driveSizeMetadataKey].flatMap(Int64.init)
+        let profile = PlaybackTransferPolicy.profile(for: spec)
+        let contentLength = profile.context.contentLength
         let sourceByteOffset = sourceByteOffset(for: spec)
-        let bufferConfiguration = remoteStreamBufferConfiguration(for: spec)
+        let bufferConfiguration = bufferConfiguration ?? remoteStreamBufferConfiguration(for: spec)
         let parallelUpstream = parallelSegmentedOpenEndedUpstreamConfiguration(for: spec)
+        let provider = spec.metadata[DrivePlaybackMetadataKey.provider]
+        let route = spec.metadata[DrivePlaybackMetadataKey.route]
+        let directOriginalProviders = [DriveProvider.quark.rawValue, DriveProvider.uc.rawValue, DriveProvider.baidu.rawValue]
+        let usesDirectUpstream = spec.metadata["network.explicitDirect"] == "true"
+            || (directOriginalProviders.contains(provider ?? "")
+                && (route == DrivePlaybackRoute.originalDownload || route == DrivePlaybackRoute.ucOriginalProxy))
         let relayURL = proxyServer.registerRemoteStream(
             url: spec.url,
             headers: spec.headers,
@@ -87,15 +107,20 @@ public enum LiveHLSRelayPolicy {
             continuousOpenEndedResponses: relayMode == .buffered,
             parallelSegmentedOpenEndedUpstream: parallelUpstream != nil,
             parallelUpstreamUsesCurl: parallelUpstream?.usesCurl ?? false,
+            parallelUpstreamUsesHTTP2Multiplexing: parallelUpstream?.usesHTTP2Multiplexing ?? false,
             parallelUpstreamSegmentSize: parallelUpstream?.segmentSize ?? 5 * 1024 * 1024,
             parallelUpstreamConcurrency: parallelUpstream?.concurrency ?? 3,
+            upstreamUsesDirectConnection: usesDirectUpstream,
+            preloadLayout: nextEpisodePreloadLayout(for: spec),
             bufferConfiguration: bufferConfiguration,
-            relayMode: relayMode
+            relayMode: relayMode,
+            transferProfile: profile
         )
         guard !relayURL.isEmpty else { return nil }
 
         var relaySpec = spec
         relaySpec.url = relayURL
+        relaySpec.transferProfile = profile
         relaySpec.metadata[transportMetadataKey] = localStreamRelayTransport
         relaySpec.metadata["stream.relayMode"] = relayMode.rawValue
         relaySpec.mpvOptions.removeValue(forKey: "http-proxy")
@@ -113,65 +138,33 @@ public enum LiveHLSRelayPolicy {
         return relaySpec
     }
 
+    public static func nextEpisodePreloadLayout(for spec: PlaySpec) -> RemoteStreamPreloadLayout {
+        let profile = PlaybackTransferPolicy.profile(for: spec)
+        if profile.context.media.isAudio { return .audioOriginal }
+        switch profile.preloadLayout {
+        case .standard: return .standard
+        case .ucOriginal: return .ucOriginal
+        case .quarkOriginal: return .quarkOriginal
+        case .audioOriginal: return .audioOriginal
+        }
+    }
+
+    public static func playbackConcurrencyDuringPreload(for spec: PlaySpec, essentialsOnly: Bool) -> Int? {
+        let profile = PlaybackTransferPolicy.profile(for: spec)
+        guard profile.adaptsConcurrency else { return nil }
+        return max(1, profile.parallelConcurrency - (essentialsOnly ? 4 : 24))
+    }
+
     static func parallelSegmentedOpenEndedUpstreamConfiguration(
         for spec: PlaySpec
-    ) -> (usesCurl: Bool, segmentSize: Int64, concurrency: Int)? {
-        let provider = spec.metadata[DrivePlaybackMetadataKey.provider]
-        let route = spec.metadata[DrivePlaybackMetadataKey.route]
-        if provider == DriveProvider.uc.rawValue && route == DrivePlaybackRoute.ucOriginalProxy {
-            return (usesCurl: true, segmentSize: 512 * 1024, concurrency: 16)
-        }
-        if provider == DriveProvider.p115.rawValue && route == DrivePlaybackRoute.originalDownload {
-            return (usesCurl: false, segmentSize: 512 * 1024, concurrency: 2)
-        }
-        return nil
+    ) -> (usesCurl: Bool, usesHTTP2Multiplexing: Bool, segmentSize: Int64, concurrency: Int)? {
+        let profile = PlaybackTransferPolicy.profile(for: spec)
+        guard profile.usesParallelUpstream else { return nil }
+        return (false, profile.usesHTTP2Multiplexing, profile.parallelSegmentBytes, profile.parallelConcurrency)
     }
 
     static func remoteStreamBufferConfiguration(for spec: PlaySpec) -> RemoteStreamBufferConfiguration {
-        let provider = spec.metadata[DrivePlaybackMetadataKey.provider]
-        let route = spec.metadata[DrivePlaybackMetadataKey.route]
-        let isOriginal = route == DrivePlaybackRoute.originalDownload
-            || route == DrivePlaybackRoute.ucOriginalProxy
-        guard isOriginal else {
-            return .default
-        }
-
-        if provider == DriveProvider.ali.rawValue {
-            return RemoteStreamBufferConfiguration(
-                initialChunkSize: 1 * 1024 * 1024,
-                chunkSize: 1 * 1024 * 1024,
-                prefetchWindowSize: 16 * 1024 * 1024,
-                maxBytes: 32 * 1024 * 1024,
-                maxConcurrentPrefetches: 2
-            )
-        }
-
-        if provider == DriveProvider.p115.rawValue {
-            return RemoteStreamBufferConfiguration(
-                initialChunkSize: 512 * 1024,
-                chunkSize: 512 * 1024,
-                prefetchWindowSize: 8 * 1024 * 1024,
-                maxBytes: 32 * 1024 * 1024,
-                maxConcurrentPrefetches: 1
-            )
-        }
-
-        let cloudOriginalProviders: Set<String> = [
-            DriveProvider.quark.rawValue,
-            DriveProvider.uc.rawValue,
-            DriveProvider.pikpak.rawValue
-        ]
-        guard let provider, cloudOriginalProviders.contains(provider) else {
-            return .default
-        }
-
-        return RemoteStreamBufferConfiguration(
-            initialChunkSize: 4 * 1024 * 1024,
-            chunkSize: 4 * 1024 * 1024,
-            prefetchWindowSize: 32 * 1024 * 1024,
-            maxBytes: 64 * 1024 * 1024,
-            maxConcurrentPrefetches: 2
-        )
+        PlaybackTransferPolicy.bufferConfiguration(PlaybackTransferPolicy.profile(for: spec))
     }
 
     private static func sourceByteOffset(for spec: PlaySpec) -> Int64 {

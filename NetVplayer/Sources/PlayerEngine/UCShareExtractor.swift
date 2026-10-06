@@ -2,6 +2,7 @@
 // UC drive share and file references to playable links.
 
 import Foundation
+import Storage
 import Models
 import Networking
 import DriveEngine
@@ -35,26 +36,26 @@ public final class UCShareExtractor: SourceExtractorProtocol {
             if let envCookie, !envCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return envCookie
             }
-            return UserDefaults.standard.string(forKey: UCShareExtractor.cookieDefaultsKey)
+            return UserPreferences.shared.ucCookie
         },
         cookieUpdateHandler: @escaping @Sendable (String) -> Void = {
-            UserDefaults.standard.set($0, forKey: UCShareExtractor.cookieDefaultsKey)
+            UserPreferences.shared.ucCookie = $0
         },
         originalPlaybackTokenProvider: @escaping @Sendable () -> String? = {
             let envToken = ProcessInfo.processInfo.environment["NETVPLAYER_UC_ORIGINAL_UT"]
             if let envToken, !envToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return envToken
             }
-            return UserDefaults.standard.string(forKey: UCShareExtractor.originalPlaybackTokenDefaultsKey)
+            return UserPreferences.shared.ucOriginalPlaybackToken
         },
         originalPlaybackTokenUpdateHandler: @escaping @Sendable (String) -> Void = {
-            UserDefaults.standard.set($0, forKey: UCShareExtractor.originalPlaybackTokenDefaultsKey)
+            UserPreferences.shared.ucOriginalPlaybackToken = $0
         },
         tokenProvider: @escaping @Sendable () -> CloudCredential? = {
-            let refreshToken = UserDefaults.standard.string(forKey: UCShareExtractor.refreshTokenDefaultsKey) ?? ""
-            let accessToken = UserDefaults.standard.string(forKey: UCShareExtractor.accessTokenDefaultsKey) ?? ""
+            let refreshToken = UserPreferences.shared.ucTVRefreshToken
+            let accessToken = UserPreferences.shared.ucTVAccessToken
             let deviceID = UserDefaults.standard.string(forKey: UCShareExtractor.deviceIDDefaultsKey) ?? ""
-            let queryToken = UserDefaults.standard.string(forKey: UCShareExtractor.queryTokenDefaultsKey) ?? ""
+            let queryToken = UserPreferences.shared.ucTVQueryToken
             guard !refreshToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -70,12 +71,12 @@ public final class UCShareExtractor: SourceExtractorProtocol {
         },
         tokenUpdateHandler: @escaping @Sendable (CloudCredential) -> Void = { credential in
             UserDefaults.standard.set(credential.deviceID ?? "", forKey: UCShareExtractor.deviceIDDefaultsKey)
-            UserDefaults.standard.set(credential.queryToken ?? "", forKey: UCShareExtractor.queryTokenDefaultsKey)
-            UserDefaults.standard.set(credential.refreshToken ?? "", forKey: UCShareExtractor.refreshTokenDefaultsKey)
-            UserDefaults.standard.set(credential.accessToken ?? "", forKey: UCShareExtractor.accessTokenDefaultsKey)
+            UserPreferences.shared.ucTVQueryToken = credential.queryToken ?? ""
+            UserPreferences.shared.ucTVRefreshToken = credential.refreshToken ?? ""
+            UserPreferences.shared.ucTVAccessToken = credential.accessToken ?? ""
         },
         fongMiPlaybackTokenProvider: @escaping @Sendable () -> CloudCredential? = {
-            let token = UserDefaults.standard.string(forKey: UCShareExtractor.fongMiPlaybackTokenDefaultsKey) ?? ""
+            let token = UserPreferences.shared.ucFongMiPlaybackToken
             let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmedToken.isEmpty else { return nil }
             let expiresAtRaw = UserDefaults.standard.string(forKey: UCShareExtractor.fongMiPlaybackExpiresAtDefaultsKey) ?? ""

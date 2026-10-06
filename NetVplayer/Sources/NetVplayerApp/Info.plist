@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.12</string>
+    <string>1.1.0</string>
     <key>CFBundleVersion</key>
-    <string>13</string>
+    <string>14</string>
     <key>SUFeedURL</key>
     <string>https://github.com/spudhero/NetVplayer/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key>
@@ -31,5 +31,7 @@
         <key>NSAllowsArbitraryLoads</key>
         <true/>
     </dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>NetVplayer connects to your NAS and media servers on the local network to browse and play videos and music.</string>
 </dict>
 </plist>

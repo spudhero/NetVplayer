@@ -45,6 +45,15 @@ public struct AliShareFile: Sendable {
     public let playURL: String
     public let isDirectory: Bool
 
+    public var isPlayableMedia: Bool {
+        DriveMediaClassifier.isPlayableMedia(
+            name: name,
+            formatType: firstNonEmpty([contentType, category, type]),
+            isDirectory: isDirectory,
+            isFile: !isDirectory
+        )
+    }
+
     public var isPlayableVideo: Bool {
         DriveMediaClassifier.isPlayableVideo(
             name: name,
@@ -158,7 +167,7 @@ public final class AliDriveClient: @unchecked Sendable {
                 for item in page.files {
                     if item.isDirectory {
                         directoryQueue.append(item.fileID)
-                    } else if item.isPlayableVideo {
+                    } else if item.isPlayableMedia {
                         playableFiles.append(AliPlayableFile(file: item, shareToken: shareToken))
                     } else if item.isKnownNonVideoAsset {
                         filteredAssetNames.append(item.name)

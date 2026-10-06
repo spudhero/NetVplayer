@@ -16,6 +16,10 @@ struct SitePickerMenuItem: Equatable, Identifiable {
         return "\(siteName) · \(statusText)"
     }
 
+    static func isSelectable(status: ExternalSourceSupportStatus?) -> Bool {
+        status != .invalidConfiguration
+    }
+
     static func statusPresentation(
         for status: ExternalSourceSupportStatus
     ) -> (text: String?, icon: String, detail: String) {
@@ -48,11 +52,11 @@ struct SitePickerMenuControl: NSViewRepresentable {
     var onSelect: (String) -> Void = { _ in }
 
     var accessibilityLabel: String {
-        title.isEmpty ? "未命名站点" : title
+        title.isEmpty ? L10n.text("未命名站点") : title
     }
 
     var accessibilityTitle: String {
-        "当前站点：\(accessibilityLabel)"
+        L10n.text("当前站点：{0}", ["\(accessibilityLabel)"])
     }
 
     var controlSize: CGSize {
@@ -108,6 +112,11 @@ struct SitePickerMenuControl: NSViewRepresentable {
             menu.autoenablesItems = false
 
             for item in items {
+                if item.id.hasPrefix("__group:") {
+                    if !menu.items.isEmpty { menu.addItem(.separator()) }
+                    let heading = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+                    heading.isEnabled = false; menu.addItem(heading); continue
+                }
                 let menuItem = NSMenuItem(
                     title: item.title,
                     action: #selector(selectItem(_:)),
@@ -137,9 +146,14 @@ struct SitePickerMenuControl: NSViewRepresentable {
 
 struct VodHomeView: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject var fileServices = FileServicesState.shared
     @Environment(\.appThemePalette) private var palette
     @State private var scrollTargetID = "recommend"
     @State private var categoryDragSelectionGate = HorizontalMouseDragSelectionGate()
+    @State private var isPushPlaybackPresented = false
+    @State private var pushPlaybackInput = ""
+    @State private var isOpeningPushPlayback = false
+    @FocusState private var isPushPlaybackFieldFocused: Bool
 
     var body: some View {
         GeometryReader { geometry in
@@ -154,33 +168,29 @@ struct VodHomeView: View {
                 )
             )
         }
-        .confirmationDialog(
+        .themedConfirmation(
             cloudCredentialClearTitle,
             isPresented: Binding(
                 get: { appState.cloudCredentialClearRequest != nil },
                 set: { if !$0 { appState.cancelCloudCredentialClear() } }
             ),
-            titleVisibility: .visible
+            confirmTitle: L10n.text("确认清除"), message: cloudCredentialClearMessage
         ) {
-            Button("确认清除", role: .destructive) {
-                appState.confirmCloudCredentialClear()
-            }
-            Button("取消", role: .cancel) {
-                appState.cancelCloudCredentialClear()
-            }
-        } message: {
-            Text(cloudCredentialClearMessage)
+            appState.confirmCloudCredentialClear()
+        }
+        .sheet(isPresented: $isPushPlaybackPresented) {
+            pushPlaybackSheet.themedPresentation()
         }
     }
 
     private var cloudCredentialClearTitle: String {
-        guard let request = appState.cloudCredentialClearRequest else { return "清除网盘授权？" }
-        return "清除\(request.provider.displayName)授权？"
+        guard let request = appState.cloudCredentialClearRequest else { return L10n.text("清除网盘授权？") }
+        return L10n.text("清除{0}授权？", ["\(request.provider.localizedDisplayName)"])
     }
 
     private var cloudCredentialClearMessage: String {
         guard let request = appState.cloudCredentialClearRequest else { return "" }
-        return "将删除本机保存的\(request.provider.displayName) Cookie、token 和相关设备信息。此操作不会删除网盘文件。"
+        return L10n.text("将删除本机保存的{0} Cookie、token 和相关设备信息。此操作不会删除网盘文件。", ["\(request.provider.localizedDisplayName)"])
     }
 
     private func homeContent(isSidebarPresented: Bool, posterLayout: HomePosterGridLayout) -> some View {
@@ -188,7 +198,9 @@ struct VodHomeView: View {
             VStack(spacing: 0) {
                 header(isSidebarPresented: isSidebarPresented)
 
-                if appState.isConfigLoaded {
+                if let service = fileServices.catalog.services.first(where: { $0.siteKey == appState.activeSite?.key }) {
+                    FileServiceBrowserView(state: fileServices, service: service)
+                } else if appState.isConfigLoaded {
                     categoryStrip
                     categoryFilterStrip
                     libraryContent(posterLayout: posterLayout)
@@ -197,15 +209,15 @@ struct VodHomeView: View {
                     case .unconfigured:
                         configurationEmptyState
                     case .preparingExtension:
-                        savedConfigLoadingState(message: "正在准备播放扩展")
+                        savedConfigLoadingState(message: L10n.text("正在准备播放扩展"))
                     case .loading, .ready:
-                        savedConfigLoadingState(message: "正在加载数据源")
+                        savedConfigLoadingState(message: L10n.text("正在加载数据源"))
                     case .failed(let message):
                         AppUnavailableState(
-                            title: "数据源暂未加载",
+                            title: L10n.text("数据源暂未加载"),
                             message: message,
                             systemImage: "exclamationmark.triangle",
-                            actionTitle: appState.availableDepots.isEmpty ? "重试" : "打开设置"
+                            actionTitle: appState.availableDepots.isEmpty ? L10n.text("重试") : L10n.text("打开设置")
                         ) {
                             if appState.availableDepots.isEmpty {
                                 appState.retrySavedConfigStartup()
@@ -226,36 +238,23 @@ struct VodHomeView: View {
 
     private func header(isSidebarPresented: Bool) -> some View {
         HStack(spacing: HomeVisualPolicy.headerGap) {
-            sitePicker
-                .offset(
-                    x: HomeVisualPolicy.headerLeadingInset(
-                        isSidebarPresented: isSidebarPresented
-                    )
+            HStack(spacing: 8) {
+                sitePicker
+                catalogRefreshButton
+            }
+            .offset(
+                x: HomeVisualPolicy.headerLeadingInset(
+                    isSidebarPresented: isSidebarPresented
                 )
-                .padding(
-                    .trailing,
-                    HomeVisualPolicy.headerLeadingInset(
-                        isSidebarPresented: isSidebarPresented
-                    )
+            )
+            .padding(
+                .trailing,
+                HomeVisualPolicy.headerLeadingInset(
+                    isSidebarPresented: isSidebarPresented
                 )
+            )
 
             Spacer(minLength: 20)
-
-            Button {
-                Task { await appState.refreshCurrentCatalog() }
-            } label: {
-                Group {
-                    if appState.isCatalogRefreshing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-                .frame(width: 18, height: 18)
-            }
-            .buttonStyle(.plain)
-            .disabled(appState.isCatalogRefreshing || appState.activeSite == nil)
-            .help("刷新当前列表")
 
             Button {
                 appState.selectedTab = .search
@@ -263,8 +262,9 @@ struct VodHomeView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 14, weight: .medium))
-                    Text("搜索电影、剧集、综艺")
+                    Text(L10n.text("搜索电影、剧集、综艺"))
                         .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
                     Spacer(minLength: 12)
                 }
                 .foregroundStyle(palette.muted)
@@ -275,11 +275,42 @@ struct VodHomeView: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut("f", modifiers: .command)
-            .help("搜索影视")
+            .help(L10n.text("搜索影视"))
         }
         .frame(height: HomeVisualPolicy.headerHeight)
         .padding(.bottom, 12)
         .animation(.easeInOut(duration: 0.20), value: isSidebarPresented)
+    }
+
+    private var catalogRefreshButton: some View {
+        Button {
+            if appState.activeSite?.api.hasPrefix("netvplayer-files://") == true && fileServices.isRefreshing {
+                fileServices.cancelCurrentRefresh()
+            } else { Task { await appState.refreshCurrentCatalog() } }
+        } label: {
+            Group {
+                if appState.activeSite?.api.hasPrefix("netvplayer-files://") == true && fileServices.isRefreshing {
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .medium))
+                } else if appState.isCatalogRefreshing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .medium))
+                }
+            }
+            .frame(width: 18, height: 18)
+            .foregroundStyle(palette.muted)
+            .frame(
+                width: HomeVisualPolicy.headerControlHeight,
+                height: HomeVisualPolicy.headerControlHeight
+            )
+            .background(AppGlassSurface(cornerRadius: HomeVisualPolicy.headerControlCornerRadius, role: .control))
+            .contentShape(RoundedRectangle(cornerRadius: HomeVisualPolicy.headerControlCornerRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(appState.isCatalogRefreshing || appState.activeSite == nil)
+        .accessibilityLabel(fileServices.isRefreshing ? "取消刷新" : "刷新当前列表")
+        .help(fileServices.isRefreshing ? "取消刷新" : "刷新当前列表")
     }
 
     @ViewBuilder
@@ -288,7 +319,12 @@ struct VodHomeView: View {
             sitePickerLabel(title: appState.currentSiteName)
                 .frame(width: HomeVisualPolicy.sitePickerWidth)
         } else {
-            let menuItems = appState.sites.map { site in
+            let selectableSites = appState.sites.filter { site in
+                SitePickerMenuItem.isSelectable(
+                    status: appState.externalSourceReport(for: site)?.status
+                )
+            }
+            let sourceItems = selectableSites.map { site in
                 let status = siteMenuStatus(for: site)
                 return SitePickerMenuItem(
                     id: site.key,
@@ -301,6 +337,9 @@ struct VodHomeView: View {
                 )
             }
 
+            let regular = sourceItems.filter { !$0.id.hasPrefix("files-") }
+            let files = sourceItems.filter { $0.id.hasPrefix("files-") }
+            let menuItems = regular + (files.isEmpty ? [] : [SitePickerMenuItem(id: "__group:files", title: "文件服务", systemImage: "folder", help: "浏览自己的服务器和本地目录")] + files)
             ZStack(alignment: .leading) {
                 sitePickerLabel(title: appState.currentSiteName)
                     .frame(
@@ -315,7 +354,7 @@ struct VodHomeView: View {
                     title: appState.currentSiteName,
                     items: menuItems
                 ) { siteKey in
-                    guard let site = appState.sites.first(where: { $0.key == siteKey }) else {
+                    guard let site = selectableSites.first(where: { $0.key == siteKey }) else {
                         return
                     }
                     Task { @MainActor in
@@ -338,7 +377,7 @@ struct VodHomeView: View {
                     style: .continuous
                 )
             )
-            .help("当前站点：\(appState.currentSiteName)")
+            .help(L10n.text("当前站点：{0}", ["\(appState.currentSiteName)"]))
         }
     }
 
@@ -378,7 +417,7 @@ struct VodHomeView: View {
                 HStack(spacing: HomeVisualPolicy.categoryGap) {
                     if appState.activeSite?.showsSyntheticRecommendation != false {
                         categoryButton(
-                            title: "推荐",
+                            title: L10n.text("推荐"),
                             id: "recommend",
                             isSelected: appState.selectedCategory == nil
                         ) {
@@ -519,7 +558,7 @@ struct VodHomeView: View {
             }
             .buttonStyle(.plain)
             .disabled(!canApply || appState.isLoadingVod)
-            .help("应用\(filter.name)筛选")
+            .help(L10n.text("应用{0}筛选", ["\(filter.name)"]))
         }
         .padding(.horizontal, 10)
         .frame(height: 30)
@@ -611,24 +650,35 @@ struct VodHomeView: View {
             .background(Color.clear)
         } else if let errorMessage = appState.vodError {
             AppUnavailableState(
-                title: "视频源暂时不可用",
+                title: L10n.text("视频源暂时不可用"),
                 message: errorMessage,
                 systemImage: "exclamationmark.triangle",
-                actionTitle: "重试"
+                actionTitle: L10n.text("重试")
             ) {
                 Task {
                     await appState.refreshCurrentCatalog()
                 }
             }
         } else if appState.vods.isEmpty {
-            let empty = emptyVodState
-            AppUnavailableState(
-                title: empty.title,
-                message: empty.description,
-                systemImage: empty.systemImage,
-                actionTitle: empty.showsSearchButton ? "去搜索" : nil
-            ) {
-                appState.selectedTab = .search
+            if isPushPlaybackSite {
+                AppUnavailableState(
+                    title: L10n.text("推送播放"),
+                    message: L10n.text("输入媒体地址，或选择本地媒体文件。"),
+                    systemImage: "link",
+                    actionTitle: L10n.text("打开媒体")
+                ) {
+                    isPushPlaybackPresented = true
+                }
+            } else {
+                let empty = emptyVodState
+                AppUnavailableState(
+                    title: empty.title,
+                    message: empty.description,
+                    systemImage: empty.systemImage,
+                    actionTitle: empty.showsSearchButton ? L10n.text("去搜索") : nil
+                ) {
+                    appState.selectedTab = .search
+                }
             }
         } else {
             ThemedScrollView {
@@ -657,6 +707,13 @@ struct VodHomeView: View {
                                         await appState.loadMoreCategoryContentIfNeeded(currentVod: vod)
                                     }
                                 }
+                                .onChange(of: appState.contentCatalogState.generation) { _, _ in
+                                    // Refresh can reuse visible cards, so onAppear alone
+                                    // does not restart pagination for the restored list.
+                                    Task {
+                                        await appState.loadMoreCategoryContentIfNeeded(currentVod: vod)
+                                    }
+                                }
                             }
                             Spacer(minLength: 0)
                         }
@@ -676,12 +733,133 @@ struct VodHomeView: View {
         }
     }
 
+    private var pushPlaybackSheet: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 12) {
+                Image(systemName: "link")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(palette.accent)
+                    .frame(width: 32, height: 32)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.text("播放媒体"))
+                        .font(.title2.bold())
+                    Text(L10n.text("支持网络媒体地址和本地媒体文件"))
+                        .font(.caption)
+                        .foregroundStyle(palette.muted)
+                }
+            }
+
+            TextField(L10n.text("请输入地址…"), text: $pushPlaybackInput)
+                .textFieldStyle(.roundedBorder)
+                .focused($isPushPlaybackFieldFocused)
+                .onSubmit {
+                    openPushPlaybackIfReady()
+                }
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Button {
+                    choosePushPlaybackFile()
+                } label: {
+                    Label(L10n.text("选择文件"), systemImage: "folder")
+                }
+
+                Spacer()
+
+                Button(L10n.text("取消"), role: .cancel) {
+                    isPushPlaybackPresented = false
+                }
+
+                Button {
+                    openPushPlaybackIfReady()
+                } label: {
+                    if isOpeningPushPlayback {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 56)
+                    } else {
+                        Text(L10n.text("确定"))
+                            .frame(width: 56)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(pushPlaybackInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isOpeningPushPlayback)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
+        .onAppear {
+            DispatchQueue.main.async {
+                isPushPlaybackFieldFocused = true
+            }
+        }
+    }
+
+    private var isPushPlaybackSite: Bool {
+        guard let site = appState.activeSite else { return false }
+        let api = site.api.lowercased()
+        return site.key == "push_agent"
+            || api == "csp_push"
+            || api == "push"
+            || api == "csp_pushshare"
+            || api == "pushshare"
+            || api == "csp_pushguard"
+            || api == "pushguard"
+    }
+
+    private func openPushPlaybackIfReady() {
+        let trimmed = pushPlaybackInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isOpeningPushPlayback else { return }
+
+        let mediaAddress = trimmed.hasPrefix("/")
+            ? URL(fileURLWithPath: trimmed).absoluteString
+            : trimmed
+        let title = pushPlaybackDisplayName(for: mediaAddress)
+        isOpeningPushPlayback = true
+
+        Task {
+            await appState.openVodCard(
+                Vod(
+                    vodId: mediaAddress,
+                    vodName: title,
+                    vodPic: "video",
+                    siteKey: appState.activeSite?.key ?? ""
+                )
+            )
+            isOpeningPushPlayback = false
+            isPushPlaybackPresented = false
+            pushPlaybackInput = ""
+        }
+    }
+
+    private func choosePushPlaybackFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = L10n.text("选择")
+        panel.message = L10n.text("选择要播放的媒体文件")
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        pushPlaybackInput = url.absoluteString
+        isPushPlaybackFieldFocused = true
+    }
+
+    private func pushPlaybackDisplayName(for address: String) -> String {
+        guard let url = URL(string: address) else { return L10n.text("推送媒体") }
+        let name = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+        return name.isEmpty ? L10n.text("推送媒体") : name
+    }
+
     private var configurationEmptyState: some View {
         AppUnavailableState(
-            title: "请先配置视频源",
-            message: "前往设置添加配置 URL，加载后即可浏览影片。",
+            title: L10n.text("请先配置视频源"),
+            message: L10n.text("前往设置添加配置 URL，加载后即可浏览影片。"),
             systemImage: "tv.slash",
-            actionTitle: "打开设置"
+            actionTitle: L10n.text("打开设置")
         ) {
             appState.selectedTab = .settings
         }
@@ -700,22 +878,22 @@ struct VodHomeView: View {
 
     private var emptyVodState: (title: String, systemImage: String, description: String, showsSearchButton: Bool) {
         guard let site = appState.activeSite else {
-            return ("该分类暂无视频", "film.stack", "当前没有可显示的点播内容。", false)
+            return (L10n.text("该分类暂无视频"), "film.stack", L10n.text("当前没有可显示的点播内容。"), false)
         }
 
         if isPanSearchStyleSite(site) {
             return (
-                "\(site.name)等待搜索",
+                L10n.text("{0}等待搜索", ["\(site.name)"]),
                 "magnifyingglass",
-                "该源主要提供网盘搜索结果，请在搜索页输入片名。",
+                L10n.text("该源主要提供网盘搜索结果，请在搜索页输入片名。"),
                 true
             )
         }
 
         return (
-            "该分类暂无视频",
+            L10n.text("该分类暂无视频"),
             "film.stack",
-            "可尝试切换分类、站点或搜索片名。",
+            L10n.text("可尝试切换分类、站点或搜索片名。"),
             true
         )
     }
@@ -736,18 +914,18 @@ struct VodHomeView: View {
             return SitePickerMenuItem.statusPresentation(for: status)
         }
         if appState.nativeReplacementSiteKeys.contains(site.key) {
-            return (nil, "checkmark.circle", "已提供当前系统可用的兼容实现，实际可用性取决于源站和网络。")
+            return (nil, "checkmark.circle", L10n.text("已提供当前系统可用的兼容实现，实际可用性取决于源站和网络。"))
         }
         if site.isWoggCrawlerSource {
-            return (nil, "checkmark.circle", "已提供当前系统可用的兼容实现，实际可用性取决于源站和网络。")
+            return (nil, "checkmark.circle", L10n.text("已提供当前系统可用的兼容实现，实际可用性取决于源站和网络。"))
         }
         if site.isAndroidCrawlerSource {
-            return ("暂不支持", "exclamationmark.triangle", "该来源使用的格式当前无法加载，请选择其他视频源。")
+            return (L10n.text("暂不支持"), "exclamationmark.triangle", L10n.text("该来源使用的格式当前无法加载，请选择其他视频源。"))
         }
         if site.isSpider {
-            return (nil, "link", "该来源可直接尝试加载。")
+            return (nil, "link", L10n.text("该来源可直接尝试加载。"))
         }
-        return (nil, "link", "该来源可直接尝试加载。")
+        return (nil, "link", L10n.text("该来源可直接尝试加载。"))
     }
 }
 

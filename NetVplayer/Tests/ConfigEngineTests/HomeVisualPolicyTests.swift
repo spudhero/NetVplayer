@@ -363,4 +363,12 @@ struct HomeVisualPolicyTests {
                 == "失效源 · 源站暂不可用"
         )
     }
+
+    @Test
+    func testSitePickerExcludesInvalidConfigurationOnly() {
+        #expect(!SitePickerMenuItem.isSelectable(status: .invalidConfiguration))
+        #expect(SitePickerMenuItem.isSelectable(status: .upstreamUnavailable))
+        #expect(SitePickerMenuItem.isSelectable(status: .pendingGuardCapture))
+        #expect(SitePickerMenuItem.isSelectable(status: nil))
+    }
 }

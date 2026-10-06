@@ -63,6 +63,23 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         for fragment in required:
             self.assertIn(fragment, self.workflow)
 
+    def test_tmdb_credential_is_verified_online_and_in_the_extracted_app(self) -> None:
+        preflight = self.workflow.split(
+            '- name: Validate TMDB application credential and online metadata', 1
+        )[1].split('\n      - name:', 1)[0]
+        package = self.workflow.split('- name: Build and verify release assets', 1)[1].split(
+            '\n      - name:', 1
+        )[0]
+        for step in (preflight, package):
+            for name in ('NETVPLAYER_TMDB_READ_ACCESS_TOKEN', 'NETVPLAYER_TMDB_API_KEY'):
+                self.assertIn(name + ': ${{ secrets.' + name + ' }}', step)
+        self.assertIn('--validate-only --require --verify-online', preflight)
+        self.assertLess(self.workflow.index('TMDB application credential and online metadata'),
+                        self.workflow.index('build_and_run.sh --package-public'))
+        self.assertIn('--app-bundle "$extracted_app" --audit-only --require', package)
+        self.assertLess(package.index('--audit-only --require'),
+                        package.index('audit_source_free_app.py'))
+
     def test_debug_symbols_are_matched_retained_and_uploaded_separately(self) -> None:
         for fragment in [
             'xcrun dsymutil "$binary" -o "$symbols"',
@@ -107,10 +124,10 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             info = plistlib.load(handle)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertEqual(info["CFBundleShortVersionString"], "1.0.12")
-        self.assertEqual(info["CFBundleVersion"], "13")
-        self.assertIn("NetVplayer 1.0.12", readme)
-        self.assertIn("current 1.0.12 release", readme)
+        self.assertEqual(info["CFBundleShortVersionString"], "1.1.0")
+        self.assertEqual(info["CFBundleVersion"], "14")
+        self.assertIn("NetVplayer 1.1.0", readme)
+        self.assertIn("1.1.0 release candidate", readme)
 
 
 if __name__ == "__main__":

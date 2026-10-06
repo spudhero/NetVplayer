@@ -6,6 +6,8 @@ public struct ContentSearchState: Sendable {
     public var siteOrder: [String]
     public var results: [SearchResult]
     public var isLoading: Bool
+    public var cursors: [String: SearchPageCursor] = [:]
+    public var sourceScope: String = ""
 
     public init(
         generation: UInt64 = 0,
@@ -36,12 +38,15 @@ public enum ContentSearchCore {
     public static func begin(
         _ current: ContentSearchState,
         keyword: String,
-        siteOrder: [String] = []
+        siteOrder: [String] = [],
+        sourceScope: String = ""
     ) -> ContentSearchState {
         var state = current
         state.generation &+= 1
         state.keyword = keyword
         state.siteOrder = siteOrder
+        state.sourceScope = sourceScope
+        state.cursors = [:]
         state.results = []
         state.isLoading = true
         return state
@@ -65,14 +70,7 @@ public enum ContentSearchCore {
         result: SearchResult
     ) -> ContentSearchState {
         guard current.generation == generation, current.isLoading else { return current }
-        var state = current
-        if let index = state.results.firstIndex(where: { $0.siteKey == result.siteKey }) {
-            state.results[index] = result
-        } else {
-            state.results.append(result)
-        }
-        state.results = orderedResults(state.results, siteOrder: state.siteOrder)
-        return state
+        return receivePage(current, generation: generation, requestedPage: 1, result: result)
     }
 
     public static func finish(
@@ -89,6 +87,8 @@ public enum ContentSearchCore {
         var state = current
         state.generation &+= 1
         state.keyword = ""
+        state.sourceScope = ""
+        state.cursors = [:]
         state.siteOrder = []
         state.results = []
         state.isLoading = false
@@ -104,6 +104,8 @@ public enum ContentSearchCore {
         state.generation &+= 1
         state.keyword = keyword
         state.siteOrder = results.map(\.siteKey)
+        state.cursors = [:]
+        state.sourceScope = ""
         state.results = results
         state.isLoading = false
         return state

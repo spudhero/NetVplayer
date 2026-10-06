@@ -9,6 +9,7 @@ import plistlib
 import re
 import shutil
 from urllib.parse import urlsplit
+from uuid import UUID
 
 
 def validate_dsn(value: str) -> str:
@@ -25,7 +26,26 @@ def validate_dsn(value: str) -> str:
     return value
 
 
-def package_resources(package_root: Path, app_bundle: Path, dsn_override: str | None = None) -> dict:
+def build_identity(environment: str, build_id: str | None) -> dict[str, str]:
+    if environment not in {"production", "development"}:
+        raise ValueError("Sentry environment must be production or development")
+    result = {"NetVplayerSentryEnvironment": environment}
+    if environment == "development":
+        if not build_id:
+            raise ValueError("Development packages require the executable's Mach-O UUID")
+        result["NetVplayerSentryBuildID"] = str(UUID(build_id))
+    return result
+
+
+def package_resources(
+    package_root: Path,
+    app_bundle: Path,
+    dsn_override: str | None = None,
+    *,
+    environment: str = "production",
+    build_id: str | None = None,
+) -> dict:
+    identity = build_identity(environment, build_id)
     source_info = plistlib.loads((package_root / "Sources/NetVplayerApp/Info.plist").read_bytes())
     dsn = validate_dsn(dsn_override if dsn_override is not None else source_info.get("NetVplayerSentryDSN", ""))
     sdk = package_root / ".build/artifacts/sentry-apple-binaries/Sentry-Static/Sentry.xcframework"
@@ -53,6 +73,8 @@ def package_resources(package_root: Path, app_bundle: Path, dsn_override: str | 
     info_path = app_bundle / "Contents/Info.plist"
     info = plistlib.loads(info_path.read_bytes())
     info["NetVplayerSentryDSN"] = dsn
+    info.pop("NetVplayerSentryBuildID", None)
+    info.update(identity)
     info_path.write_bytes(plistlib.dumps(info))
     return {"sentry_configured": bool(dsn), "privacy_manifest": "embedded", "license": "embedded"}
 
@@ -61,5 +83,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package-root", type=Path, required=True)
     parser.add_argument("--app-bundle", type=Path, required=True)
+    parser.add_argument("--environment", choices=("production", "development"), default="production")
+    parser.add_argument("--build-id")
     args = parser.parse_args()
-    print(json.dumps(package_resources(args.package_root, args.app_bundle, os.environ.get("NETVPLAYER_SENTRY_DSN"))))
+    print(json.dumps(package_resources(
+        args.package_root, args.app_bundle, os.environ.get("NETVPLAYER_SENTRY_DSN"),
+        environment=args.environment, build_id=args.build_id,
+    )))

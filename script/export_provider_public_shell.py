@@ -35,14 +35,19 @@ INTERNAL_PUBLICATION_FILES = {
     "NetVplayer/ui_design_guidelines.md",
 }
 PRIVATE_TEST_FILES = {
+    "NetVplayer/Tests/ProviderRuntimeTests/LegacyNativeProviderPrecedenceTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/BaiduLivePlaybackTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/ConfigEngineTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/ExternalSourceCompatibilityTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/NewCzBrowserSessionTests.swift",
+    "NetVplayer/Tests/ConfigEngineTests/PlaybackTransferAcceptanceTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/RealVodPlaybackAuditTests.swift",
+    "NetVplayer/Tests/ConfigEngineTests/SourceLoadingParityTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/VodCardRoutingTests.swift",
+    "NetVplayer/Tests/ConfigEngineTests/WoggMirrorFallbackTests.swift",
 }
 INTERNAL_MIGRATION_FILES = {
+    "NetVplayer/script/test_playback_transfer_acceptance.py",
     ".github/workflows/private-covers-public.yml",
     "script/test_verify_private_covers_public.py",
     "script/verify_private_covers_public.py",
@@ -118,6 +123,7 @@ INTERNAL_MIGRATION_FILES = {
     "script/test_private_tingshu275_provider.py",
     "script/test_private_bili_live_provider.py",
     "script/test_private_bili_script_providers.py",
+    "script/test_private_bili_search_recovery.py",
     "script/test_private_auete_provider.py",
     "script/test_private_ibox_appapi_provider.py",
     "script/test_private_hbpq_provider.py",

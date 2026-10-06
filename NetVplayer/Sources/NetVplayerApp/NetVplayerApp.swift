@@ -188,7 +188,7 @@ struct NetVplayerApp: App {
         )
         .commands {
             CommandGroup(after: .help) {
-                Button("报告问题…") {
+                Button(L10n.text("报告问题…")) {
                     appState.openFeedback()
                     #if os(macOS)
                     NetVplayerWindowCoordinator.shared.showFallbackWindowIfNeeded()
@@ -197,7 +197,7 @@ struct NetVplayerApp: App {
             }
         }
 
-        Window("直播播放器", id: AppWindowID.livePlayer) {
+        Window(L10n.text("直播播放器"), id: AppWindowID.livePlayer) {
             LivePlayerWindowView()
                 .environmentObject(appState)
         }

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import Models
 import DriveEngine
+import ConfigEngine
 @testable import ProxyServer
 @testable import PlayerEngine
 @testable import NetVplayerApp
@@ -45,14 +46,34 @@ import DriveEngine
         code: 401,
         message: "expired"
     )
+    let staleSavedRecord = DriveEngineError.api(
+        provider: .uc,
+        statusCode: 200,
+        code: 32003,
+        message: "saved file no longer exists"
+    )
 
     #expect(AppState.transientPreparationRetryDelayNanoseconds(for: retryable, attempt: 0) == 500_000_000)
     #expect(AppState.transientPreparationRetryDelayNanoseconds(for: retryable, attempt: 1) == nil)
     #expect(AppState.transientPreparationRetryDelayNanoseconds(for: terminal, attempt: 0) == nil)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: staleSavedRecord, attempt: 0) == 500_000_000)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: staleSavedRecord, attempt: 1) == nil)
+    #expect(DriveEngineError.invalidatesSavedRecord(staleSavedRecord, provider: .uc))
+    #expect(!DriveEngineError.invalidatesSavedRecord(staleSavedRecord, provider: .quark))
     #expect(AppState.transientPreparationRetryDelayNanoseconds(
         for: URLError(.networkConnectionLost),
         attempt: 0
     ) == 500_000_000)
+}
+
+@Test @MainActor func testExpectedConfigurationAndCatalogFailuresStayBreadcrumbs() throws {
+    let config = try #require(AppState.remoteDiagnosticMeasurements(for: ConfigError.invalidJSON, attempt: 0))
+    let catalog = try #require(AppState.remoteDiagnosticMeasurements(for: MacCMSPayloadError.invalidJSON, attempt: 0))
+
+    #expect(config["errorKind"] == 6)
+    #expect(config["expected"] == 1)
+    #expect(catalog["errorKind"] == 6)
+    #expect(catalog["expected"] == 1)
 }
 
 @Test func testPlaybackDisplaySleepControllerTracksPlaybackWithoutLeakingActivities() {
@@ -511,6 +532,11 @@ import DriveEngine
 
     var p115 = quark
     p115.metadata[DrivePlaybackMetadataKey.provider] = DriveProvider.p115.rawValue
+    p115.drivePlaybackPlan = P115DrivePlaybackAdapter().playbackPlan(
+        primaryURL: p115.url,
+        primaryHeaders: [:],
+        primaryMetadata: p115.metadata
+    )
     let p115Buffer = LiveHLSRelayPolicy.remoteStreamBufferConfiguration(for: p115)
     #expect(p115Buffer.initialChunkSize == 512 * 1024)
     #expect(p115Buffer.chunkSize == 512 * 1024)
@@ -727,6 +753,36 @@ import DriveEngine
     guardState.observePosition(22)
     guardState.observePosition(23)
     #expect(!guardState.isProtecting)
+}
+
+@Test func testPostSeekShortTailCanFinishNaturallyOnlyAfterConfirmedForwardPlayback() {
+    var guardState = PlaybackPostSeekEndGuard()
+    guardState.begin(targetSeconds: 188.551)
+    guardState.markPlaybackRestarted()
+    guardState.observePosition(188.551)
+    guardState.observePosition(189.0)
+    #expect(!guardState.didPlayToEndAfterSeek(positionSeconds: 189, durationSeconds: 190.16))
+    guardState.observePosition(190.0)
+    // Even valid progress cannot count until an owned seeked frame is presented.
+    #expect(!guardState.didPlayToEndAfterSeek(positionSeconds: 190, durationSeconds: 190.16))
+    guardState.markFramePresented()
+    #expect(guardState.isProtecting)
+    #expect(guardState.didPlayToEndAfterSeek(positionSeconds: 190, durationSeconds: 190.16))
+    #expect(!guardState.didPlayToEndAfterSeek(positionSeconds: 190, durationSeconds: .nan))
+
+    guardState.begin(targetSeconds: 100)
+    guardState.markPlaybackRestarted()
+    guardState.observePosition(100)
+    guardState.markFramePresented()
+    #expect(!guardState.didPlayToEndAfterSeek(positionSeconds: 100, durationSeconds: 100))
+
+    guardState.begin(targetSeconds: 40)
+    guardState.markPlaybackRestarted()
+    guardState.observePosition(40)
+    guardState.markFramePresented()
+    guardState.observePosition(46) // A discontinuity is not playback progress.
+    guardState.observePosition(99.9)
+    #expect(!guardState.didPlayToEndAfterSeek(positionSeconds: 99.9, durationSeconds: 100))
 }
 
 @Test func testMPVLoadEventTrackerConsumesOnlyTheReplacedLoadsEndFile() {

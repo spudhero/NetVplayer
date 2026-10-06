@@ -2,11 +2,22 @@
 // 用户偏好设置
 
 import Foundation
+import Models
+
+public enum CachedCredentialAvailability: Sendable, Equatable {
+    case available
+    case unavailable
+    case unknown
+}
 
 /// 用户偏好设置，对应 FongMi: Setting.java / PlayerSetting.java
 public final class UserPreferences: @unchecked Sendable {
 
-    public static let shared = UserPreferences()
+    public static let shared = UserPreferences(credentialStore:
+        TestRuntime.isRunning
+            ? MemoryCredentialStore()
+            : LocalCredentialStore(legacyReader: LegacyKeychainCredentialReader()))
+    public static let credentialsDidChange = Notification.Name("NetVplayer.credentialsDidChange")
     public static let stableBundleIdentifier = "com.netvplayer.app"
     public static let legacyPreferenceDomains = [
         stableBundleIdentifier,
@@ -17,10 +28,142 @@ public final class UserPreferences: @unchecked Sendable {
     private static let defaultSubtitleFontSize = 44
 
     private let defaults: UserDefaults
+    private let subtitleLock = NSRecursiveLock()
 
-    public init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    private let credentialStore: any CredentialStore
+    private let credentialLock = NSRecursiveLock()
+    private var credentialCache: [String: String] = [:]
+    private var pendingCredentials: [String: String] = [:]
+    private var credentialErrors: [String: Error] = [:]
+    private var credentialRevision: UInt64 = 0
+
+    /// Session-only identity for caches; never exposes or persists credential material.
+    public var searchCredentialRevision: UInt64 {
+        credentialLock.lock()
+        defer { credentialLock.unlock() }
+        return credentialRevision
     }
+
+    public init(defaults: UserDefaults = .standard, credentialStore: any CredentialStore = MemoryCredentialStore()) {
+        self.defaults = defaults
+        self.credentialStore = credentialStore
+    }
+
+    /// Returns only in-memory or legacy state and never waits for the backing credential store.
+    public func cachedCredentialAvailability(_ key: String) -> CachedCredentialAvailability {
+        guard credentialLock.try() else { return .unknown }
+        defer { credentialLock.unlock() }
+
+        let value: String?
+        if let pending = pendingCredentials[key] {
+            value = pending
+        } else if let cached = credentialCache[key] {
+            value = cached
+        } else if !defaults.bool(forKey: "credentialMigrated." + key) {
+            value = defaults.string(forKey: key)
+        } else {
+            value = nil
+        }
+
+        guard let value else { return .unknown }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .unavailable : .available
+    }
+
+    public func credential(_ key: String) -> String {
+        var shouldNotify = false
+        credentialLock.lock()
+        defer {
+            credentialLock.unlock()
+            if shouldNotify {
+                NotificationCenter.default.post(name: Self.credentialsDidChange, object: nil)
+            }
+        }
+        if let pending = pendingCredentials[key] { return pending }
+        if let cached = credentialCache[key] { return cached }
+        do {
+            // A retained legacy value means migration was not committed. Retry it
+            // before trusting an unverified write left by an interrupted process.
+            if !defaults.bool(forKey: "credentialMigrated." + key),
+               let legacy = defaults.string(forKey: key), !legacy.isEmpty {
+                try saveCredential(legacy, for: key)
+                return legacy
+            }
+            if let saved = try credentialStore.read(key) {
+                credentialCache[key] = saved
+                defaults.removeObject(forKey: key)
+                defaults.set(true, forKey: "credentialMigrated." + key)
+                shouldNotify = credentialErrors.removeValue(forKey: key) != nil
+                return saved
+            }
+            credentialCache[key] = ""
+            shouldNotify = credentialErrors.removeValue(forKey: key) != nil
+            return ""
+        } catch {
+            credentialErrors[key] = error
+            shouldNotify = true
+            return credentialCache[key] ?? defaults.string(forKey: key) ?? ""
+        }
+    }
+
+    /// A failed write remains in memory for this session; no new plaintext is persisted.
+    public func saveCredential(_ value: String, for key: String) throws {
+        credentialLock.lock()
+        credentialRevision &+= 1
+        defer {
+            credentialLock.unlock()
+            NotificationCenter.default.post(name: Self.credentialsDidChange, object: nil)
+        }
+        do {
+            if value.isEmpty { try credentialStore.remove(key) }
+            else {
+                try credentialStore.write(value, for: key)
+                guard try credentialStore.read(key) == value else { throw CredentialStoreError.verificationFailed }
+            }
+            credentialCache[key] = value
+            pendingCredentials.removeValue(forKey: key)
+            credentialErrors.removeValue(forKey: key)
+            defaults.removeObject(forKey: key)
+            for domainName in defaults.stringArray(forKey: "credentialLegacyDomains." + key) ?? [] {
+                if var domain = defaults.persistentDomain(forName: domainName) {
+                    domain.removeValue(forKey: key)
+                    defaults.setPersistentDomain(domain, forName: domainName)
+                }
+            }
+            defaults.removeObject(forKey: "credentialLegacyDomains." + key)
+            defaults.set(true, forKey: "credentialMigrated." + key)
+        } catch {
+            pendingCredentials[key] = value
+            credentialErrors[key] = error
+            throw error
+        }
+    }
+
+    public func retryCredentialPersistence() throws {
+        credentialLock.lock(); defer { credentialLock.unlock() }
+        for (key, value) in pendingCredentials { try saveCredential(value, for: key) }
+        let retryKeys = Set(credentialErrors.keys).union(Self.sensitiveCredentialKeys.filter { defaults.string(forKey: $0) != nil })
+        for key in retryKeys { _ = credential(key) }
+        try checkCredentialPersistence()
+    }
+
+    public func checkCredentialPersistence() throws {
+        credentialLock.lock(); defer { credentialLock.unlock() }
+        if let error = credentialErrors.sorted(by: { $0.key < $1.key }).first?.value { throw error }
+    }
+
+    /// A feature checks its own account without inheriting another provider's failure.
+    public func checkCredentialPersistence(for key: String) throws {
+        credentialLock.lock(); defer { credentialLock.unlock() }
+        if let error = credentialErrors[key] { throw error }
+    }
+
+    public static let sensitiveCredentialKeys: Set<String> = [
+        "quarkCookie", "ucCookie", "baiduCookie", "aliRefreshToken", "aliAccessToken", "aliOpenToken",
+        "p115Cookie", "p115AccessToken", "pikpakAccessToken", "pikpakRefreshToken",
+        "quarkTVQueryToken", "quarkTVRefreshToken", "quarkTVAccessToken",
+        "ucTVQueryToken", "ucTVRefreshToken", "ucTVAccessToken", "ucOriginalPlaybackToken",
+        "ucFongMiAccountToken", "ucFongMiPlaybackToken"
+    ]
 
     @discardableResult
     public func migrateLegacyPreferenceDomainsIfNeeded(
@@ -31,10 +174,27 @@ public final class UserPreferences: @unchecked Sendable {
         for domainName in domainNames {
             guard let legacyDomain = defaults.persistentDomain(forName: domainName) else { continue }
             for key in legacyDomain.keys.sorted() {
+                if Self.sensitiveCredentialKeys.contains(key) {
+                    if defaults.bool(forKey: "credentialMigrated." + key) {
+                        var cleaned = defaults.persistentDomain(forName: domainName) ?? [:]
+                        cleaned.removeValue(forKey: key)
+                        defaults.setPersistentDomain(cleaned, forName: domainName)
+                        continue
+                    }
+                    var domains = defaults.stringArray(forKey: "credentialLegacyDomains." + key) ?? []
+                    if !domains.contains(domainName) { domains.append(domainName) }
+                    defaults.set(domains, forKey: "credentialLegacyDomains." + key)
+                }
                 guard Self.shouldMigrateLegacyPreference(key: key),
+                      !defaults.bool(forKey: "credentialMigrated." + key),
                       defaults.object(forKey: key) == nil,
                       let value = legacyDomain[key] else { continue }
                 defaults.set(value, forKey: key)
+                if Self.sensitiveCredentialKeys.contains(key) {
+                    var domains = defaults.stringArray(forKey: "credentialLegacyDomains." + key) ?? []
+                    if !domains.contains(domainName) { domains.append(domainName) }
+                    defaults.set(domains, forKey: "credentialLegacyDomains." + key)
+                }
                 migratedCount += 1
             }
         }
@@ -43,7 +203,36 @@ public final class UserPreferences: @unchecked Sendable {
     }
 
     private static func shouldMigrateLegacyPreference(key: String) -> Bool {
-        !key.hasPrefix("NS") && !key.hasPrefix("Apple")
+        !key.hasPrefix("NS") && !key.hasPrefix("Apple") && !key.hasPrefix("credentialMigrated.") && !key.hasPrefix("credentialLegacyDomains.")
+    }
+
+    public var xtreamConfigurations: [XtreamConfiguration] {
+        get {
+            guard let data = defaults.data(forKey: "xtreamConfigurations.v1") else { return [] }
+            return ((try? JSONDecoder().decode([XtreamConfiguration].self, from: data)) ?? []).compactMap { try? $0.validated() }
+        }
+        set { if let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: "xtreamConfigurations.v1") } }
+    }
+
+    private struct StoredXtreamCredentials: Codable {
+        let server: String
+        let credentials: XtreamCredentials
+    }
+
+    public func xtreamCredentials(for id: UUID, server: String? = nil) throws -> XtreamCredentials {
+        let value = credential("xtream." + id.uuidString.lowercased())
+        let expected = server ?? xtreamConfigurations.first(where: { $0.id == id })?.server
+        guard let expected, !value.isEmpty, let data = value.data(using: .utf8),
+              let record = try? JSONDecoder().decode(StoredXtreamCredentials.self, from: data),
+              record.server == expected else { throw XtreamError.authorizationRequired }
+        return record.credentials
+    }
+
+    public func saveXtreamCredentials(_ credentials: XtreamCredentials, for id: UUID, server: String? = nil) throws {
+        guard !credentials.username.isEmpty, !credentials.password.isEmpty else { throw XtreamError.authorizationRequired }
+        guard let endpoint = server ?? xtreamConfigurations.first(where: { $0.id == id })?.server else { throw XtreamError.invalidServer }
+        let record = StoredXtreamCredentials(server: endpoint, credentials: credentials)
+        try saveCredential(String(decoding: JSONEncoder().encode(record), as: UTF8.self), for: "xtream." + id.uuidString.lowercased())
     }
 
     // MARK: - 配置源
@@ -151,33 +340,33 @@ public final class UserPreferences: @unchecked Sendable {
     // MARK: - 网盘源授权
 
     public var quarkCookie: String {
-        get { defaults.string(forKey: "quarkCookie") ?? "" }
-        set { defaults.set(newValue, forKey: "quarkCookie") }
+        get { credential("quarkCookie") }
+        set { try? saveCredential(newValue, for: "quarkCookie") }
     }
 
     public var ucCookie: String {
-        get { defaults.string(forKey: "ucCookie") ?? "" }
-        set { defaults.set(newValue, forKey: "ucCookie") }
+        get { credential("ucCookie") }
+        set { try? saveCredential(newValue, for: "ucCookie") }
     }
 
     public var baiduCookie: String {
-        get { defaults.string(forKey: "baiduCookie") ?? "" }
-        set { defaults.set(newValue, forKey: "baiduCookie") }
+        get { credential("baiduCookie") }
+        set { try? saveCredential(newValue, for: "baiduCookie") }
     }
 
     public var aliRefreshToken: String {
-        get { defaults.string(forKey: "aliRefreshToken") ?? "" }
-        set { defaults.set(newValue, forKey: "aliRefreshToken") }
+        get { credential("aliRefreshToken") }
+        set { try? saveCredential(newValue, for: "aliRefreshToken") }
     }
 
     public var aliAccessToken: String {
-        get { defaults.string(forKey: "aliAccessToken") ?? "" }
-        set { defaults.set(newValue, forKey: "aliAccessToken") }
+        get { credential("aliAccessToken") }
+        set { try? saveCredential(newValue, for: "aliAccessToken") }
     }
 
     public var aliOpenToken: String {
-        get { defaults.string(forKey: "aliOpenToken") ?? "" }
-        set { defaults.set(newValue, forKey: "aliOpenToken") }
+        get { credential("aliOpenToken") }
+        set { try? saveCredential(newValue, for: "aliOpenToken") }
     }
 
     public var aliDefaultDriveID: String {
@@ -196,23 +385,23 @@ public final class UserPreferences: @unchecked Sendable {
     }
 
     public var p115Cookie: String {
-        get { defaults.string(forKey: "p115Cookie") ?? "" }
-        set { defaults.set(newValue, forKey: "p115Cookie") }
+        get { credential("p115Cookie") }
+        set { try? saveCredential(newValue, for: "p115Cookie") }
     }
 
     public var p115AccessToken: String {
-        get { defaults.string(forKey: "p115AccessToken") ?? "" }
-        set { defaults.set(newValue, forKey: "p115AccessToken") }
+        get { credential("p115AccessToken") }
+        set { try? saveCredential(newValue, for: "p115AccessToken") }
     }
 
     public var pikpakAccessToken: String {
-        get { defaults.string(forKey: "pikpakAccessToken") ?? "" }
-        set { defaults.set(newValue, forKey: "pikpakAccessToken") }
+        get { credential("pikpakAccessToken") }
+        set { try? saveCredential(newValue, for: "pikpakAccessToken") }
     }
 
     public var pikpakRefreshToken: String {
-        get { defaults.string(forKey: "pikpakRefreshToken") ?? "" }
-        set { defaults.set(newValue, forKey: "pikpakRefreshToken") }
+        get { credential("pikpakRefreshToken") }
+        set { try? saveCredential(newValue, for: "pikpakRefreshToken") }
     }
 
     public var pikpakDeviceID: String {
@@ -226,18 +415,18 @@ public final class UserPreferences: @unchecked Sendable {
     }
 
     public var quarkTVQueryToken: String {
-        get { defaults.string(forKey: "quarkTVQueryToken") ?? "" }
-        set { defaults.set(newValue, forKey: "quarkTVQueryToken") }
+        get { credential("quarkTVQueryToken") }
+        set { try? saveCredential(newValue, for: "quarkTVQueryToken") }
     }
 
     public var quarkTVRefreshToken: String {
-        get { defaults.string(forKey: "quarkTVRefreshToken") ?? "" }
-        set { defaults.set(newValue, forKey: "quarkTVRefreshToken") }
+        get { credential("quarkTVRefreshToken") }
+        set { try? saveCredential(newValue, for: "quarkTVRefreshToken") }
     }
 
     public var quarkTVAccessToken: String {
-        get { defaults.string(forKey: "quarkTVAccessToken") ?? "" }
-        set { defaults.set(newValue, forKey: "quarkTVAccessToken") }
+        get { credential("quarkTVAccessToken") }
+        set { try? saveCredential(newValue, for: "quarkTVAccessToken") }
     }
 
     public var ucTVDeviceID: String {
@@ -246,33 +435,33 @@ public final class UserPreferences: @unchecked Sendable {
     }
 
     public var ucTVQueryToken: String {
-        get { defaults.string(forKey: "ucTVQueryToken") ?? "" }
-        set { defaults.set(newValue, forKey: "ucTVQueryToken") }
+        get { credential("ucTVQueryToken") }
+        set { try? saveCredential(newValue, for: "ucTVQueryToken") }
     }
 
     public var ucTVRefreshToken: String {
-        get { defaults.string(forKey: "ucTVRefreshToken") ?? "" }
-        set { defaults.set(newValue, forKey: "ucTVRefreshToken") }
+        get { credential("ucTVRefreshToken") }
+        set { try? saveCredential(newValue, for: "ucTVRefreshToken") }
     }
 
     public var ucTVAccessToken: String {
-        get { defaults.string(forKey: "ucTVAccessToken") ?? "" }
-        set { defaults.set(newValue, forKey: "ucTVAccessToken") }
+        get { credential("ucTVAccessToken") }
+        set { try? saveCredential(newValue, for: "ucTVAccessToken") }
     }
 
     public var ucOriginalPlaybackToken: String {
-        get { defaults.string(forKey: "ucOriginalPlaybackToken") ?? "" }
-        set { defaults.set(newValue, forKey: "ucOriginalPlaybackToken") }
+        get { credential("ucOriginalPlaybackToken") }
+        set { try? saveCredential(newValue, for: "ucOriginalPlaybackToken") }
     }
 
     public var ucFongMiAccountToken: String {
-        get { defaults.string(forKey: "ucFongMiAccountToken") ?? "" }
-        set { defaults.set(newValue, forKey: "ucFongMiAccountToken") }
+        get { credential("ucFongMiAccountToken") }
+        set { try? saveCredential(newValue, for: "ucFongMiAccountToken") }
     }
 
     public var ucFongMiPlaybackToken: String {
-        get { defaults.string(forKey: "ucFongMiPlaybackToken") ?? "" }
-        set { defaults.set(newValue, forKey: "ucFongMiPlaybackToken") }
+        get { credential("ucFongMiPlaybackToken") }
+        set { try? saveCredential(newValue, for: "ucFongMiPlaybackToken") }
     }
 
     public var ucFongMiAccountExpiresAt: String {
@@ -343,8 +532,8 @@ public final class UserPreferences: @unchecked Sendable {
 
     public var subtitlePosition: Int {
         get {
-            let value = defaults.integer(forKey: "subtitlePosition")
-            return value == 0 ? 95 : min(max(value, 0), 100)
+            guard defaults.object(forKey: "subtitlePosition") != nil else { return 95 }
+            return min(max(defaults.integer(forKey: "subtitlePosition"), 0), 100)
         }
         set { defaults.set(min(max(newValue, 0), 100), forKey: "subtitlePosition") }
     }
@@ -399,10 +588,57 @@ public final class UserPreferences: @unchecked Sendable {
         defaults.set(Self.defaultSubtitleFontSize, forKey: "subtitleFontSize")
     }
 
+    public var onlineSubtitleSearchEnabled: Bool {
+        get { defaults.bool(forKey: "onlineSubtitleSearchEnabled") }
+        set { defaults.set(newValue, forKey: "onlineSubtitleSearchEnabled") }
+    }
+
+    public var subtitleAppearance: SubtitleAppearance {
+        get {
+            guard let data = defaults.data(forKey: "subtitleAppearance.v1"), data.count <= 4096,
+                  let value = try? JSONDecoder().decode(SubtitleAppearance.self, from: data) else { return .init() }
+            return value
+        }
+        set { if let data = try? JSONEncoder().encode(newValue.normalized) { defaults.set(data, forKey: "subtitleAppearance.v1") } }
+    }
+
+    public var subtitleDelayRecords: [SubtitleDelayRecord] {
+        get {
+            subtitleLock.lock(); defer { subtitleLock.unlock() }
+            guard let data = defaults.data(forKey: "subtitleDelays.v1"), data.count <= 256 * 1024,
+                  let records = try? JSONDecoder().decode([SubtitleDelayRecord].self, from: data) else { return [] }
+            return SubtitleDelayRecord.sanitized(records)
+        }
+        set {
+            subtitleLock.lock(); defer { subtitleLock.unlock() }
+            if let data = try? JSONEncoder().encode(SubtitleDelayRecord.sanitized(newValue)) {
+                defaults.set(data, forKey: "subtitleDelays.v1")
+            }
+        }
+    }
+
+    public func subtitleDelay(for spec: PlaySpec, secondary: Bool = false) -> Double {
+        guard let key = SubtitleMediaIdentity.key(for: spec) else { return 0 }
+        let record = subtitleDelayRecords.last { $0.key == key }
+        return (secondary ? record?.secondarySeconds : record?.seconds) ?? 0
+    }
+
+    public func saveSubtitleDelay(_ seconds: Double, for spec: PlaySpec, secondary: Bool = false) {
+        guard let key = SubtitleMediaIdentity.key(for: spec) else { return }
+        subtitleLock.lock(); defer { subtitleLock.unlock() }
+        var record = subtitleDelayRecords.last { $0.key == key } ?? SubtitleDelayRecord(key: key, seconds: 0)
+        if secondary { record.secondarySeconds = SubtitleMediaIdentity.normalizedDelay(seconds) }
+        else { record.seconds = SubtitleMediaIdentity.normalizedDelay(seconds) }
+        var records = subtitleDelayRecords.filter { $0.key != key }
+        records.append(record)
+        subtitleDelayRecords = records
+    }
+
     public func resetSubtitlePreferences() {
         subtitleFontSize = Self.defaultSubtitleFontSize
         subtitlePosition = 95
         subtitleOverrideSourceStyle = true
+        subtitleAppearance = .init()
     }
 
     // MARK: - 网络代理设置

@@ -2,6 +2,7 @@
 // 夸克网盘公开分享转直连。完整播放需要用户登录 Cookie；免登录接口只提供短预览。
 
 import Foundation
+import Storage
 import Models
 import Networking
 import DriveEngine
@@ -17,20 +18,20 @@ public enum QuarkShareExtractorError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .invalidShareURL(let url):
-            return "无效的夸克分享链接: \(url)"
+            return L10n.text("无效的夸克分享链接: {0}", ["\(url)"])
         case .loginRequired:
-            return "夸克网盘分享完整播放需要 Cookie。扫码 token 可登录个人网盘，但当前 Wogg 分享下载仍需要粘贴夸克 Cookie；公开分享免登录接口只能拿到短预览，不能完整播放。"
+            return L10n.text("夸克网盘分享完整播放需要 Cookie。扫码 token 可登录个人网盘，但当前 Wogg 分享下载仍需要粘贴夸克 Cookie；公开分享免登录接口只能拿到短预览，不能完整播放。")
         case .noPlayableFile(let share):
-            return "夸克分享中没有找到可播放视频文件: \(share)"
+            return L10n.text("夸克分享中没有找到可播放视频文件: {0}", ["\(share)"])
         case .noDownloadURL(let fileName):
-            return "夸克网盘没有返回完整播放地址: \(fileName)。可能是 Cookie 过期、账号无权限，或该文件只能转存后播放。"
+            return L10n.text("夸克网盘没有返回完整播放地址: {0}。可能是 Cookie 过期、账号无权限，或该文件只能转存后播放。", ["\(fileName)"])
         case .officialPlayURLPending(let fileName):
-            return "已转存成功，但夸克只返回下载 CDN，正在等待官方播放地址: \(fileName)。请稍后重试，或先在夸克网盘 App 中打开一次该文件后再试。"
+            return L10n.text("已转存成功，但夸克只返回下载 CDN，正在等待官方播放地址: {0}。请稍后重试，或先在夸克网盘 App 中打开一次该文件后再试。", ["\(fileName)"])
         case .api(let statusCode, let code, let message):
             if let code {
-                return "夸克网盘接口错误 HTTP \(statusCode) / \(code): \(message)"
+                return L10n.text("夸克网盘接口错误 HTTP {0} / {1}: {2}", ["\(statusCode)", "\(code)", "\(message)"])
             }
-            return "夸克网盘接口错误 HTTP \(statusCode): \(message)"
+            return L10n.text("夸克网盘接口错误 HTTP {0}: {1}", ["\(statusCode)", "\(message)"])
         }
     }
 }
@@ -52,10 +53,10 @@ public final class QuarkShareExtractor: SourceExtractorProtocol {
             if let envCookie, !envCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return envCookie
             }
-            return UserDefaults.standard.string(forKey: QuarkShareExtractor.cookieDefaultsKey)
+            return UserPreferences.shared.quarkCookie
         },
         cookieUpdateHandler: @escaping @Sendable (String) -> Void = {
-            UserDefaults.standard.set($0, forKey: QuarkShareExtractor.cookieDefaultsKey)
+            UserPreferences.shared.quarkCookie = $0
         },
         allowPreviewFallback: Bool = false,
         pendingPlayPolls: Int = 15,
@@ -163,7 +164,8 @@ public final class QuarkShareExtractor: SourceExtractorProtocol {
 extension QuarkShareExtractor {
     func streamFetchResult(for link: CloudDriveLink) async throws -> SourceFetchResult {
         let headers = playbackHeaders(from: link.headers)
-        var mpvOptions = try await detectMPVOptions(for: link.url, headers: headers)
+        let probe = try await probeMediaHeader(for: link.url, headers: headers)
+        var mpvOptions = probe.options
         if let streamLavfOptions = Self.streamLavfOptions(for: link.url, headers: headers) {
             mpvOptions["stream-lavf-o"] = streamLavfOptions
         }
@@ -173,12 +175,16 @@ extension QuarkShareExtractor {
             primaryHeaders: headers,
             primaryMPVOptions: mpvOptions
         )
+        var metadata = adapter.sanitizedMetadata(link.metadata)
+        if let container = probe.container {
+            metadata[PlaybackTransferPolicy.detectedContainerMetadataKey] = container
+        }
         return SourceFetchResult(
             url: link.url,
             headers: headers,
             isDirectMedia: true,
             mpvOptions: mpvOptions,
-            metadata: adapter.sanitizedMetadata(link.metadata),
+            metadata: metadata,
             drivePlaybackPlan: playbackPlan
         )
     }
@@ -239,23 +245,32 @@ extension QuarkShareExtractor {
         return false
     }
 
-    func detectMPVOptions(for url: String, headers: [String: String]) async throws -> [String: String] {
-        guard Self.shouldProbeMediaHeader(url: url) else { return [:] }
+    func probeMediaHeader(for url: String, headers: [String: String]) async throws -> (options: [String: String], container: String?) {
+        guard Self.shouldProbeMediaHeader(url: url) else { return ([:], nil) }
         var probeHeaders = headers
         probeHeaders["Range"] = "bytes=0-63"
         do {
             let response = try await httpClient.get(url: url, headers: probeHeaders, timeout: 12)
             guard (200..<300).contains(response.statusCode), response.data.count >= 12 else {
                 DiagnosticLog.write("[QUARK_MEDIA_PROBE] 探测未命中 status=\(response.statusCode) bytes=\(response.data.count)")
-                return [:]
+                return ([:], nil)
             }
 
-            return Self.mpvOptions(forProbedMediaHeader: [UInt8](response.data.prefix(16)))
+            let bytes = [UInt8](response.data.prefix(16))
+            return (Self.mpvOptions(forProbedMediaHeader: bytes), Self.container(forProbedMediaHeader: bytes))
         } catch {
             DiagnosticLog.write("[QUARK_MEDIA_PROBE] 探测失败，继续交给 mpv: \(error.localizedDescription)")
         }
 
-        return [:]
+        return ([:], nil)
+    }
+
+    static func container(forProbedMediaHeader bytes: [UInt8]) -> String? {
+        let pngMagic: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        let payload = bytes.starts(with: pngMagic) ? Array(bytes.dropFirst(8)) : bytes
+        if payload.starts(with: [0x1A, 0x45, 0xDF, 0xA3]) { return "matroska" }
+        if payload.count >= 8, payload[4...7].elementsEqual([0x66, 0x74, 0x79, 0x70]) { return "mov" }
+        return nil
     }
 
     static func mpvOptions(forProbedMediaHeader bytes: [UInt8]) -> [String: String] {

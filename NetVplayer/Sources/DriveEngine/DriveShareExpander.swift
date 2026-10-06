@@ -2,6 +2,7 @@
 // 将网盘分享目录展开成具体可选的剧集文件。
 
 import Foundation
+import Storage
 import Models
 import Networking
 
@@ -68,7 +69,7 @@ public final class DriveShareExpander: @unchecked Sendable {
             return .unavailable(reason: reason)
         } catch {
             let reason = unavailableReason(for: error)
-            let resolvedReason = reason.isEmpty ? "网盘目录展开失败" : reason
+            let resolvedReason = reason.isEmpty ? L10n.text("网盘目录展开失败") : reason
             logUnavailableExpansion(url: url, reason: resolvedReason)
             return .unavailable(reason: resolvedReason)
         }
@@ -82,9 +83,9 @@ public final class DriveShareExpander: @unchecked Sendable {
         case .unsupported(let message):
             return message.trimmingCharacters(in: .whitespacesAndNewlines)
         case .loginRequired(let provider):
-            return "\(provider.displayName)需要授权"
+            return L10n.text("{0}需要授权", ["\(provider.localizedDisplayName)"])
         case .noPlayableFile:
-            return "未找到视频文件"
+            return L10n.text("未找到视频文件")
         case .api(_, _, _, let message) where !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
             return message.trimmingCharacters(in: .whitespacesAndNewlines)
         default:
@@ -253,11 +254,11 @@ public struct PikPakDriveShareExpander: DriveShareExpanding {
             let env = ProcessInfo.processInfo.environment
             let accessToken = [
                 env["NETVPLAYER_PIKPAK_ACCESS_TOKEN"] ?? "",
-                UserDefaults.standard.string(forKey: "pikpakAccessToken") ?? ""
+                UserPreferences.shared.pikpakAccessToken
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             let refreshToken = [
                 env["NETVPLAYER_PIKPAK_REFRESH_TOKEN"] ?? "",
-                UserDefaults.standard.string(forKey: "pikpakRefreshToken") ?? ""
+                UserPreferences.shared.pikpakRefreshToken
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             let deviceID = [
                 env["NETVPLAYER_PIKPAK_DEVICE_ID"] ?? "",
@@ -366,7 +367,7 @@ private enum DriveEpisodeNameFormatter {
         if total == 1 {
             let fallback = fallbackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.isEmpty || (!fallback.isEmpty && (cleaned.localizedCaseInsensitiveContains(fallback) || fallback.localizedCaseInsensitiveContains(cleaned))) {
-                return "正片"
+                return L10n.text("正片")
             }
         }
 

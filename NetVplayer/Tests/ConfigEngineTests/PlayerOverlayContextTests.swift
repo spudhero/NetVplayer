@@ -82,6 +82,35 @@ import PlayerEngine
 }
 
 @MainActor
+@Test(arguments: [DriveProvider.quark, .uc, .baidu])
+func testCloudSongPlaybackContextEnablesRelativeNavigation(provider: DriveProvider) {
+    let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
+    let names = ["阿里郎-再次爱上你.mp3", "阿密特m-我们站着 就是理由.wav", "歌曲三"]
+    let songs = names.enumerated().map { index, name in
+        let reference = DriveFileReference(provider: provider, shareURL: "https://share.example.test/album",
+            pwdID: "album", fid: "track-\(index)", fidToken: "", fileName: name, formatType: "audio/mpeg")
+        return Episode(name: (name as NSString).deletingPathExtension, url: reference.encodedURL)
+    }
+    var spec = PlaySpec(url: "http://127.0.0.1:9978/stream/resolved")
+    spec.metadata["vod.episodeURL"] = songs[0].url
+    appState.playerState.currentSpec = spec
+    let first = appState.playbackEpisodeContext(in: songs)
+    #expect(first.total == 3)
+    #expect(!first.hasPrevious)
+    #expect(first.nextEpisode?.id == songs[1].id)
+
+    spec.metadata["vod.episodeURL"] = songs[1].url
+    appState.playerState.currentSpec = spec
+    let middle = appState.playbackEpisodeContext(in: songs)
+    #expect(middle.previousEpisode?.id == songs[0].id)
+    #expect(middle.nextEpisode?.id == songs[2].id)
+
+    spec.metadata["vod.episodeURL"] = songs[2].url
+    appState.playerState.currentSpec = spec
+    #expect(!appState.playbackEpisodeContext(in: songs).hasNext)
+}
+
+@MainActor
 @Test func testPlaybackDiagnosticsIncludeDriveFixtureSampleStatus() {
     let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
     var spec = PlaySpec(url: "https://media.example.test/movie.mp4")

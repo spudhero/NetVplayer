@@ -1,3 +1,5 @@
+import Models
+import PlayerEngine
 import SwiftUI
 
 enum CompactPlayerKind: Equatable {
@@ -37,6 +39,14 @@ struct CompactPlayerControls: View {
     let duration: Double
     let isAlwaysOnTop: Bool
     let isVisible: Bool
+    var mediaID: String = ""
+    var visualRegressionProgress: Double? = nil
+    var chapters: [PlayerChapter] = []
+    var onSelectChapter: (Int) -> Void = { _ in }
+    var chapterSpec: PlaySpec? = nil
+    var chapterPreviewStore: PlayerChapterPreviewStore? = nil
+    var chapterFixtureURL: URL? = nil
+    var onChapterPresentationChange: (Bool) -> Void = { _ in }
     let onTogglePlayback: () -> Void
     let onSeek: (Double) -> Void
     let onToggleAlwaysOnTop: () -> Void
@@ -45,6 +55,12 @@ struct CompactPlayerControls: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var draggedProgress: Double?
+    @State private var hoveredChapterID: Int?
+    @State private var hasDraggedTimeline = false
+    @State private var isChapterPanelPresented = false
+    @StateObject private var localPreviewStore = PlayerChapterPreviewStore()
+
+    private var previewStore: PlayerChapterPreviewStore { chapterPreviewStore ?? localPreviewStore }
 
     private var normalizedProgress: Double? {
         guard CompactPlayerLayoutPolicy.showsProgress(kind: kind, duration: duration) else {
@@ -66,20 +82,25 @@ struct CompactPlayerControls: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
+                if !chapters.isEmpty {
+                    CompactChapterControl(chapters: chapters, position: position, duration: duration,
+                        spec: chapterSpec, mediaID: mediaID, previewStore: previewStore, onSelect: onSelectChapter,
+                        onPresentationChange: { isChapterPanelPresented = $0; onChapterPresentationChange($0) })
+                }
                 compactButton(
                     systemImage: isAlwaysOnTop ? "pin.fill" : "pin",
-                    help: isAlwaysOnTop ? "取消置顶" : "钉在最前",
+                    help: isAlwaysOnTop ? L10n.text("取消置顶") : L10n.text("钉在最前"),
                     isActive: isAlwaysOnTop,
                     action: onToggleAlwaysOnTop
                 )
                 compactButton(
                     systemImage: "macwindow",
-                    help: "恢复普通窗口",
+                    help: L10n.text("恢复普通窗口"),
                     action: onRestoreWindow
                 )
                 compactButton(
                     systemImage: "xmark",
-                    help: "关闭播放器",
+                    help: L10n.text("关闭播放器"),
                     role: .destructive,
                     action: onClose
                 )
@@ -105,8 +126,8 @@ struct CompactPlayerControls: View {
                 .buttonStyle(.plain)
                 .disabled(!isPlaybackEnabled)
                 .opacity(isPlaybackEnabled ? 1 : 0.45)
-                .help(isPlaying ? "暂停" : "播放")
-                .accessibilityLabel(isPlaying ? "暂停" : "播放")
+                .help(isPlaying ? L10n.text("暂停") : L10n.text("播放"))
+                .accessibilityLabel(isPlaying ? L10n.text("暂停") : L10n.text("播放"))
 
                 if let normalizedProgress {
                     compactProgressBar(progress: normalizedProgress)
@@ -203,19 +224,38 @@ struct CompactPlayerControls: View {
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
+            .overlay { ChapterTimelineMarkers(chapters: chapters, duration: duration, position: position, hoveredChapterID: hoveredChapterID) }
+            .modifier(PlayerTimelinePreview(duration: duration, thumbWidth: 0, mediaID: mediaID,
+                isEnabled: isVisible && isPlaybackEnabled, onReset: { draggedProgress = nil },
+                visualRegressionProgress: visualRegressionProgress, chapters: chapters, spec: chapterSpec,
+                previewStore: previewStore, fixtureURL: chapterFixtureURL,
+                isChapterPanelPresented: isChapterPanelPresented, isDragging: draggedProgress != nil, compact: true,
+                onChapterHover: { hoveredChapterID = $0 }))
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        draggedProgress = min(1, max(0, value.location.x / width))
+                        if draggedProgress == nil { hasDraggedTimeline = false }
+                        if !PlayerChapterPresentationPolicy.isClick(translation: value.translation) { hasDraggedTimeline = true }
+                        if isPlaybackEnabled, let time = PlayerTimelineCoordinatePolicy.time(at: value.location.x, width: width, duration: duration) {
+                            draggedProgress = time / duration
+                        }
                     }
                     .onEnded { value in
-                        let committedProgress = min(1, max(0, value.location.x / width))
+                        let hasDragged = hasDraggedTimeline
+                        hasDraggedTimeline = false
                         draggedProgress = nil
-                        onSeek(duration * committedProgress)
+                        guard isPlaybackEnabled else { return }
+                        if PlayerChapterPresentationPolicy.isClick(translation: value.translation, hasDragged: hasDragged),
+                           let chapter = PlayerChapterPresentationPolicy.hit(at: value.location.x, width: width,
+                                chapters: chapters, duration: duration) {
+                            onSelectChapter(chapter.id)
+                        } else if let time = PlayerTimelineCoordinatePolicy.time(at: value.location.x, width: width, duration: duration) {
+                            onSeek(time)
+                        }
                     }
             )
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("播放进度")
+            .accessibilityLabel(L10n.text("播放进度"))
             .accessibilityValue("\(Int((clampedProgress * 100).rounded()))%")
             .accessibilityAdjustableAction { direction in
                 let step = duration * 0.05
@@ -262,12 +302,12 @@ struct CompactPlayerStatusOverlay: View {
                     ProgressView()
                         .controlSize(.small)
                         .tint(PlayerHUDPalette.accent)
-                        .accessibilityLabel("正在加载播放内容")
+                        .accessibilityLabel(L10n.text("正在加载播放内容"))
                 } else {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(Color.orange)
-                        .accessibilityLabel(errorMessage ?? "播放失败")
+                        .accessibilityLabel(errorMessage ?? L10n.text("播放失败"))
                 }
             }
             .frame(width: 44, height: 44)
@@ -287,7 +327,7 @@ struct CompactPlayerStatusOverlay: View {
             .overlay {
                 Circle().stroke(Color.white.opacity(0.14), lineWidth: 1)
             }
-            .help(errorMessage ?? "正在加载播放内容")
+            .help(errorMessage ?? L10n.text("正在加载播放内容"))
             .allowsHitTesting(false)
         }
     }

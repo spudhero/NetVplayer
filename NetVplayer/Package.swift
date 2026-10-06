@@ -2,8 +2,10 @@
 import PackageDescription
 import Foundation
 
+let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let includesPrivateLegacyProviders = FileManager.default.fileExists(
-    atPath: "Sources/SpiderEngine/LegacyNativeProviderRegistration.swift"
+    atPath: packageDirectory
+        .appendingPathComponent("Sources/SpiderEngine/LegacyNativeProviderRegistration.swift").path
 )
 let privateLegacyProviderSettings: [SwiftSetting] = includesPrivateLegacyProviders
     ? [.define("NETVPLAYER_INCLUDE_PRIVATE_PROVIDERS")]
@@ -11,6 +13,7 @@ let privateLegacyProviderSettings: [SwiftSetting] = includesPrivateLegacyProvide
 
 let package = Package(
     name: "NetVplayer",
+    defaultLocalization: "zh-Hans",
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "NetVplayerApp", targets: ["NetVplayerApp"]),
@@ -29,6 +32,7 @@ let package = Package(
         .package(url: "https://github.com/21-DOT-DEV/swift-secp256k1.git", exact: "0.23.2"),
         .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.0"),
         .package(url: "https://github.com/getsentry/sentry-apple-binaries.git", exact: "9.29.0"),
+        .package(url: "https://github.com/amosavian/AMSMB2.git", exact: "4.0.3"),
     ],
     targets: [
         // ═══════════════════════════════════════════
@@ -36,10 +40,12 @@ let package = Package(
         // ═══════════════════════════════════════════
         .target(
             name: "Models",
-            path: "Sources/Models"
+            path: "Sources/Models",
+            resources: [.process("Resources/Localization")]
         ),
         .target(
             name: "Networking",
+            dependencies: ["Models"],
             path: "Sources/Networking"
         ),
         .target(
@@ -73,6 +79,7 @@ let package = Package(
         .target(
             name: "ProviderRuntime",
             dependencies: [
+                "Networking",
                 "ProviderSDK",
                 "Models",
                 "QuickJSRuntime",
@@ -98,6 +105,7 @@ let package = Package(
             dependencies: [
                 "Models",
                 "Networking",
+                "Storage",
                 "CurlTransportShim",
                 .product(name: "P256K", package: "swift-secp256k1"),
             ],
@@ -109,13 +117,27 @@ let package = Package(
         // ═══════════════════════════════════════════
         .target(
             name: "Storage",
-            dependencies: ["Models", "ApplicationCore"],
-            path: "Sources/Storage"
+            dependencies: ["Models", "ApplicationCore", "CSQLite"],
+            path: "Sources/Storage",
+            linkerSettings: [.linkedFramework("Security")]
+        ),
+        .systemLibrary(name: "CSQLite", path: "Sources/CSQLite"),
+        .target(name: "CSMBGuestBridge", path: "Sources/CSMBGuestBridge", exclude: ["vendor/LICENSE", "vendor/NOTICE.md"], publicHeadersPath: "include", cSettings: [.headerSearchPath("vendor")]),
+        .target(
+            name: "MediaLibraryEngine",
+            dependencies: ["Models", "Storage", "FileServiceEngine", "Networking", .product(name: "SwiftSoup", package: "SwiftSoup")],
+            path: "Sources/MediaLibraryEngine"
         ),
         .target(
             name: "ConfigEngine",
             dependencies: ["Models", "Networking", "Storage", "NodeBundleRuntime"],
             path: "Sources/ConfigEngine"
+        ),
+        .target(
+            name: "FileServiceEngine",
+            dependencies: ["Models", "Storage", "Networking", "ProxyServer", "DriveEngine", "CSMBGuestBridge",
+                           .product(name: "AMSMB2", package: "AMSMB2")],
+            path: "Sources/FileServiceEngine"
         ),
         .target(
             name: "NodeBundleRuntime",
@@ -152,6 +174,9 @@ let package = Package(
         .target(
             name: "SpiderEngine",
             dependencies: [
+                "MediaLibraryEngine",
+                "FileServiceEngine",
+                "Storage",
                 "Models",
                 "Networking",
                 "DriveEngine",
@@ -174,7 +199,7 @@ let package = Package(
         ),
         .target(
             name: "PlayerEngine",
-            dependencies: ["Models", "Networking", "DriveEngine", "ProxyServer", "MPVShim"],
+            dependencies: ["Models", "Networking", "DriveEngine", "ProxyServer", "MPVShim", "Storage"],
             path: "Sources/PlayerEngine",
             linkerSettings: [
                 .linkedFramework("AppKit")
@@ -199,6 +224,8 @@ let package = Package(
         // ═══════════════════════════════════════════
         // 层级 4: 聚合模块
         // ═══════════════════════════════════════════
+        .target(name: "SubtitleEngine", dependencies: ["Models", "Networking"], path: "Sources/SubtitleEngine"),
+
         .target(
             name: "SearchEngine",
             dependencies: ["Models", "ApplicationCore", "SpiderEngine"],
@@ -211,6 +238,8 @@ let package = Package(
         .executableTarget(
             name: "NetVplayerApp",
             dependencies: [
+                "MediaLibraryEngine",
+                "FileServiceEngine",
                 "Models",
                 "Diagnostics",
                 "ApplicationCore",
@@ -225,13 +254,15 @@ let package = Package(
                 "LiveEngine",
                 "SearchEngine",
                 "DanmakuEngine",
+                "SubtitleEngine",
                 "WebHomeEngine",
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources/NetVplayerApp",
             exclude: ["Info.plist"],
             resources: [
-                .copy("Resources/ThemeBackgrounds")
+                .copy("Resources/ThemeBackgrounds"),
+                .process("Resources/Metadata")
             ],
             swiftSettings: privateLegacyProviderSettings,
             linkerSettings: [
@@ -249,6 +280,11 @@ let package = Package(
         // ═══════════════════════════════════════════
         // 测试
         // ═══════════════════════════════════════════
+        .testTarget(
+            name: "FileServiceTests",
+            dependencies: ["FileServiceEngine", "MediaLibraryEngine", "Models", "Storage", "ProxyServer", "SpiderEngine"],
+            path: "Tests/FileServiceTests"
+        ),
         .testTarget(
             name: "ModelsTests",
             dependencies: ["Models"],
@@ -296,6 +332,7 @@ let package = Package(
                 "NetVplayerApp",
                 "Storage",
                 "DanmakuEngine",
+                "SubtitleEngine",
                 "WebHomeEngine"
             ],
             path: "Tests/ConfigEngineTests",

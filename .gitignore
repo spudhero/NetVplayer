@@ -21,6 +21,7 @@ node_modules/
 # Local Debug / Scratch
 NetVplayer/scratch/
 /.codex/
+/.codebase-memory/
 __pycache__/
 
 # Local design tooling / generated review exports

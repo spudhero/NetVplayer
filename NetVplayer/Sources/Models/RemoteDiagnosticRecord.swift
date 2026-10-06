@@ -7,28 +7,50 @@ public struct RemoteDiagnosticRecord: Equatable, Sendable {
     public let isError: Bool
     public let measurements: [String: Int]
 
+    public static let measurementKeys: Set<String> = [
+        "status", "code", "errorCode", "errorKind", "failureKind", "expected", "provider", "route",
+        "attempt", "bytes", "elapsedMs", "durationMs",
+    ]
+
     private static let errorCodes: Set<String> = [
         "SENTRY_VERIFICATION",
         "CONFIG_LOAD_FAILED", "CATALOG_LOAD_FAILED", "PLAYBACK_PREPARE_FAILED",
         "CLOUD_AUTH_FAILED", "PROVIDER_INSTALL_FAILED",
         "MPV_SEEK_ERROR", "MPV_SUBTITLE_ERROR", "MPV_AUDIO_ERROR",
-        "PROXY_SERVER_ERROR", "PROXY_UPSTREAM_ERROR", "PROXY_UPSTREAM_STREAM_ERROR",
-        "REMOTE_STREAM_UPSTREAM_ERROR", "PLAYBACK_RECOVERY_FAILED",
+        "PROXY_SERVER_ERROR", "PLAYBACK_RECOVERY_FAILED",
         "LIVE_CONTENT_RECOVERY_FAILED",
         "DRIVE_PLAYBACK_ROUTE_REFRESH_FAILED",
     ]
     private static let breadcrumbCodes: Set<String> = [
         "CONFIG_LOAD_STARTED", "CONFIG_LOAD_SUCCEEDED", "CONFIG_LOAD_CANCELLED",
         "MPV_INIT", "MPV_PLAY", "MPV_STARTED", "MPV_DESTROY", "MPV_SEEK",
-        "MPV_CACHE_STALL", "MPV_TRACK", "MPV_TRACK_DETECTED", "MPV_ERROR",
-        "REMOTE_STREAM_ERROR",
+        "MPV_CACHE_STALL", "MPV_TRACK", "MPV_TRACK_DETECTED", "MPV_ERROR", "MPV_HTTP_ERROR", "MPV_END_FILE",
+        "REMOTE_STREAM_ERROR", "REMOTE_STREAM_UPSTREAM_ERROR",
+        "PROXY_UPSTREAM_ERROR", "PROXY_UPSTREAM_STREAM_ERROR",
         "VOD_PLAYER_EXIT", "LIVE_CONTENT_REFRESH", "LIVE_CONTENT_REFRESHED",
         "LIVE_CONTENT_REFRESH_FAILED",
         "LIVE_RESUME_SELECTED", "LIVE_TRANSPORT", "DRIVE_PLAYBACK_WARNING",
     ]
     private static let measurementExpression = try! NSRegularExpression(
-        pattern: #"(?:^|[\s,])(status|code|errorCode|errorKind|expected|provider|route|attempt|bytes|elapsedMs|durationMs)=(-?[0-9]{1,9})(?=[\s,;]|$)"#
+        pattern: #"(?:^|[\s,])(status|code|errorCode|errorKind|failureKind|expected|provider|route|attempt|bytes|elapsedMs|durationMs)=(-?[0-9]{1,9})(?=[\s,;]|$)"#
     )
+
+    public var fingerprint: [String] {
+        let preferredKeys: [String]
+        switch code {
+        case "CONFIG_LOAD_FAILED", "CATALOG_LOAD_FAILED":
+            preferredKeys = ["errorKind", "errorCode", "status", "code"]
+        case "PLAYBACK_PREPARE_FAILED":
+            preferredKeys = ["errorKind", "provider", "status", "code", "errorCode"]
+        case "PLAYBACK_RECOVERY_FAILED", "DRIVE_PLAYBACK_ROUTE_REFRESH_FAILED":
+            preferredKeys = ["provider", "route", "errorKind", "failureKind", "status"]
+        default:
+            preferredKeys = ["errorKind", "provider", "route", "status", "code", "errorCode"]
+        }
+        return ["netvplayer", code] + preferredKeys.compactMap { key in
+            measurements[key].map { "\(key):\($0)" }
+        }
+    }
 
     public init?(localMessage: String) {
         guard localMessage.first == "[", let end = localMessage.firstIndex(of: "]") else { return nil }

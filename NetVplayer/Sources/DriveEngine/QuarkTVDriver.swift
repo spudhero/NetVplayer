@@ -51,7 +51,7 @@ public final class QuarkTVDriver: @unchecked Sendable {
 
         guard let qrData = Self.stringValue(json["qr_data"]), !qrData.isEmpty,
               let queryToken = Self.stringValue(json["query_token"]), !queryToken.isEmpty else {
-            throw DriveEngineError.api(provider: provider, statusCode: 200, code: nil, message: "扫码二维码响应结构异常")
+            throw DriveEngineError.api(provider: provider, statusCode: 200, code: nil, message: L10n.text("扫码二维码响应结构异常"))
         }
 
         return QuarkTVQRCodeSession(provider: provider, qrData: qrData, queryToken: queryToken, deviceID: deviceID)
@@ -78,7 +78,7 @@ public final class QuarkTVDriver: @unchecked Sendable {
 
     public func validate(_ credential: CloudCredential, reference _: DriveFileReference?) async throws -> CloudCredential {
         guard credential.provider == provider else {
-            throw DriveEngineError.unsupported("QuarkTVDriver 当前实例只支持\(provider.displayName)。")
+            throw DriveEngineError.unsupported(L10n.text("QuarkTVDriver 当前实例只支持{0}。", ["\(provider.localizedDisplayName)"]))
         }
         guard let deviceID = credential.deviceID,
               let accessToken = credential.accessToken,
@@ -154,7 +154,7 @@ public final class QuarkTVDriver: @unchecked Sendable {
         expectedSize: Int64? = nil
     ) async throws -> CloudDriveLink {
         guard provider == .uc else {
-            throw DriveEngineError.unsupported("\(provider.displayName) TV OpenAPI streaming 目前只用于 UC 优汐智路线。")
+            throw DriveEngineError.unsupported(L10n.text("{0} TV OpenAPI streaming 目前只用于 UC 优汐智路线。", ["\(provider.localizedDisplayName)"]))
         }
         let validated = try await validate(credential, reference: reference)
         let json = try await requestOpenAPI(
@@ -452,7 +452,7 @@ private extension QuarkTVDriver {
 
     func decodeOpenAPIResponse(_ response: HTTPResponse) throws -> [String: Any] {
         guard let json = (try? JSONSerialization.jsonObject(with: response.data)) as? [String: Any] else {
-            throw DriveEngineError.api(provider: provider, statusCode: response.statusCode, code: nil, message: "响应不是 JSON")
+            throw DriveEngineError.api(provider: provider, statusCode: response.statusCode, code: nil, message: L10n.text("响应不是 JSON"))
         }
         let errno = Self.intValue(json["errno"]) ?? 0
         let status = Self.intValue(json["status"]) ?? 0
@@ -465,7 +465,7 @@ private extension QuarkTVDriver {
 
     func decodeTokenResponse(_ response: HTTPResponse) throws -> [String: Any] {
         guard let json = (try? JSONSerialization.jsonObject(with: response.data)) as? [String: Any] else {
-            throw DriveEngineError.api(provider: provider, statusCode: response.statusCode, code: nil, message: "响应不是 JSON")
+            throw DriveEngineError.api(provider: provider, statusCode: response.statusCode, code: nil, message: L10n.text("响应不是 JSON"))
         }
         let code = Self.intValue(json["code"]) ?? response.statusCode
         if !(200..<300).contains(response.statusCode) || code != 200 {

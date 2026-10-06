@@ -26,19 +26,33 @@ enum SavedVodConfigSelectionPolicy {
 }
 
 struct SettingsView: View {
+    @AppStorage(L10n.preferenceKey) private var languageMode = "system"
+    @State private var launchedLanguageMode = UserDefaults.standard.string(forKey: L10n.preferenceKey) ?? "system"
+    @State private var languageRestartError: String?
     @Environment(\.appThemePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum SettingsSection: String, CaseIterable, Identifiable {
-        case appearance = "外观"
-        case dataSource = "数据源设置"
-        case providers = "扩展支持"
-        case playback = "播放偏好"
-        case network = "网络与代理"
-        case system = "缓存与系统"
-        case feedback = "问题反馈"
+        case appearance
+        case dataSource
+        case providers
+        case playback
+        case network
+        case system
+        case feedback
 
         var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .appearance: L10n.text("外观")
+            case .dataSource: L10n.text("内容来源")
+            case .providers: L10n.text("扩展支持")
+            case .playback: L10n.text("播放偏好")
+            case .network: L10n.text("网络与代理")
+            case .system: L10n.text("缓存与系统")
+            case .feedback: L10n.text("问题反馈")
+            }
+        }
 
         var icon: String {
             switch self {
@@ -54,13 +68,13 @@ struct SettingsView: View {
 
         var subtitle: String {
             switch self {
-            case .appearance: return "背景、主题与控件色彩"
-            case .dataSource: return "站点、授权与源诊断"
-            case .providers: return "自动维护播放兼容能力"
-            case .playback: return "画面、字幕与播放行为"
-            case .network: return "代理、端口与中继"
-            case .system: return "缓存、备份与实验功能"
-            case .feedback: return "复现资料、脱敏日志与 Issue"
+            case .appearance: return L10n.text("背景、主题与控件色彩")
+            case .dataSource: return L10n.text("按视频所在位置，选择适合你的接入方式")
+            case .providers: return L10n.text("自动维护播放兼容能力")
+            case .playback: return L10n.text("画面、字幕与播放行为")
+            case .network: return L10n.text("代理、端口与中继")
+            case .system: return L10n.text("缓存、备份与实验功能")
+            case .feedback: return L10n.text("复现资料、脱敏日志与 Issue")
             }
         }
     }
@@ -98,7 +112,7 @@ struct SettingsView: View {
         }
 
         var authorizationGuidance: String {
-            "\(rawValue)授权凭据仅保存在本机；手动输入只用于授权流程不可用时的高级兜底。敏感凭据不会写入备份文件。"
+            L10n.text("{0}授权凭据仅保存在本机；手动输入只用于授权流程不可用时的高级兜底。敏感凭据不会写入备份文件。", ["\(rawValue)"])
         }
     }
 
@@ -109,12 +123,11 @@ struct SettingsView: View {
     @State private var selectedCloudProvider: CloudProvider = .quark
     @State private var selectedSavedVodConfigURL: String = ""
     @State private var configReportExpanded: Bool = false
+    @State private var sourceFormatsExpanded = false
     @State private var compatibilityReportExpanded: Bool = false
-    @State private var providerRuntimeDetailsExpanded: Bool = false
     @State private var vodConfigUrl: String = ""
     @State private var liveConfigUrl: String = ""
     @State private var isLoadingVod: Bool = false
-    @State private var isLoadingLive: Bool = false
     @State private var pendingSavedVodConfigRemoval: Config?
     @State private var quarkCookie: String = ""
     @State private var ucCookie: String = ""
@@ -129,6 +142,7 @@ struct SettingsView: View {
     @State private var pikpakRefreshToken: String = ""
     @State private var pikpakDeviceID: String = ""
     @State private var cloudCookieSaved: Bool = false
+    @State private var cloudCookieVerified = false
     @State private var isValidatingCloudCookie: Bool = false
     @State private var cloudCookieStatus: String?
     @State private var isManualCloudAuthExpanded: Bool = false
@@ -141,6 +155,7 @@ struct SettingsView: View {
 
     // 偏好选项本地状态
     @State private var decodeMode: Int = 0
+    @State private var subtitleAppearance = UserPreferences.shared.subtitleAppearance
     @State private var subtitleFontSize: Int = SubtitleRenderSettings.defaultFontSize
     @State private var subtitlePosition: Int = SubtitleRenderSettings.defaultPosition
     @State private var subtitleOverrideSourceStyle: Bool = SubtitleRenderSettings.defaultOverrideSourceStyle
@@ -156,7 +171,7 @@ struct SettingsView: View {
     @State private var isProbingCurrentLiveGroup: Bool = false
 
     // 缓存大小本地展示
-    @State private var displayCacheSize: String = "正在计算..."
+    @State private var displayCacheSize: String = L10n.text("正在计算...")
     @State private var cacheSnapshot: CacheSnapshot?
     @State private var cacheOperationStatus: String?
     @State private var cacheOperationFailed = false
@@ -184,24 +199,38 @@ struct SettingsView: View {
                 .fill(palette.foreground.opacity(0.08))
                 .frame(width: 1)
 
-            VStack(spacing: 0) {
-                settingsContentHeader
-                    .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
-
-                ThemedScrollView {
-                    selectedSectionContent
-                        .id(selectedSection)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth, alignment: .topLeading)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
+            ScrollViewReader { proxy in
+                VStack(spacing: 0) {
+                    settingsContentHeader
                         .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
-                        .padding(.top, 4)
-                        .padding(.bottom, AppSurfaceVisualPolicy.settingsBottomPadding)
+
+                    if selectedSection == .dataSource {
+                        contentSourceNavigation { category in
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                                proxy.scrollTo(category, anchor: .top)
+                            }
+                        }
+                        .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                        .padding(.bottom, 16)
+                    }
+
+                    ThemedScrollView {
+                        selectedSectionContent
+                            .id(selectedSection)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                            .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth, alignment: .topLeading)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                            .padding(.top, 4)
+                            .padding(.bottom, AppSurfaceVisualPolicy.settingsBottomPadding)
+                    }
+                    .id(selectedSection)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .id(selectedSection)
-                .scrollContentBackground(.hidden)
-                .background(Color.clear)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .foregroundStyle(palette.foreground)
@@ -219,62 +248,59 @@ struct SettingsView: View {
             guard previousRequest != nil, request == nil else { return }
             loadCloudCredentialState()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .contentSourceCloudAuthCompleted)) { notification in
+            guard let result = notification.object as? ContentSourceCloudAuthResult,
+                  result.provider == selectedCloudProvider.driveProvider else { return }
+            loadCloudCredentialState()
+            cloudCookieSaved = true
+            cloudCookieVerified = result.completion.credentialsValidated
+            cloudCookieStatus = result.completion.message ?? L10n.text(
+                result.completion.credentialsValidated ? "{0}凭据已验证并保存" : "{0}凭据已保存，将在播放时校验",
+                [L10n.text(selectedCloudProvider.rawValue)]
+            )
+        }
         .onChange(of: selectedSection) { _, section in
             if section == .system { refreshCacheSize() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .netVplayerCacheDidChange)) { _ in
             if selectedSection == .system { refreshCacheSize(debounced: true) }
         }
-        .confirmationDialog(
-            "清理性能缓存？",
+        .themedConfirmation(
+            L10n.text("清理性能缓存？"),
             isPresented: $isShowingCacheConfirmation,
-            titleVisibility: .visible
+            confirmTitle: L10n.text("确认清理"),
+            message: L10n.text("将清空海报、网络、分类与详情缓存。登录状态、Provider、配置、历史、收藏和反馈文件会保留。")
         ) {
-            Button("确认清理", role: .destructive) {
-                clearPerformanceCaches()
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("将清空海报、网络、分类与详情缓存。登录状态、Provider、配置、历史、收藏和反馈文件会保留。")
+            clearPerformanceCaches()
         }
-        .confirmationDialog(
-            "清除网页会话？",
+        .themedConfirmation(
+            L10n.text("清除网页会话？"),
             isPresented: $isShowingWebSessionConfirmation,
-            titleVisibility: .visible
+            confirmTitle: L10n.text("清除网页会话"),
+            message: L10n.text("将删除内置网页的 Cookie、LocalStorage 和网站数据，相关网页可能需要重新登录。原生网盘账号仍需在账号管理中单独移除。")
         ) {
-            Button("清除网页会话", role: .destructive) {
-                clearWebSessions()
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("将删除内置网页的 Cookie、LocalStorage 和网站数据，相关网页可能需要重新登录。原生网盘账号仍需在账号管理中单独移除。")
+            clearWebSessions()
         }
-        .confirmationDialog(
-            "删除已保存配置？",
+        .themedConfirmation(
+            L10n.text("删除已保存配置？"),
             isPresented: Binding(
                 get: { pendingSavedVodConfigRemoval != nil },
                 set: { if !$0 { pendingSavedVodConfigRemoval = nil } }
             ),
-            titleVisibility: .visible
+            confirmTitle: L10n.text("删除配置"),
+            message: L10n.text("“{0}”将从本机保存记录中删除。当前已加载内容不会立即切换。", ["\(pendingSavedVodConfigRemovalName)"])
         ) {
-            Button("删除配置", role: .destructive) {
-                guard let config = pendingSavedVodConfigRemoval else { return }
-                pendingSavedVodConfigRemoval = nil
-                guard appState.deleteSavedConfig(config) else { return }
+            guard let config = pendingSavedVodConfigRemoval else { return }
+            pendingSavedVodConfigRemoval = nil
+            guard appState.deleteSavedConfig(config) else { return }
 
-                if vodConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-                    == config.url.trimmingCharacters(in: .whitespacesAndNewlines) {
-                    vodConfigUrl = ""
-                }
-                syncSavedVodConfigSelection(
-                    appState.savedConfigs.filter { $0.type == .vod }.map(\.url)
-                )
+            if vodConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+                == config.url.trimmingCharacters(in: .whitespacesAndNewlines) {
+                vodConfigUrl = ""
             }
-            Button("取消", role: .cancel) {
-                pendingSavedVodConfigRemoval = nil
-            }
-        } message: {
-            Text("“\(pendingSavedVodConfigRemovalName)”将从本机保存记录中删除。当前已加载内容不会立即切换。")
+            syncSavedVodConfigSelection(
+                appState.savedConfigs.filter { $0.type == .vod }.map(\.url)
+            )
         }
     }
 
@@ -302,9 +328,9 @@ struct SettingsView: View {
     private var settingsSectionSidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("设置")
+                Text(L10n.text("设置"))
                     .font(.system(size: 22, weight: .bold))
-                Text("NetVplayer 偏好")
+                Text(L10n.text("NetVplayer 偏好"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(palette.muted)
             }
@@ -348,7 +374,7 @@ struct SettingsView: View {
                 }
                 .frame(width: HomeVisualPolicy.sidebarIconBoxSize, height: HomeVisualPolicy.sidebarIconBoxSize)
 
-                Text(section.rawValue)
+                Text(section.title)
                     .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
                     .foregroundStyle(isSelected ? palette.foreground : palette.muted)
                     .lineLimit(1)
@@ -376,7 +402,7 @@ struct SettingsView: View {
     private var settingsContentHeader: some View {
         HStack(spacing: 20) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(selectedSection.rawValue)
+                Text(selectedSection.title)
                     .font(.system(size: 24, weight: .bold))
                 Text(selectedSection.subtitle)
                     .font(.system(size: 12, weight: .medium))
@@ -386,7 +412,7 @@ struct SettingsView: View {
             Spacer(minLength: 12)
 
             if selectedSection == .feedback {
-                Label("提交前需预览并确认", systemImage: "checkmark.shield")
+                Label(L10n.text("提交前需预览并确认"), systemImage: "checkmark.shield")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(palette.muted)
             } else {
@@ -398,7 +424,7 @@ struct SettingsView: View {
                             color: palette.color(for: .success).opacity(0.35),
                             radius: 4
                         )
-                    Text("更改将自动保存")
+                    Text(L10n.text("更改将自动保存"))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(palette.muted)
                 }
@@ -436,8 +462,8 @@ struct SettingsView: View {
     private var appearanceSettings: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
             SettingsPanelLabel(
-                title: "界面主题",
-                subtitle: "选择浏览界面的背景与强调色。",
+                title: L10n.text("界面主题"),
+                subtitle: L10n.text("选择浏览界面的背景与强调色。"),
                 systemImage: "paintpalette"
             )
 
@@ -454,35 +480,91 @@ struct SettingsView: View {
     }
 
     private var dataSourceSettings: some View {
-        VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
-            GroupBox(label: SettingsPanelLabel(
-                title: "视频配置与数据源",
-                subtitle: "加载点播与直播配置，地址校验后交由应用解析。",
-                systemImage: "link",
-                statusText: sourceConfigurationStatus,
-                statusColor: sourceConfigurationStatusColor
-            )) {
-                VStack(spacing: 0) {
-                    vodSourceSettings
+        VStack(alignment: .leading, spacing: 32) {
+            CredentialPersistenceStatusView()
+            ContentSourceGroup(category: .online) {
+                GroupBox(label: SettingsPanelLabel(
+                    title: L10n.text("影视与直播链接"),
+                    subtitle: L10n.text("添加影视配置链接或直播频道列表，加载后即可浏览和播放。"),
+                    systemImage: "link",
+                    statusText: sourceConfigurationStatus,
+                    statusColor: sourceConfigurationStatusColor
+                )) {
+                    VStack(spacing: 0) {
+                        vodSourceSettings
 
-                    Divider()
-                    liveSourceSettings
+                        Divider()
+                        liveSourceSettings
 
-                    Divider()
-                    savedVodConfigs
+                        Divider()
+                        savedVodConfigs
+                        Divider()
+                        DisclosureGroup(L10n.text("支持格式与填写示例"), isExpanded: $sourceFormatsExpanded) {
+                            Text(L10n.text("影视支持 JSON 配置、MacCMS JSON / XML 接口；直播支持 JSON 配置、M3U 和 TXT 频道列表。填写服务方提供的完整配置地址，例如 https://server.example/config.json。"))
+                                .font(.system(size: 12))
+                                .foregroundStyle(palette.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                                .padding(.top, 8)
+                        }
+                        .padding(.vertical, 10)
+                    }
+                    .padding(.leading, 27)
+                }
+                XtreamAccountSettings()
+            }
+            ContentSourceGroup(category: .cloud) { cloudDriveAuthSettings }
+            ContentSourceGroup(category: .files) {
+                FileServiceSettings()
+                MetadataSettings()
+            }
+            ContentSourceGroup(category: .search) {
+                searchSourceSettings
+                connectionCheckSettings
+            }
+        }
+        .groupBoxStyle(AppGroupBoxStyle(expandsToFillWidth: true))
+        .textFieldStyle(SettingsFieldStyle())
+    }
+
+    private func contentSourceNavigation(_ navigate: @escaping (ContentSourceCategory) -> Void) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                ForEach(ContentSourceCategory.allCases) { category in
+                    contentSourceNavigationButton(category, navigate: navigate)
+                }
+            }.fixedSize(horizontal: true, vertical: false)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(ContentSourceCategory.allCases) { category in
+                    contentSourceNavigationButton(category, navigate: navigate)
                 }
             }
-
-            searchSourceSettings
-            cloudDriveAuthSettings
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L10n.text("快速定位"))
+    }
+
+    private func contentSourceNavigationButton(_ category: ContentSourceCategory, navigate: @escaping (ContentSourceCategory) -> Void) -> some View {
+        Button { navigate(category) } label: {
+            Text(category.navigationTitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(palette.foreground)
+                .padding(.horizontal, 12)
+                .frame(minWidth: 120, maxWidth: .infinity, minHeight: 34)
+                .background {
+                    AppGlassSurface(cornerRadius: 8, role: .control, usesSystemMaterial: false)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(category.title)
     }
 
     private var providerRuntimeSettings: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
             GroupBox(label: SettingsPanelLabel(
-                title: "播放扩展支持",
-                subtitle: "自动准备并更新播放所需组件，无需手动安装。",
+                title: L10n.text("播放扩展支持"),
+                subtitle: L10n.text("自动准备并更新播放所需组件，无需手动安装。"),
                 systemImage: "puzzlepiece.extension",
                 statusText: providerRuntimeSummaryStatus,
                 statusColor: providerRuntimeSummaryColor
@@ -513,24 +595,36 @@ struct SettingsView: View {
                         Button {
                             appState.refreshProviderRuntimeCatalog()
                         } label: {
-                            Label("重新检查", systemImage: "arrow.clockwise")
+                            Label(L10n.text("重新检查"), systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.bordered)
                         .disabled(appState.providerRuntimeBusy || !appState.providerRuntimeIsConfigured)
-                        .help("检查并自动更新播放扩展")
+                        .help(L10n.text("检查并自动更新播放扩展"))
                     }
 
-                    if let progress = appState.providerRuntimeProgress {
+                    if appState.providerInstallation.shouldShowNetworkHint {
+                        Label(
+                            L10n.text("首次安装需从 GitHub 下载播放扩展，请确保当前网络可以访问 GitHub 及其下载服务。"),
+                            systemImage: "network"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if let progress = appState.providerRuntimeProgress,
+                       !appState.providerInstallation.detailsExpanded {
                         if !appState.providerRuntimeInstalled.isEmpty,
+                           !appState.providerInstallation.isInitialInstallation,
                            progress.phase == .fetchingCatalog {
-                            Label("播放扩展已可用，正在后台检查更新", systemImage: "checkmark.circle.fill")
+                            Label(L10n.text("播放扩展已可用，正在后台检查更新"), systemImage: "checkmark.circle.fill")
                                 .font(.caption)
                                 .foregroundStyle(palette.color(for: .success))
                         } else {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(appState.providerRuntimeInstalled.isEmpty
-                                    ? "正在安全准备播放扩展"
-                                    : "正在后台更新播放扩展")
+                                Text(appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                                    ? L10n.text("正在安全准备播放扩展")
+                                    : L10n.text("正在后台更新播放扩展"))
                                     .font(.caption)
                                     .foregroundStyle(palette.muted)
                                 if let fraction = progress.fractionCompleted {
@@ -545,15 +639,20 @@ struct SettingsView: View {
 
                     Divider()
 
-                    DisclosureGroup(isExpanded: $providerRuntimeDetailsExpanded) {
+                    DisclosureGroup(isExpanded: Binding(
+                        get: { appState.providerInstallation.detailsExpanded },
+                        set: { appState.setProviderRuntimeDetailsExpanded($0) }
+                    )) {
                         providerRuntimeTechnicalDetails
                             .padding(.top, 10)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("高级诊断")
+                            Text(L10n.text("高级诊断"))
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(palette.foreground)
-                            Text("仅在扩展无法正常工作或客服要求时查看")
+                            Text(appState.providerRuntimeBusy || appState.providerInstallation.shouldShowNetworkHint
+                                ? L10n.text("查看各组件的安装进度与失败原因")
+                                : L10n.text("仅在扩展无法正常工作或客服要求时查看"))
                                 .font(.system(size: 11))
                                 .foregroundStyle(palette.muted)
                         }
@@ -561,26 +660,58 @@ struct SettingsView: View {
                 }
             }
 
+            GroupBox(L10n.text("组件存储")) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let usage = appState.providerStorageUsage {
+                        Text(L10n.text("组件：{0} · 用户数据：{1}", ["\(ByteCountFormatter.string(fromByteCount: usage.componentBytes, countStyle: .file))", "\(ByteCountFormatter.string(fromByteCount: usage.stateBytes, countStyle: .file))"]))
+                        Text(L10n.text("清理旧版本保留当前版本与回滚版本；卸载组件保留账号和用户数据。"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button(L10n.text("清理旧版本")) { appState.prepareProviderMaintenance(.obsoleteVersions) }
+                                .disabled(usage.obsoleteBytes == 0 || usage.pendingRecovery)
+                            Button(L10n.text("停用并卸载组件"), role: .destructive) { appState.prepareProviderMaintenance(.uninstall) }
+                                .disabled(usage.componentBytes == 0 || usage.pendingRecovery)
+                            if usage.pendingRecovery { Button(L10n.text("恢复维护")) { appState.recoverProviderMaintenance() } }
+                            if appState.providerComponentsDisabled { Button(L10n.text("重新启用组件")) { appState.enableProviderComponents() } }
+                        }
+                    } else { Text(L10n.text("正在统计组件占用…")) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .disabled(appState.providerRuntimeBusy)
+            .task { await appState.refreshProviderStorage() }
+            .sheet(item: $appState.providerMaintenancePlan) { plan in
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(plan.mode == .uninstall ? L10n.text("停用并卸载组件") : L10n.text("清理旧版本")).font(.headline)
+                    Text(L10n.text("预计释放 {0}。账号、配置、历史和用户数据将保留。", ["\(ByteCountFormatter.string(fromByteCount: plan.bytes, countStyle: .file))"]))
+                    if plan.mode == .uninstall { Text(L10n.text("卸载后暂停自动安装，需要时可重新启用。")) }
+                    HStack {
+                        Button(L10n.text("取消")) { appState.providerMaintenancePlan = nil }
+                        Spacer()
+                        Button(L10n.text("确认清理"), role: .destructive) { appState.executeProviderMaintenance() }.disabled(plan.paths.isEmpty && plan.mode != .uninstall)
+                    }
+                }.padding(24).frame(width: 440).themedPresentation()
+            }
+
             GroupBox(label: SettingsPanelLabel(
-                title: "隐私与安全",
-                subtitle: "扩展在受限环境中运行，账号权限始终由你控制。",
+                title: L10n.text("隐私与安全"),
+                subtitle: L10n.text("扩展在受限环境中运行，账号权限始终由你控制。"),
                 systemImage: "hand.raised.fill"
             )) {
                 VStack(alignment: .leading, spacing: 0) {
-                    SettingsControlRow(title: "安全更新", caption: "只接受固定地址和签名校验通过的扩展") {
-                        Label("已开启", systemImage: "checkmark.shield.fill")
+                    SettingsControlRow(title: L10n.text("安全更新"), caption: L10n.text("只接受固定地址和签名校验通过的扩展")) {
+                        Label(L10n.text("已开启"), systemImage: "checkmark.shield.fill")
                             .font(.caption)
                             .foregroundStyle(palette.color(for: .success))
                     }
                     Divider().padding(.vertical, 8)
-                    SettingsControlRow(title: "凭据保护", caption: "网盘与自有后端凭据仅保存在本机") {
-                        Label("本机保存", systemImage: "lock.fill")
+                    SettingsControlRow(title: L10n.text("凭据保护"), caption: L10n.text("网盘与自有后端凭据仅保存在本机")) {
+                        Label(L10n.text("本机保存"), systemImage: "lock.fill")
                             .font(.caption)
                             .foregroundStyle(palette.color(for: .success))
                     }
                     Divider().padding(.vertical, 8)
-                    SettingsControlRow(title: "网络保护", caption: "默认拒绝明文连接和跨站凭据转发") {
-                        Label("受保护", systemImage: "network.badge.shield.half.filled")
+                    SettingsControlRow(title: L10n.text("网络保护"), caption: L10n.text("默认拒绝明文连接和跨站凭据转发")) {
+                        Label(L10n.text("受保护"), systemImage: "network.badge.shield.half.filled")
                             .font(.caption)
                             .foregroundStyle(palette.color(for: .success))
                     }
@@ -588,7 +719,7 @@ struct SettingsView: View {
                 .padding(.leading, 27)
             }
 
-            Text("扩展只提供格式兼容能力，不包含视频源，也不会执行配置中的远程脚本。")
+            Text(L10n.text("扩展只提供格式兼容能力，不包含视频源，也不会执行配置中的远程脚本。"))
                 .font(.caption)
                 .foregroundStyle(palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -596,6 +727,8 @@ struct SettingsView: View {
         .onAppear {
             if appState.providerRuntimeIsConfigured,
                !appState.providerRuntimeBusy,
+               !appState.providerComponentsDisabled,
+               appState.providerInstallation.sessionID == nil,
                appState.providerRuntimeCatalog.isEmpty,
                appState.providerRuntimeInstalled.isEmpty {
                 appState.refreshProviderRuntimeCatalog()
@@ -604,66 +737,68 @@ struct SettingsView: View {
     }
 
     private var providerRuntimeSummaryStatus: String {
-        if !appState.providerRuntimeIsConfigured { return "未配置" }
+        if !appState.providerRuntimeIsConfigured { return L10n.text("未配置") }
         if appState.providerRuntimeBusy {
-            return appState.providerRuntimeInstalled.isEmpty ? "正在准备" : "后台检查"
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                ? L10n.text("正在准备") : L10n.text("后台检查")
         }
-        if appState.providerRuntimeLocalPackageInvalid { return "需要修复" }
-        if !appState.providerRuntimeInitialInstallCompleted { return "安装未完成" }
-        if !appState.providerRuntimePendingVersions.isEmpty { return "更新待处理" }
+        if appState.providerRuntimeLocalPackageInvalid { return L10n.text("需要修复") }
+        if !appState.providerRuntimeInitialInstallCompleted { return L10n.text("安装未完成") }
+        if !appState.providerRuntimePendingVersions.isEmpty { return L10n.text("更新待处理") }
         if providerRuntimeHasFailure {
-            return appState.providerRuntimeInstalled.isEmpty ? "安装未完成" : "检查未完成"
+            return appState.providerRuntimeInstalled.isEmpty ? L10n.text("安装未完成") : L10n.text("检查未完成")
         }
-        return appState.providerRuntimeInstalled.isEmpty ? "尚未就绪" : "运行正常"
+        return appState.providerRuntimeInstalled.isEmpty ? L10n.text("尚未就绪") : L10n.text("运行正常")
     }
 
     private var providerRuntimeSummaryTitle: String {
-        if !appState.providerRuntimeIsConfigured { return "当前构建未启用扩展支持" }
+        if !appState.providerRuntimeIsConfigured { return L10n.text("当前构建未启用扩展支持") }
         if appState.providerRuntimeBusy {
-            return appState.providerRuntimeInstalled.isEmpty ? "正在准备扩展能力" : "扩展能力已就绪"
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                ? L10n.text("正在准备扩展能力") : L10n.text("扩展能力已就绪")
         }
-        if appState.providerRuntimeLocalPackageInvalid { return "本地扩展需要重新安装" }
-        if !appState.providerRuntimeInitialInstallCompleted { return "首次扩展安装未完成" }
-        if !appState.providerRuntimePendingVersions.isEmpty { return "扩展更新待处理" }
+        if appState.providerRuntimeLocalPackageInvalid { return L10n.text("本地扩展需要重新安装") }
+        if !appState.providerRuntimeInitialInstallCompleted { return L10n.text("首次扩展安装未完成") }
+        if !appState.providerRuntimePendingVersions.isEmpty { return L10n.text("扩展更新待处理") }
         if providerRuntimeHasFailure {
-            return appState.providerRuntimeInstalled.isEmpty ? "扩展安装未完成" : "扩展更新检查未完成"
+            return appState.providerRuntimeInstalled.isEmpty ? L10n.text("扩展安装未完成") : L10n.text("扩展更新检查未完成")
         }
-        return appState.providerRuntimeInstalled.isEmpty ? "等待自动准备" : "扩展能力已就绪"
+        return appState.providerRuntimeInstalled.isEmpty ? L10n.text("等待自动准备") : L10n.text("扩展能力已就绪")
     }
 
     private var providerRuntimeSummaryDescription: String {
         if !appState.providerRuntimeIsConfigured {
-            return "当前安装包缺少签名公钥或分发地址，请安装已配置扩展支持的版本。"
+            return L10n.text("当前安装包缺少签名公钥或分发地址，请安装已配置扩展支持的版本。")
         }
         if appState.providerRuntimeBusy {
-            return appState.providerRuntimeInstalled.isEmpty
-                ? "NetVplayer 正在检查并自动更新所需组件。"
-                : "已启用 \(appState.providerRuntimeInstalled.count) 项兼容组件，正在后台检查更新。"
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                ? L10n.text("NetVplayer 正在检查并自动更新所需组件。")
+                : L10n.text("已启用 {0} 项兼容组件，正在后台检查更新。", ["\(appState.providerRuntimeInstalled.count)"])
         }
         if appState.providerRuntimeLocalPackageInvalid {
-            return "此前安装的扩展未通过本地校验，正在等待重新安装。"
+            return L10n.text("此前安装的扩展未通过本地校验，正在等待重新安装。")
         }
         if !appState.providerRuntimeInitialInstallCompleted {
-            return "所需扩展尚未全部准备好，数据源会在安装完成后加载。"
+            return L10n.text("所需扩展尚未全部准备好，数据源会在安装完成后加载。")
         }
         if !appState.providerRuntimePendingVersions.isEmpty {
-            return "有 \(appState.providerRuntimePendingVersions.count) 项更新未完成，已安装版本仍可使用。"
+            return L10n.text("有 {0} 项更新未完成，已安装版本仍可使用。", ["\(appState.providerRuntimePendingVersions.count)"])
         }
         if providerRuntimeHasFailure {
             return appState.providerRuntimeInstalled.isEmpty
-                ? "播放扩展安装未完成，请重新检查。"
-                : "暂时无法检查更新，已安装组件仍可正常使用。"
+                ? L10n.text("播放扩展安装未完成，请重新检查。")
+                : L10n.text("暂时无法检查更新，已安装组件仍可正常使用。")
         }
         if appState.providerRuntimeInstalled.isEmpty {
-            return "NetVplayer 会在需要时自动准备，无需选择版本或安装位置。"
+            return L10n.text("NetVplayer 会在需要时自动准备，无需选择版本或安装位置。")
         }
-        return "已自动启用 \(appState.providerRuntimeInstalled.count) 项兼容组件，并会保持更新。"
+        return L10n.text("已自动启用 {0} 项兼容组件，并会保持更新。", ["\(appState.providerRuntimeInstalled.count)"])
     }
 
     private var providerRuntimeSummaryIcon: String {
         if !appState.providerRuntimeIsConfigured { return "puzzlepiece.extension" }
         if appState.providerRuntimeBusy {
-            return appState.providerRuntimeInstalled.isEmpty
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
                 ? "arrow.triangle.2.circlepath"
                 : "checkmark.circle.fill"
         }
@@ -677,7 +812,7 @@ struct SettingsView: View {
     private var providerRuntimeSummaryColor: Color {
         if !appState.providerRuntimeIsConfigured { return palette.muted }
         if appState.providerRuntimeBusy {
-            return appState.providerRuntimeInstalled.isEmpty
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
                 ? palette.color(for: .loading)
                 : palette.color(for: .success)
         }
@@ -704,13 +839,32 @@ struct SettingsView: View {
     }
 
     private var providerRuntimeTechnicalDetails: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if appState.providerInstallation.sessionID != nil {
+                ProviderInstallationProgressView(
+                    installation: appState.providerInstallation,
+                    isBusy: appState.providerRuntimeBusy,
+                    displayName: providerRuntimeDisplayName,
+                    retry: { appState.installProvider(providerID: $0.providerID, version: $0.version) }
+                )
+                if !appState.providerRuntimeInstalled.isEmpty {
+                    Divider().padding(.vertical, 10)
+                    providerRuntimeInstalledDetails
+                }
+            } else {
+                providerRuntimeVersionDetails
+            }
+        }
+    }
+
+    private var providerRuntimeInstalledDetails: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("已启用组件")
+            Text(L10n.text("已启用组件"))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(palette.foreground)
 
             if appState.providerRuntimeInstalled.isEmpty {
-                Text("暂无已启用组件")
+                Text(L10n.text("暂无已启用组件"))
                     .font(.caption)
                     .foregroundStyle(palette.muted)
                     .padding(.vertical, 10)
@@ -720,25 +874,30 @@ struct SettingsView: View {
                         title: providerRuntimeDisplayName(document.manifest.providerID),
                         caption: "\(document.manifest.providerID) · \(providerRuntimeDisplayName(document.manifest.runtime.rawValue)) · v\(document.manifest.version)"
                     ) {
-                        Label("已启用", systemImage: "checkmark.circle.fill")
+                        Label(L10n.text("已启用"), systemImage: "checkmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(palette.color(for: .success))
                     }
                 }
             }
+        }
+    }
 
+    private var providerRuntimeVersionDetails: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            providerRuntimeInstalledDetails
             Divider().padding(.vertical, 10)
 
-            Text("推荐版本")
+            Text(L10n.text("推荐版本"))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(palette.foreground)
-            Text("每类只显示当前推荐版本，历史版本由应用自动管理。")
+            Text(L10n.text("每类只显示当前推荐版本，历史版本由应用自动管理。"))
                 .font(.system(size: 11))
                 .foregroundStyle(palette.muted)
                 .padding(.top, 2)
 
             if latestProviderRuntimeCatalog.isEmpty {
-                Text("暂时无法获取推荐版本")
+                Text(L10n.text("暂时无法获取推荐版本"))
                     .font(.caption)
                     .foregroundStyle(palette.muted)
                     .padding(.vertical, 10)
@@ -755,10 +914,10 @@ struct SettingsView: View {
 
                     SettingsControlRow(
                         title: providerRuntimeDisplayName(release.providerID),
-                        caption: "\(release.providerID) · 推荐 v\(release.version)"
+                        caption: L10n.text("{0} · 推荐 v{1}", ["\(release.providerID)", "\(release.version)"])
                     ) {
                         if isCurrent {
-                            Label("已是最新", systemImage: "checkmark")
+                            Label(L10n.text("已是最新"), systemImage: "checkmark")
                                 .font(.caption)
                                 .foregroundStyle(palette.muted)
                         } else {
@@ -769,13 +928,13 @@ struct SettingsView: View {
                                 )
                             } label: {
                                 Label(
-                                    isRetry ? "重试" : (installed == nil ? "修复" : "更新"),
+                                    isRetry ? L10n.text("重试") : (installed == nil ? L10n.text("修复") : L10n.text("更新")),
                                     systemImage: isRetry ? "arrow.clockwise" : "arrow.down.circle"
                                 )
                             }
                             .buttonStyle(.bordered)
                             .disabled(appState.providerRuntimeBusy)
-                            .help("下载并启用此播放扩展")
+                            .help(L10n.text("下载并启用此播放扩展"))
                         }
                     }
                 }
@@ -785,27 +944,27 @@ struct SettingsView: View {
 
     private func providerRuntimeDisplayName(_ value: String) -> String {
         switch value {
-        case "netvplayer.configurable.python": return "通用配置兼容"
-        case "netvplayer.catalog.python": return "常用数据源兼容"
-        case "netvplayer.catalog.java": return "Java 数据源兼容"
-        case "netvplayer.catalog.javascript": return "JavaScript 数据源兼容"
-        case "netvplayer.catalog.quickjs": return "轻量脚本兼容"
+        case "netvplayer.configurable.python": return L10n.text("通用配置兼容")
+        case "netvplayer.catalog.python": return L10n.text("常用数据源兼容")
+        case "netvplayer.catalog.java": return L10n.text("Java 数据源兼容")
+        case "netvplayer.catalog.javascript": return L10n.text("JavaScript 数据源兼容")
+        case "netvplayer.catalog.quickjs": return L10n.text("轻量脚本兼容")
         case "python": return "Python"
         case "java": return "Java"
         case "js": return "JavaScript"
         case "quickjs": return "QuickJS"
-        default: return "扩展组件"
+        default: return L10n.text("扩展组件")
         }
     }
 
     private var vodSourceSettings: some View {
-        SettingsControlRow(title: "点播源配置", caption: "支持 JSON 配置与 MacCMS JSON/XML 接口") {
+        SettingsControlRow(title: L10n.text("影视配置链接"), caption: L10n.text("使用已有的影视配置")) {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 9) {
-                    TextField("粘贴配置或 MacCMS 地址", text: $vodConfigUrl)
-                        .textFieldStyle(.roundedBorder)
+                    TextField(L10n.text("粘贴影视配置链接"), text: $vodConfigUrl)
+                        .textFieldStyle(SettingsFieldStyle())
 
-                    Button("加载") {
+                    Button(L10n.text("加载影视")) {
                         isLoadingVod = true
                         Task {
                             await appState.loadConfig(url: vodConfigUrl)
@@ -818,7 +977,7 @@ struct SettingsView: View {
                 }
 
                 if isLoadingVod {
-                    Label("正在加载点播源", systemImage: "arrow.triangle.2.circlepath")
+                    Label(L10n.text("正在加载点播源"), systemImage: "arrow.triangle.2.circlepath")
                         .foregroundStyle(palette.muted)
                         .font(.caption)
                 } else if let error = appState.configError {
@@ -826,11 +985,11 @@ struct SettingsView: View {
                         .foregroundStyle(palette.color(for: .danger))
                         .font(.caption)
                 } else if appState.isConfigLoaded {
-                    Label("点播源已加载成功", systemImage: "checkmark.circle.fill")
+                    Label(L10n.text("点播源已加载成功"), systemImage: "checkmark.circle.fill")
                         .foregroundStyle(palette.color(for: .success))
                         .font(.caption)
                 } else {
-                    Text("尚未加载点播配置")
+                    Text(L10n.text("尚未加载点播配置"))
                         .foregroundStyle(palette.muted)
                         .font(.caption)
                 }
@@ -847,21 +1006,17 @@ struct SettingsView: View {
     private var savedVodConfigs: some View {
         let configs = appState.savedConfigs.filter { $0.type == .vod }
 
-        return SettingsControlRow(title: "已保存配置", caption: "快速切换本机保存的配置") {
+        return SettingsControlRow(title: L10n.text("已保存的影视配置"), caption: L10n.text("快速切换本机保存的影视配置")) {
             HStack(spacing: 9) {
-                Picker("已保存配置", selection: $selectedSavedVodConfigURL) {
-                    Text(configs.isEmpty ? "未检测到已保存配置" : "选择一个配置")
-                        .tag("")
-                    ForEach(configs) { config in
-                        Text(config.name.isEmpty ? config.url : config.name)
-                            .tag(config.url)
+                SettingsChoicePicker(title: L10n.text("已保存的影视配置"), selection: $selectedSavedVodConfigURL, choices: [""] + configs.map(\.url)) { url in
+                    guard let config = configs.first(where: { $0.url == url }) else {
+                        return configs.isEmpty ? L10n.text("未检测到已保存配置") : L10n.text("选择一个配置")
                     }
+                    return config.name.isEmpty ? config.url : config.name
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
                 .frame(maxWidth: .infinity)
 
-                Button("加载") {
+                Button(L10n.text("加载")) {
                     guard let config = configs.first(where: { $0.url == selectedSavedVodConfigURL }) else { return }
                     vodConfigUrl = config.url
                     isLoadingVod = true
@@ -882,8 +1037,8 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(selectedSavedVodConfigURL.isEmpty || isLoadingVod)
-                .help("删除所选配置")
-                .accessibilityLabel("删除所选配置")
+                .help(L10n.text("删除所选配置"))
+                .accessibilityLabel(L10n.text("删除所选配置"))
             }
             .onAppear {
                 syncSavedVodConfigSelection(configs.map(\.url))
@@ -895,15 +1050,15 @@ struct SettingsView: View {
     }
 
     private var pendingSavedVodConfigRemovalName: String {
-        guard let config = pendingSavedVodConfigRemoval else { return "所选配置" }
+        guard let config = pendingSavedVodConfigRemoval else { return L10n.text("所选配置") }
         let name = config.name.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? config.url : name
     }
 
     private var searchSourceSettings: some View {
         GroupBox(label: SettingsPanelLabel(
-            title: "搜索站点与诊断",
-            subtitle: "控制默认搜索范围，并按站点健康度优化请求顺序。",
+            title: L10n.text("搜索设置"),
+            subtitle: L10n.text("选择搜索哪些站点，并优先搜索响应稳定的站点。"),
             systemImage: "magnifyingglass"
         )) {
             VStack(spacing: 0) {
@@ -911,8 +1066,8 @@ struct SettingsView: View {
 
                 Divider()
 
-                SettingsControlRow(title: "健康度排序", caption: "优先请求近期响应稳定的站点") {
-                    Toggle("健康度排序", isOn: Binding(
+                SettingsControlRow(title: L10n.text("优先搜索响应稳定的站点"), caption: L10n.text("根据近期响应情况调整请求顺序")) {
+                    Toggle(L10n.text("优先搜索响应稳定的站点"), isOn: Binding(
                         get: { siteHealthSortingEnabled },
                         set: { newValue in
                             siteHealthSortingEnabled = newValue
@@ -923,15 +1078,25 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                 }
 
-                Divider()
-                configReportDisclosureRow
+            }
+            .padding(.leading, 27)
+        }
+    }
 
+    private var connectionCheckSettings: some View {
+        GroupBox(label: SettingsPanelLabel(
+            title: L10n.text("连接检查"),
+            subtitle: L10n.text("搜索或播放遇到问题时，查看配置、站点响应和账号相关检查结果。"),
+            systemImage: "network"
+        )) {
+            VStack(spacing: 0) {
+                configReportDisclosureRow
                 if configReportExpanded {
                     Divider()
-                    advancedConfigDiagnostics
-                        .padding(.vertical, 10)
+                    advancedConfigDiagnostics.padding(.vertical, 10)
                 }
             }
+            .padding(.leading, 27)
         }
     }
 
@@ -939,7 +1104,7 @@ struct SettingsView: View {
         let sites = appState.sites.filter(\.isSearchable)
         let enabledCount = sites.filter { appState.isDefaultSearchSiteEnabled($0) }.count
 
-        return SettingsControlRow(title: "默认搜索站点", caption: "未自定义时使用全部站点") {
+        return SettingsControlRow(title: L10n.text("搜索范围"), caption: L10n.text("未自定义时使用全部站点")) {
             HStack(spacing: 9) {
                 Menu {
                     ForEach(sites, id: \.key) { site in
@@ -957,15 +1122,15 @@ struct SettingsView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Text(enabledCount == sites.count ? "全部站点" : "已选 \(enabledCount) / \(sites.count)")
+                        Text(enabledCount == sites.count ? L10n.text("全部站点") : L10n.text("已选 {0} / {1}", ["\(enabledCount)", "\(sites.count)"]))
                             .fontWeight(.semibold)
-                        Text(enabledCount == sites.count ? "默认" : "自定义")
+                        Text(enabledCount == sites.count ? L10n.text("默认") : L10n.text("自定义"))
                             .foregroundStyle(palette.muted)
                     }
                 }
                 .menuStyle(.button)
 
-                Button("全部启用") {
+                Button(L10n.text("全部启用")) {
                     appState.resetDefaultSearchSites()
                 }
                 .buttonStyle(.bordered)
@@ -978,7 +1143,7 @@ struct SettingsView: View {
         let snapshot = appState.configAggregationSnapshot
         let hasScan = appState.isConfigLoaded || !appState.externalSourceReports.isEmpty
 
-        return SettingsControlRow(title: "配置聚合报告", caption: "兼容性、凭据风险与资源诊断") {
+        return SettingsControlRow(title: L10n.text("查看详细检查报告"), caption: L10n.text("配置兼容性、账号风险与资源状态")) {
             Button {
                 withAnimation(.easeOut(duration: 0.18)) {
                     configReportExpanded.toggle()
@@ -986,12 +1151,12 @@ struct SettingsView: View {
             } label: {
                 HStack(spacing: 8) {
                     SettingsStatusTag(
-                        label: "外部源",
-                        value: hasScan ? "\(snapshot.fetchedSources.count)" : "尚未扫描"
+                        label: L10n.text("外部源"),
+                        value: hasScan ? "\(snapshot.fetchedSources.count)" : L10n.text("尚未扫描")
                     )
                     SettingsStatusTag(
-                        label: "风险",
-                        value: hasScan ? "\(snapshot.credentialRiskCount)" : "尚未扫描"
+                        label: L10n.text("风险"),
+                        value: hasScan ? "\(snapshot.credentialRiskCount)" : L10n.text("尚未扫描")
                     )
                     Spacer(minLength: 6)
                     Image(systemName: "chevron.right")
@@ -1007,12 +1172,12 @@ struct SettingsView: View {
     private var advancedConfigDiagnostics: some View {
         VStack(alignment: .leading, spacing: 12) {
             if !appState.availableDepots.isEmpty {
-                DisclosureGroup("配置仓库") {
+                DisclosureGroup(L10n.text("配置仓库")) {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(appState.availableDepots, id: \.url) { depot in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(depot.name.isEmpty ? "未命名配置" : depot.name)
+                                    Text(depot.name.isEmpty ? L10n.text("未命名配置") : depot.name)
                                         .font(.caption.weight(.medium))
                                     Text(depot.url)
                                         .font(.caption2)
@@ -1020,7 +1185,7 @@ struct SettingsView: View {
                                         .lineLimit(1)
                                 }
                                 Spacer()
-                                Button("加载") {
+                                Button(L10n.text("加载")) {
                                     vodConfigUrl = depot.url
                                     isLoadingVod = true
                                     Task {
@@ -1044,7 +1209,7 @@ struct SettingsView: View {
                     externalSourceCompatibilityReport
                         .padding(.top, 8)
                 } label: {
-                    Label("外部源兼容状态", systemImage: "checkmark.shield")
+                    Label(L10n.text("外部源兼容状态"), systemImage: "checkmark.shield")
                         .font(.subheadline.weight(.semibold))
                 }
             }
@@ -1069,15 +1234,15 @@ struct SettingsView: View {
     }
 
     private var sourceConfigurationStatus: String {
-        if isLoadingVod || isLoadingLive { return "正在加载" }
-        if appState.configError != nil { return "配置异常" }
-        if appState.isConfigLoaded || !appState.channelGroups.isEmpty { return "配置已就绪" }
-        return "等待配置"
+        if isLoadingVod || appState.isLoadingLiveConfiguration || appState.isLoadingLive { return L10n.text("正在加载") }
+        if appState.configError != nil || appState.liveConfigurationError != nil { return L10n.text("配置异常") }
+        if appState.isConfigLoaded || !appState.channelGroups.isEmpty { return L10n.text("配置已就绪") }
+        return L10n.text("等待配置")
     }
 
     private var sourceConfigurationStatusColor: Color {
-        if appState.configError != nil { return .red }
-        if appState.isConfigLoaded || !appState.channelGroups.isEmpty { return .green }
+        if appState.configError != nil || appState.liveConfigurationError != nil { return palette.color(for: .danger) }
+        if appState.isConfigLoaded || !appState.channelGroups.isEmpty { return palette.color(for: .success) }
         return palette.muted
     }
 
@@ -1091,11 +1256,11 @@ struct SettingsView: View {
     private var externalSourceCompatibilityReport: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("外部源兼容状态").font(.subheadline).bold()
+                Text(L10n.text("外部源兼容状态")).font(.subheadline).bold()
                 Spacer()
-                Text("\(appState.externalSourceReports.count) 个站点")
+                Text(L10n.text("{0} 个站点", ["\(appState.externalSourceReports.count)"]))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.muted)
             }
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), alignment: .leading)], alignment: .leading, spacing: 8) {
@@ -1126,24 +1291,24 @@ struct SettingsView: View {
                             .foregroundColor(compatibilityStatusColor(report.status))
                         Text(report.reason)
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.muted)
                             .lineLimit(2)
                         if !report.suggestion.isEmpty {
-                            Text("建议：\(report.suggestion)")
+                            Text(L10n.text("建议：{0}", ["\(report.suggestion)"]))
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.muted)
                                 .lineLimit(2)
                         }
                         if !report.sourceURL.isEmpty {
-                            Text("来源：\(report.sourceURL)")
+                            Text(L10n.text("来源：{0}", ["\(report.sourceURL)"]))
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.muted)
                                 .lineLimit(1)
                         }
                         if !report.credentialRequirements.isEmpty {
-                            Text("凭据：\(report.credentialRequirements.map(\.provider).joined(separator: ", "))")
+                            Text(L10n.text("凭据：{0}", ["\(report.credentialRequirements.map(\.provider).joined(separator: ", "))"]))
                                 .font(.caption2)
-                                .foregroundColor(.orange)
+                                .foregroundColor(palette.color(for: .warning))
                                 .lineLimit(1)
                         }
                     }
@@ -1157,41 +1322,41 @@ struct SettingsView: View {
         let snapshot = appState.configAggregationSnapshot
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("配置聚合报告").font(.subheadline).bold()
+                Text(L10n.text("配置聚合报告")).font(.subheadline).bold()
                 Spacer()
-                Text("\(snapshot.origins.count) 个条目来源")
+                Text(L10n.text("{0} 个条目来源", ["\(snapshot.origins.count)"]))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.muted)
             }
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 8) {
-                Label("外部源 \(snapshot.fetchedSources.count)", systemImage: "square.and.arrow.down")
-                Label("URL 归一化 \(snapshot.normalizedURLCount)", systemImage: "link")
-                Label("去重 \(snapshot.duplicateCount)", systemImage: "rectangle.stack.badge.minus")
-                Label("凭据 \(snapshot.credentialRequirements.count)", systemImage: "key")
-                Label("治理 \(snapshot.blockedByUserCount)", systemImage: "hand.raised")
-                Label("风险 \(snapshot.credentialRiskCount)", systemImage: "exclamationmark.shield")
-                Label("资源 \(snapshot.resourceDiagnostics.count)", systemImage: "shippingbox")
+                Label(L10n.text("外部源 {0}", ["\(snapshot.fetchedSources.count)"]), systemImage: "square.and.arrow.down")
+                Label(L10n.text("URL 归一化 {0}", ["\(snapshot.normalizedURLCount)"]), systemImage: "link")
+                Label(L10n.text("去重 {0}", ["\(snapshot.duplicateCount)"]), systemImage: "rectangle.stack.badge.minus")
+                Label(L10n.text("凭据 {0}", ["\(snapshot.credentialRequirements.count)"]), systemImage: "key")
+                Label(L10n.text("治理 {0}", ["\(snapshot.blockedByUserCount)"]), systemImage: "hand.raised")
+                Label(L10n.text("风险 {0}", ["\(snapshot.credentialRiskCount)"]), systemImage: "exclamationmark.shield")
+                Label(L10n.text("资源 {0}", ["\(snapshot.resourceDiagnostics.count)"]), systemImage: "shippingbox")
             }
             .font(.caption)
-            .foregroundColor(.secondary)
+            .foregroundColor(palette.muted)
 
             ForEach(snapshot.fetchedSources.prefix(6)) { source in
                 HStack(spacing: 8) {
                     Image(systemName: source.status == "success" ? "checkmark.circle" : "exclamationmark.triangle")
-                        .foregroundColor(source.status == "success" ? .green : .orange)
+                        .foregroundColor(source.status == "success" ? palette.color(for: .success) : palette.color(for: .warning))
                     Text(source.field)
                         .font(.caption)
                         .fontWeight(.medium)
                     Text(source.finalURL.isEmpty ? source.resolvedURL : source.finalURL)
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.muted)
                         .lineLimit(1)
                     Spacer()
                     if source.status == "success" {
                         Text("\(source.itemCount)")
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.muted)
                     }
                 }
             }
@@ -1202,14 +1367,14 @@ struct SettingsView: View {
         DisclosureGroup(isExpanded: $sourceHygieneExpanded) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Label("\(appState.sourceHygieneRules.count) 条本地规则", systemImage: "line.3.horizontal.decrease.circle")
+                    Label(L10n.text("{0} 条本地规则", ["\(appState.sourceHygieneRules.count)"]), systemImage: "line.3.horizontal.decrease.circle")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.muted)
                     Spacer()
                     Button {
                         appState.blockActiveSiteByFingerprint()
                     } label: {
-                        Label("屏蔽当前站点", systemImage: "hand.raised")
+                        Label(L10n.text("屏蔽当前站点"), systemImage: "hand.raised")
                     }
                     .disabled(appState.activeSite == nil)
                     .buttonStyle(.bordered)
@@ -1217,7 +1382,7 @@ struct SettingsView: View {
                     Button {
                         appState.clearSourceHygieneRules()
                     } label: {
-                        Label("恢复全部", systemImage: "arrow.counterclockwise")
+                        Label(L10n.text("恢复全部"), systemImage: "arrow.counterclockwise")
                     }
                     .disabled(appState.sourceHygieneRules.isEmpty)
                     .buttonStyle(.bordered)
@@ -1225,7 +1390,7 @@ struct SettingsView: View {
                     Button {
                         appState.exportSourceDiagnostics()
                     } label: {
-                        Label("导出诊断", systemImage: "square.and.arrow.up")
+                        Label(L10n.text("导出诊断"), systemImage: "square.and.arrow.up")
                     }
                     .buttonStyle(.bordered)
                 }
@@ -1233,21 +1398,21 @@ struct SettingsView: View {
                 if let status = appState.sourceDiagnosticExportStatus {
                     Text(status)
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.muted)
                         .lineLimit(2)
                 }
 
                 ForEach(appState.sourceHygieneRules.prefix(6)) { rule in
                     HStack(spacing: 8) {
                         Image(systemName: rule.isEnabled ? "checkmark.circle" : "pause.circle")
-                            .foregroundColor(rule.isEnabled ? .green : .secondary)
+                            .foregroundColor(rule.isEnabled ? palette.color(for: .success) : palette.muted)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(rule.name.isEmpty ? rule.pattern : rule.name)
                                 .font(.caption)
                                 .fontWeight(.medium)
                             Text("\(sourceHygieneKindTitle(rule.kind)) · \(rule.pattern)")
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.muted)
                                 .lineLimit(1)
                         }
                     }
@@ -1256,13 +1421,13 @@ struct SettingsView: View {
                 ForEach(appState.configAggregationSnapshot.hygieneDecisions.prefix(6)) { decision in
                     Label("\(decision.entityName.isEmpty ? decision.entityKey : decision.entityName)：\(decision.reason)", systemImage: "slash.circle")
                         .font(.caption2)
-                        .foregroundColor(.orange)
+                        .foregroundColor(palette.color(for: .warning))
                         .lineLimit(2)
                 }
             }
             .padding(.top, 6)
         } label: {
-            Label("源治理", systemImage: "hand.raised")
+            Label(L10n.text("源治理"), systemImage: "hand.raised")
                 .font(.subheadline)
                 .fontWeight(.semibold)
         }
@@ -1273,13 +1438,13 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 let risks = appState.configAggregationSnapshot.credentialRiskAssessments
                 HStack {
-                    Label("已扫描 \(risks.count) 个站点", systemImage: "key.viewfinder")
+                    Label(L10n.text("已扫描 {0} 个站点", ["\(risks.count)"]), systemImage: "key.viewfinder")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.muted)
                     Spacer()
-                    Label("需关注 \(appState.configAggregationSnapshot.credentialRiskCount)", systemImage: "exclamationmark.triangle")
+                    Label(L10n.text("需关注 {0}", ["\(appState.configAggregationSnapshot.credentialRiskCount)"]), systemImage: "exclamationmark.triangle")
                         .font(.caption)
-                        .foregroundColor(.orange)
+                        .foregroundColor(palette.color(for: .warning))
                 }
 
                 ForEach(risks.filter { $0.riskLevel != .safe }.prefix(8)) { risk in
@@ -1293,12 +1458,12 @@ struct SettingsView: View {
                                 .fontWeight(.medium)
                             Text("\(credentialRiskTitle(risk.riskLevel)) · \(risk.reason)")
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.muted)
                                 .lineLimit(2)
                             if !risk.thirdPartyDomains.isEmpty {
-                                Text("域名：\(risk.thirdPartyDomains.joined(separator: ", "))")
+                                Text(L10n.text("域名：{0}", ["\(risk.thirdPartyDomains.joined(separator: ", "))"]))
                                     .font(.caption2)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.muted)
                                     .lineLimit(1)
                             }
                         }
@@ -1307,7 +1472,7 @@ struct SettingsView: View {
             }
             .padding(.top, 6)
         } label: {
-            Label("凭据风险", systemImage: "exclamationmark.shield")
+            Label(L10n.text("凭据风险"), systemImage: "exclamationmark.shield")
                 .font(.subheadline)
                 .fontWeight(.semibold)
         }
@@ -1339,11 +1504,11 @@ struct SettingsView: View {
                                 .fontWeight(.medium)
                             Text(diagnostic.url)
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.muted)
                                 .lineLimit(1)
                             Text(diagnostic.reason)
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.muted)
                                 .lineLimit(2)
                         }
                     }
@@ -1351,7 +1516,7 @@ struct SettingsView: View {
             }
             .padding(.top, 6)
         } label: {
-            Label("资源诊断", systemImage: "shippingbox")
+            Label(L10n.text("资源诊断"), systemImage: "shippingbox")
                 .font(.subheadline)
                 .fontWeight(.semibold)
         }
@@ -1361,9 +1526,9 @@ struct SettingsView: View {
         DisclosureGroup(isExpanded: $liveLineQualityExpanded) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Label("\(appState.liveLineHealthSummaries.count) 条线路记录", systemImage: "antenna.radiowaves.left.and.right")
+                    Label(L10n.text("{0} 条线路记录", ["\(appState.liveLineHealthSummaries.count)"]), systemImage: "antenna.radiowaves.left.and.right")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.muted)
                     Spacer()
                     Button {
                         isProbingCurrentLiveGroup = true
@@ -1372,7 +1537,7 @@ struct SettingsView: View {
                             isProbingCurrentLiveGroup = false
                         }
                     } label: {
-                        Label("检测当前分组", systemImage: "waveform.path.ecg")
+                        Label(L10n.text("检测当前分组"), systemImage: "waveform.path.ecg")
                     }
                     .disabled(isProbingCurrentLiveGroup || appState.channelGroups.isEmpty)
                     .buttonStyle(.bordered)
@@ -1380,7 +1545,7 @@ struct SettingsView: View {
                     Button {
                         appState.clearLiveLineHealthRecords()
                     } label: {
-                        Label("清理记录", systemImage: "trash")
+                        Label(L10n.text("清理记录"), systemImage: "trash")
                     }
                     .disabled(appState.liveLineHealthSummaries.isEmpty)
                     .buttonStyle(.bordered)
@@ -1394,18 +1559,18 @@ struct SettingsView: View {
                 ForEach(appState.liveLineHealthSummaries.prefix(8)) { summary in
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: summary.failureCount > 0 ? "exclamationmark.triangle" : "checkmark.circle")
-                            .foregroundColor(summary.failureCount > 0 ? .orange : .green)
+                            .foregroundColor(summary.failureCount > 0 ? palette.color(for: .warning) : palette.color(for: .success))
                             .frame(width: 16)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(summary.channelName)
                                 .font(.caption)
                                 .fontWeight(.medium)
-                            Text("成功 \(summary.successCount) · 失败 \(summary.failureCount) · 平均 \(summary.averageTTFBMs)ms · HTTP \(summary.lastStatusCode)")
+                            Text(L10n.text("成功 {0} · 失败 {1} · 平均 {2}ms · HTTP {3}", ["\(summary.successCount)", "\(summary.failureCount)", "\(summary.averageTTFBMs)", "\(summary.lastStatusCode)"]))
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.muted)
                             Text(summary.redactedURL)
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.muted)
                                 .lineLimit(1)
                         }
                     }
@@ -1413,7 +1578,7 @@ struct SettingsView: View {
             }
             .padding(.top, 6)
         } label: {
-            Label("直播线路质量", systemImage: "waveform.path.ecg")
+            Label(L10n.text("直播线路质量"), systemImage: "waveform.path.ecg")
                 .font(.subheadline)
                 .fontWeight(.semibold)
         }
@@ -1434,12 +1599,12 @@ struct SettingsView: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("站点健康诊断").font(.subheadline).bold()
+                Text(L10n.text("站点健康诊断")).font(.subheadline).bold()
                 Spacer()
                 Button {
                     appState.clearSiteHealthRecords()
                 } label: {
-                    Label("清理健康记录", systemImage: "trash")
+                    Label(L10n.text("清理健康记录"), systemImage: "trash")
                 }
                 .buttonStyle(.bordered)
             }
@@ -1447,14 +1612,14 @@ struct SettingsView: View {
             ForEach(Array(summaries), id: \.siteKey) { summary in
                 HStack(spacing: 10) {
                     Image(systemName: summary.failureCount > 0 ? "waveform.path.ecg" : "checkmark.circle")
-                        .foregroundColor(summary.failureCount > 0 ? .orange : .green)
+                        .foregroundColor(summary.failureCount > 0 ? palette.color(for: .warning) : palette.color(for: .success))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(summary.siteName.isEmpty ? summary.siteKey : summary.siteName)
                             .font(.caption)
                             .fontWeight(.medium)
                         Text(siteHealthDetailText(summary))
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.muted)
                     }
                     Spacer()
                     Text("\(summary.displayPercent)%")
@@ -1469,36 +1634,36 @@ struct SettingsView: View {
 
     private func siteHealthDetailText(_ summary: SiteHealthSummary) -> String {
         var parts = [
-            "失败 \(summary.failureCount)",
-            "平均 \(summary.averageDurationMs)ms"
+            L10n.text("失败 {0}", ["\(summary.failureCount)"]),
+            L10n.text("平均 {0}ms", ["\(summary.averageDurationMs)"])
         ]
         if let category = summary.lastFailureCategory {
-            parts.append("最后 \(category.rawValue)")
+            parts.append(L10n.text("最后 {0}", ["\(category.rawValue)"]))
         }
         return parts.joined(separator: " · ")
     }
 
     private func siteHealthColor(_ summary: SiteHealthSummary) -> Color {
-        if summary.score >= 0.8 { return .green }
-        if summary.score >= 0.5 { return .orange }
-        return .red
+        if summary.score >= 0.8 { return palette.color(for: .success) }
+        if summary.score >= 0.5 { return palette.color(for: .warning) }
+        return palette.color(for: .danger)
     }
 
     private func sourceHygieneKindTitle(_ kind: SourceHygieneRuleKind) -> String {
         switch kind {
-        case .siteFingerprint: return "站点指纹"
-        case .siteNameRegex: return "名称正则"
-        case .parseURL: return "解析 URL"
-        case .liveURL: return "直播 URL"
+        case .siteFingerprint: return L10n.text("站点指纹")
+        case .siteNameRegex: return L10n.text("名称正则")
+        case .parseURL: return L10n.text("解析 URL")
+        case .liveURL: return L10n.text("直播 URL")
         }
     }
 
     private func credentialRiskTitle(_ level: CredentialRiskLevel) -> String {
         switch level {
-        case .safe: return "安全"
-        case .low: return "低风险"
-        case .high: return "高风险"
-        case .unaudited: return "待审计"
+        case .safe: return L10n.text("安全")
+        case .low: return L10n.text("低风险")
+        case .high: return L10n.text("高风险")
+        case .unaudited: return L10n.text("待审计")
         }
     }
 
@@ -1513,10 +1678,10 @@ struct SettingsView: View {
 
     private func credentialRiskColor(_ level: CredentialRiskLevel) -> Color {
         switch level {
-        case .safe: return .green
-        case .low: return .orange
-        case .high: return .red
-        case .unaudited: return .secondary
+        case .safe: return palette.color(for: .success)
+        case .low: return palette.color(for: .warning)
+        case .high: return palette.color(for: .danger)
+        case .unaudited: return palette.muted
         }
     }
 
@@ -1531,10 +1696,10 @@ struct SettingsView: View {
 
     private func resourceStatusColor(_ status: ExternalResourceDiagnosticStatus) -> Color {
         switch status {
-        case .recorded: return .green
-        case .blocked: return .red
-        case .androidRuntimeOnly: return .orange
-        case .unsupportedType: return .secondary
+        case .recorded: return palette.color(for: .success)
+        case .blocked: return palette.color(for: .danger)
+        case .androidRuntimeOnly: return palette.color(for: .warning)
+        case .unsupportedType: return palette.muted
         }
     }
 
@@ -1554,53 +1719,62 @@ struct SettingsView: View {
 
     private func compatibilityStatusColor(_ status: ExternalSourceSupportStatus) -> Color {
         switch status {
-        case .native: return .blue
-        case .nativePartial: return .orange
-        case .js, .cms: return .blue
-        case .pendingGuardCapture: return .orange
-        case .upstreamUnavailable: return .red
-        case .invalidConfiguration: return .red
-        case .unsupportedAndroidCsp: return .yellow
-        case .unsupportedBinary: return .orange
+        case .native: return palette.accent
+        case .nativePartial: return palette.color(for: .warning)
+        case .js, .cms: return palette.accent
+        case .pendingGuardCapture: return palette.color(for: .warning)
+        case .upstreamUnavailable: return palette.color(for: .danger)
+        case .invalidConfiguration: return palette.color(for: .danger)
+        case .unsupportedAndroidCsp: return palette.color(for: .warning)
+        case .unsupportedBinary: return palette.color(for: .warning)
         }
     }
 
     private var liveSourceSettings: some View {
-        SettingsControlRow(title: "直播源配置", caption: "支持 M3U 或 TXT 地址") {
+        SettingsControlRow(title: L10n.text("直播频道列表"), caption: L10n.text("使用已有的电视直播列表")) {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 9) {
-                    TextField("粘贴 M3U / TXT 地址", text: $liveConfigUrl)
-                        .textFieldStyle(.roundedBorder)
+                    TextField(L10n.text("粘贴直播频道列表链接"), text: $liveConfigUrl)
+                        .textFieldStyle(SettingsFieldStyle())
 
-                    Button("加载直播") {
-                        isLoadingLive = true
+                    Button(L10n.text("加载直播")) {
                         Task {
-                            UserPreferences.shared.currentLiveConfigUrl = liveConfigUrl
-                            if let live = appState.activeLive {
-                                var updatedLive = live
-                                updatedLive.url = liveConfigUrl
-                                await appState.changeLive(updatedLive)
-                            } else {
-                                let live = Models.Live(name: "自定义直播", url: liveConfigUrl)
-                                await appState.changeLive(live)
-                            }
-                            isLoadingLive = false
+                            await appState.loadLiveConfiguration(url: liveConfigUrl)
                         }
                     }
-                    .disabled(liveConfigUrl.isEmpty || isLoadingLive)
+                    .disabled(liveConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appState.isLoadingLiveConfiguration)
                     .buttonStyle(.bordered)
                 }
 
-                if isLoadingLive {
-                    Label("正在加载直播配置", systemImage: "arrow.triangle.2.circlepath")
+                if !appState.lives.isEmpty {
+                    LiveSourcePicker()
+                    Text(L10n.text("已发现 {0} 个直播源，请选择要播放的源。", ["\(appState.lives.count)"]))
                         .foregroundStyle(palette.muted)
                         .font(.caption)
+                }
+
+                if let error = appState.liveConfigurationError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(palette.color(for: .danger))
+                        .font(.caption)
+                } else if appState.isLoadingLiveConfiguration {
+                    Label(L10n.text("正在加载直播配置"), systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(palette.muted)
+                        .font(.caption)
+                } else if appState.isLoadingLive {
+                    Label(L10n.text("正在加载频道列表"), systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(palette.muted)
+                        .font(.caption)
+                } else if let error = appState.liveError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(palette.color(for: .danger))
+                        .font(.caption)
                 } else if !appState.channelGroups.isEmpty {
-                    Label("直播配置已解析成功", systemImage: "checkmark.circle.fill")
+                    Label(L10n.text("直播配置已解析成功"), systemImage: "checkmark.circle.fill")
                         .foregroundStyle(palette.color(for: .success))
                         .font(.caption)
                 } else {
-                    Text("尚未加载直播配置")
+                    Text(L10n.text("尚未加载直播配置"))
                         .foregroundStyle(palette.muted)
                         .font(.caption)
                 }
@@ -1610,20 +1784,25 @@ struct SettingsView: View {
 
     private var cloudDriveAuthSettings: some View {
         GroupBox(label: SettingsPanelLabel(
-            title: "网盘源授权",
-            subtitle: "扫码为主要路径；手动凭据只作为高级兜底并保存在本机。",
+            title: L10n.text("登录网盘"),
+            subtitle: L10n.text("播放需要网盘账号的视频时，在这里登录对应的网盘。"),
             systemImage: "externaldrive.badge.person.crop"
         )) {
             VStack(alignment: .leading, spacing: 12) {
-                Picker("网盘服务", selection: $selectedCloudProvider) {
-                    ForEach(CloudProvider.allCases) { provider in
-                        Text(provider.rawValue).tag(provider)
+                ViewThatFits(in: .horizontal) {
+                    Picker(L10n.text("网盘服务"), selection: $selectedCloudProvider) {
+                        ForEach(CloudProvider.allCases) { provider in
+                            Text(L10n.text(provider.rawValue)).tag(provider)
+                        }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize(horizontal: true, vertical: false)
+                    SettingsChoicePicker(title: L10n.text("网盘服务"), selection: $selectedCloudProvider, choices: CloudProvider.allCases) { L10n.text($0.rawValue) }
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
                 .onChange(of: selectedCloudProvider) { _, provider in
                     cloudCookieSaved = false
+                    cloudCookieVerified = false
                     cloudCookieStatus = nil
                     isManualCloudAuthExpanded = !CloudAuthSettingsPolicy.supportsPrimaryQRCodeLogin(
                         provider.driveProvider
@@ -1634,7 +1813,7 @@ struct SettingsView: View {
                 HStack(spacing: 7) {
                     Circle()
                         .fill(
-                            selectedCloudProviderHasCredential
+                            cloudCookieVerified
                                 ? palette.color(for: .success)
                                 : palette.muted
                         )
@@ -1643,9 +1822,6 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(palette.muted)
                     Spacer(minLength: 0)
-                    Text(selectedCloudProvider.credentialKind)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(palette.muted)
                 }
 
                 Divider()
@@ -1655,12 +1831,12 @@ struct SettingsView: View {
                         Button {
                             appState.requestCloudAuthFromSettings(selectedCloudProvider.driveProvider)
                         } label: {
-                            Label("扫码登录", systemImage: "qrcode.viewfinder")
+                            Label(L10n.text("扫码登录"), systemImage: "qrcode.viewfinder")
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(isValidatingCloudCookie || appState.cloudAuthRequest != nil)
                     } else {
-                        Label("暂不支持扫码授权", systemImage: "key.horizontal")
+                        Label(L10n.text("暂不支持扫码授权"), systemImage: "key.horizontal")
                             .font(.caption)
                             .foregroundStyle(palette.muted)
                     }
@@ -1668,16 +1844,16 @@ struct SettingsView: View {
                     Button {
                         clearSelectedCloudProvider()
                     } label: {
-                        Label("清空", systemImage: "trash")
+                        Label(L10n.text("清空账号"), systemImage: "trash")
                     }
                     .buttonStyle(.bordered)
 
                     if cloudCookieSaved {
                         Label(
-                            selectedCloudProviderHasCredential ? "已保存" : "已清空",
+                            selectedCloudProviderHasCredential || cloudCookieVerified ? L10n.text("已保存") : L10n.text("已清空"),
                             systemImage: "checkmark.circle.fill"
                         )
-                            .foregroundColor(.green)
+                            .foregroundStyle(palette.color(for: .success))
                             .font(.caption)
                     }
 
@@ -1695,38 +1871,37 @@ struct SettingsView: View {
                             saveCloudCookiesFromSettings()
                         } label: {
                             Label(
-                                isValidatingCloudCookie ? "保存中..." : "验证并保存手动凭据",
+                                isValidatingCloudCookie ? L10n.text("保存中...") : L10n.text("验证并保存手动凭据"),
                                 systemImage: "checkmark.circle"
                             )
                         }
                         .buttonStyle(.bordered)
                         .disabled(isValidatingCloudCookie || !selectedCloudProviderHasCredential)
                     }
+                    .disabled(isValidatingCloudCookie)
                     .padding(.top, 8)
                 } label: {
                     Label(
                         CloudAuthSettingsPolicy.supportsPrimaryQRCodeLogin(selectedCloudProvider.driveProvider)
-                            ? "手动登录（备选）"
-                            : "手动授权",
+                            ? L10n.text("高级：手动登录（备选）")
+                            : L10n.text("手动授权"),
                         systemImage: "key.horizontal"
                     )
                     .font(.system(size: 12, weight: .medium))
                 }
 
                 if let cloudCookieStatus {
-                    Text(cloudCookieStatus)
-                        .font(.caption)
-                        .foregroundColor(cloudCookieSaved ? .green : .red)
+                    SettingsInlineMessage(message: cloudCookieStatus, role: cloudCookieMessageRole)
                 }
 
                 Divider()
 
                 SettingsControlRow(
-                    title: "\(selectedCloudProvider.rawValue)播放后自动清理",
-                    caption: "删除\(selectedCloudProvider.rawValue)播放链路创建的临时转存文件；未创建转存时不会删除任何内容"
+                    title: L10n.text("{0}播放后自动清理", ["\(selectedCloudProvider.rawValue)"]),
+                    caption: L10n.text("删除{0}播放链路创建的临时转存文件；未创建转存时不会删除任何内容", ["\(selectedCloudProvider.rawValue)"])
                 ) {
                     Toggle(
-                        "\(selectedCloudProvider.rawValue)播放后自动清理",
+                        L10n.text("{0}播放后自动清理", ["\(selectedCloudProvider.rawValue)"]),
                         isOn: selectedCloudAutoDeleteBinding
                     )
                     .labelsHidden()
@@ -1735,8 +1910,9 @@ struct SettingsView: View {
 
                 Text(selectedCloudProvider.authorizationGuidance)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(palette.muted)
             }
+            .padding(.leading, 27)
             .padding(.vertical, 8)
         }
     }
@@ -1761,37 +1937,41 @@ struct SettingsView: View {
     private var selectedCloudProviderFields: some View {
         switch selectedCloudProvider {
         case .quark:
-            cloudSecureField("夸克 Cookie", placeholder: "粘贴 pan.quark.cn Cookie", text: $quarkCookie)
+            cloudSecureField(L10n.text("夸克 Cookie"), placeholder: L10n.text("粘贴 pan.quark.cn Cookie"), text: $quarkCookie)
         case .uc:
-            cloudSecureField("UC Cookie", placeholder: "粘贴 drive.uc.cn Cookie", text: $ucCookie)
+            cloudSecureField("UC Cookie", placeholder: L10n.text("粘贴 drive.uc.cn Cookie"), text: $ucCookie)
         case .ali:
-            cloudSecureField("Refresh Token", placeholder: "粘贴阿里云盘 refresh_token", text: $aliRefreshToken)
-            cloudSecureField("Access Token", placeholder: "可选", text: $aliAccessToken)
-            cloudSecureField("Open Token", placeholder: "可选", text: $aliOpenToken)
-            cloudTextField("Default Drive ID", placeholder: "转存到个人盘时使用", text: $aliDefaultDriveID)
+            Text(L10n.text("三种 Token 至少填写一项；Refresh Token 可用于自动续期。"))
+                .font(.caption).foregroundStyle(palette.muted)
+            cloudSecureField("Refresh Token", placeholder: L10n.text("粘贴阿里云盘 refresh_token"), text: $aliRefreshToken, requirement: .serverDependent)
+            cloudSecureField("Access Token", placeholder: L10n.text("可选"), text: $aliAccessToken, requirement: .serverDependent)
+            cloudSecureField("Open Token", placeholder: L10n.text("可选"), text: $aliOpenToken, requirement: .serverDependent)
+            cloudTextField("Default Drive ID", placeholder: L10n.text("转存到个人盘时使用"), text: $aliDefaultDriveID)
         case .p115:
-            cloudSecureField("115 Cookie", placeholder: "粘贴 115.com Cookie", text: $p115Cookie)
-            cloudSecureField("Open API Token", placeholder: "可选", text: $p115AccessToken)
+            cloudSecureField("115 Cookie", placeholder: L10n.text("粘贴 115.com Cookie"), text: $p115Cookie)
+            cloudSecureField("Open API Token", placeholder: L10n.text("可选"), text: $p115AccessToken, requirement: .optional)
         case .pikpak:
-            cloudSecureField("Access Token", placeholder: "粘贴 PikPak access_token", text: $pikpakAccessToken)
-            cloudSecureField("Refresh Token", placeholder: "可选", text: $pikpakRefreshToken)
-            cloudTextField("Device ID", placeholder: "可选", text: $pikpakDeviceID)
+            Text(L10n.text("Access Token 和 Refresh Token 至少填写一项。"))
+                .font(.caption).foregroundStyle(palette.muted)
+            cloudSecureField("Access Token", placeholder: L10n.text("粘贴 PikPak access_token"), text: $pikpakAccessToken, requirement: .serverDependent)
+            cloudSecureField("Refresh Token", placeholder: L10n.text("可选"), text: $pikpakRefreshToken, requirement: .serverDependent)
+            cloudTextField("Device ID", placeholder: L10n.text("可选"), text: $pikpakDeviceID)
         case .baidu:
-            cloudSecureField("百度 Cookie", placeholder: "扫码登录，或粘贴 BDUSS/STOKEN", text: $baiduCookie)
+            cloudSecureField(L10n.text("百度 Cookie"), placeholder: L10n.text("扫码登录，或粘贴 BDUSS/STOKEN"), text: $baiduCookie)
         }
     }
 
-    private func cloudSecureField(_ title: String, placeholder: String, text: Binding<String>) -> some View {
-        SettingsControlRow(title: title, caption: "输入后仅保存在本机") {
-            SecureField(placeholder, text: trackedCloudCredential(text))
-                .textFieldStyle(.roundedBorder)
+    private func cloudSecureField(_ title: String, placeholder: String, text: Binding<String>, requirement: FormFieldRequirement = .required) -> some View {
+        SettingsControlRow(title: title, caption: L10n.text("输入后仅保存在本机"), requirement: requirement) {
+            SettingsPasswordField(placeholder, text: trackedCloudCredential(text))
+                .id(selectedCloudProvider)
         }
     }
 
     private func cloudTextField(_ title: String, placeholder: String, text: Binding<String>) -> some View {
-        SettingsControlRow(title: title, caption: "非敏感标识") {
+        SettingsControlRow(title: title, caption: L10n.text("非敏感标识"), requirement: .optional) {
             TextField(placeholder, text: trackedCloudCredential(text))
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(SettingsFieldStyle())
         }
     }
 
@@ -1823,28 +2003,34 @@ struct SettingsView: View {
             return cloudCookieStatus
         }
         return selectedCloudProviderHasCredential
-            ? "\(selectedCloudProvider.rawValue)凭据已填写"
-            : "\(selectedCloudProvider.rawValue)未连接"
+            ? L10n.text("{0}账号信息已填写，尚未验证", [L10n.text(selectedCloudProvider.rawValue)])
+            : L10n.text("{0}未连接", [L10n.text(selectedCloudProvider.rawValue)])
+    }
+
+    private var cloudCookieMessageRole: AppSemanticColorRole {
+        guard cloudCookieSaved else { return .danger }
+        return cloudCookieVerified || !selectedCloudProviderHasCredential ? .success : .warning
     }
 
     private func markCloudCredentialsDirty() {
         cloudCookieSaved = false
+        cloudCookieVerified = false
         cloudCookieStatus = nil
     }
 
     private var playbackSettings: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
             GroupBox(label: SettingsPanelLabel(
-                title: "播放行为",
-                subtitle: "为新播放会话选择默认解码策略。",
+                title: L10n.text("播放行为"),
+                subtitle: L10n.text("为新播放会话选择默认解码策略。"),
                 systemImage: "play.circle"
             )) {
                 VStack(spacing: 0) {
-                    SettingsControlRow(title: "解码方式", caption: "自动模式沿用播放器默认策略") {
-                        Picker("解码方式", selection: $decodeMode) {
-                            Text("自动").tag(0)
-                            Text("硬件加速").tag(1)
-                            Text("软解优先").tag(2)
+                    SettingsControlRow(title: L10n.text("解码方式"), caption: L10n.text("自动模式沿用播放器默认策略")) {
+                        Picker(L10n.text("解码方式"), selection: $decodeMode) {
+                            Text(L10n.text("自动")).tag(0)
+                            Text(L10n.text("硬件加速")).tag(1)
+                            Text(L10n.text("软解优先")).tag(2)
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)
@@ -1857,15 +2043,15 @@ struct SettingsView: View {
                     Divider()
 
                     SettingsControlRow(
-                        title: "播放器窗口",
-                        caption: windowPreferenceStatus ?? "分别记住点播与直播普通窗口的位置和大小"
+                        title: L10n.text("播放器窗口"),
+                        caption: windowPreferenceStatus ?? L10n.text("分别记住点播与直播普通窗口的位置和大小")
                     ) {
                         Button {
                             PlayerWindowPreferenceStore.main.reset()
                             PlayerWindowPreferenceStore.live.reset()
-                            windowPreferenceStatus = "已重置，下次打开窗口时生效"
+                            windowPreferenceStatus = L10n.text("已重置，下次打开窗口时生效")
                         } label: {
-                            Label("重置窗口位置", systemImage: "rectangle.badge.xmark")
+                            Label(L10n.text("重置窗口位置"), systemImage: "rectangle.badge.xmark")
                         }
                         .buttonStyle(.bordered)
                     }
@@ -1873,15 +2059,17 @@ struct SettingsView: View {
             }
 
             GroupBox(label: SettingsPanelLabel(
-                title: "字幕",
-                subtitle: "播放器即时刷新字幕样式，不需要重启视频。",
+                title: L10n.text("字幕"),
+                subtitle: L10n.text("播放器即时刷新字幕样式，不需要重启视频。"),
                 systemImage: "captions.bubble"
             )) {
                 VStack(spacing: 0) {
                     HStack {
                         Spacer(minLength: 0)
-                        Button("恢复默认") {
+                        Button(L10n.text("恢复默认")) {
                             UserPreferences.shared.resetSubtitlePreferences()
+                            subtitleAppearance = UserPreferences.shared.subtitleAppearance
+                            refreshSubtitleStyle()
                             subtitleFontSize = UserPreferences.shared.subtitleFontSize
                             subtitlePosition = UserPreferences.shared.subtitlePosition
                             subtitleOverrideSourceStyle = UserPreferences.shared.subtitleOverrideSourceStyle
@@ -1891,51 +2079,63 @@ struct SettingsView: View {
                     .padding(.bottom, 6)
 
                     SettingsControlRow(
-                        title: "忽略片源字幕样式",
-                        caption: "避免异常字号和位置覆盖本地偏好"
+                        title: L10n.text("忽略片源字幕样式"),
+                        caption: L10n.text("避免异常字号和位置覆盖本地偏好")
                     ) {
-                        Toggle("忽略片源字幕样式", isOn: $subtitleOverrideSourceStyle)
+                        Toggle(L10n.text("忽略片源字幕样式"), isOn: $subtitleOverrideSourceStyle)
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .onChange(of: subtitleOverrideSourceStyle) { _, newValue in
                                 UserPreferences.shared.subtitleOverrideSourceStyle = newValue
+                                refreshSubtitleStyle()
                             }
                     }
 
                     Divider()
 
-                    SettingsControlRow(title: "字幕大小", caption: "范围 16 至 72") {
+                    SettingsControlRow(title: L10n.text("字幕大小"), caption: L10n.text("范围 16 至 72")) {
                         SettingsSlider(value: Binding(
                             get: { Double(subtitleFontSize) },
                             set: { newValue in
                                 subtitleFontSize = Int(newValue.rounded())
                                 UserPreferences.shared.subtitleFontSize = subtitleFontSize
+                                refreshSubtitleStyle()
                             }
                         ), range: 16...72, step: 1, valueText: "\(subtitleFontSize)")
                     }
 
                     Divider()
 
-                    SettingsControlRow(title: "字幕位置", caption: "100 最靠近画面底部") {
+                    SettingsControlRow(title: L10n.text("字幕位置"), caption: L10n.text("100 最靠近画面底部")) {
                         SettingsSlider(value: Binding(
                             get: { Double(subtitlePosition) },
                             set: { newValue in
                                 subtitlePosition = Int(newValue.rounded())
                                 UserPreferences.shared.subtitlePosition = subtitlePosition
+                                refreshSubtitleStyle()
                             }
-                        ), range: 80...100, step: 1, valueText: "\(subtitlePosition)")
+                        ), range: 0...100, step: 1, valueText: "\(subtitlePosition)")
                     }
+                    Divider()
+                    SubtitleAppearanceControls(appearance: $subtitleAppearance)
+                        .padding(.vertical, 12)
+                    SubtitleAppearanceControls(appearance: $subtitleAppearance, isBitmap: true)
+                        .padding(.vertical, 12)
+                        .onChange(of: subtitleAppearance) { _, value in
+                            UserPreferences.shared.subtitleAppearance = value
+                            refreshSubtitleStyle()
+                        }
                 }
             }
 
             GroupBox(label: SettingsPanelLabel(
-                title: "弹幕手动入口",
-                subtitle: "只在播放器中手动搜索并命中缓存后附加。",
+                title: L10n.text("弹幕手动入口"),
+                subtitle: L10n.text("只在播放器中手动搜索并命中缓存后附加。"),
                 systemImage: "text.bubble"
             )) {
                 VStack(spacing: 0) {
-                    SettingsControlRow(title: "启用弹幕入口", caption: "不会自动请求外部弹幕源") {
-                        Toggle("启用弹幕手动入口", isOn: Binding(
+                    SettingsControlRow(title: L10n.text("启用弹幕入口"), caption: L10n.text("不会自动请求外部弹幕源")) {
+                        Toggle(L10n.text("启用弹幕手动入口"), isOn: Binding(
                             get: { danmakuEnabled },
                             set: { newValue in
                                 danmakuEnabled = newValue
@@ -1948,7 +2148,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    SettingsControlRow(title: "透明度", caption: "控制弹幕覆盖强度") {
+                    SettingsControlRow(title: L10n.text("透明度"), caption: L10n.text("控制弹幕覆盖强度")) {
                         SettingsSlider(value: Binding(
                             get: { danmakuOpacity },
                             set: { newValue in
@@ -1962,7 +2162,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    SettingsControlRow(title: "字号", caption: "范围 18 至 72") {
+                    SettingsControlRow(title: L10n.text("字号"), caption: L10n.text("范围 18 至 72")) {
                         SettingsSlider(value: Binding(
                             get: { Double(danmakuFontSize) },
                             set: { newValue in
@@ -1976,7 +2176,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    SettingsControlRow(title: "时间偏移", caption: "负值提前，正值延后") {
+                    SettingsControlRow(title: L10n.text("时间偏移"), caption: L10n.text("负值提前，正值延后")) {
                         SettingsSlider(value: Binding(
                             get: { Double(danmakuOffsetMs) / 1000.0 },
                             set: { newValue in
@@ -1995,16 +2195,16 @@ struct SettingsView: View {
     private var networkSettings: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
             GroupBox(label: SettingsPanelLabel(
-                title: "网络与代理",
-                subtitle: "自动探测适合多数环境，自定义模式可指定本机端口。",
+                title: L10n.text("网络与代理"),
+                subtitle: L10n.text("自动探测适合多数环境，自定义模式可指定本机端口。"),
                 systemImage: "network"
             )) {
                 VStack(spacing: 0) {
-                    SettingsControlRow(title: "代理模式", caption: "变更后应用到后续网络请求") {
-                        Picker("代理模式", selection: $proxyMode) {
-                            Text("自动探测").tag(0)
-                            Text("直连").tag(1)
-                            Text("自定义").tag(2)
+                    SettingsControlRow(title: L10n.text("代理模式"), caption: L10n.text("变更后应用到后续网络请求")) {
+                        Picker(L10n.text("代理模式"), selection: $proxyMode) {
+                            Text(L10n.text("自动探测")).tag(0)
+                            Text(L10n.text("直连")).tag(1)
+                            Text(L10n.text("自定义")).tag(2)
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)
@@ -2017,7 +2217,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    SettingsControlRow(title: "自定义代理", caption: "仅在自定义模式下启用") {
+                    SettingsControlRow(title: L10n.text("自定义代理"), caption: L10n.text("仅在自定义模式下启用")) {
                         HStack(spacing: 8) {
                             TextField("127.0.0.1", text: $customProxyServer)
                                 .textFieldStyle(.roundedBorder)
@@ -2040,8 +2240,8 @@ struct SettingsView: View {
 
                     Divider()
 
-                    SettingsControlRow(title: "分片 Range Relay", caption: "实验性分片中继，默认关闭") {
-                        Toggle("分片 Range Relay", isOn: Binding(
+                    SettingsControlRow(title: L10n.text("分片 Range Relay"), caption: L10n.text("实验性分片中继，默认关闭")) {
+                        Toggle(L10n.text("分片 Range Relay"), isOn: Binding(
                             get: { chunkedRangeRelayEnabled },
                             set: { newValue in
                                 chunkedRangeRelayEnabled = newValue
@@ -2054,11 +2254,11 @@ struct SettingsView: View {
 
                     Divider()
 
-                    SettingsControlRow(title: "连接诊断", caption: "刷新代理探测与网络会话") {
+                    SettingsControlRow(title: L10n.text("连接诊断"), caption: L10n.text("刷新代理探测与网络会话")) {
                         Button {
                             applyProxyChange()
                         } label: {
-                            Label("重新探测", systemImage: "arrow.clockwise")
+                            Label(L10n.text("重新探测"), systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.bordered)
                     }
@@ -2066,23 +2266,23 @@ struct SettingsView: View {
             }
 
             GroupBox(label: SettingsPanelLabel(
-                title: "模式说明",
-                subtitle: "选择与当前网络环境最匹配的请求路径。",
+                title: L10n.text("模式说明"),
+                subtitle: L10n.text("选择与当前网络环境最匹配的请求路径。"),
                 systemImage: "info.circle"
             )) {
                 Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 10) {
                     GridRow {
-                        Text("模式")
-                        Text("适用场景")
-                        Text("本地字段")
+                        Text(L10n.text("模式"))
+                        Text(L10n.text("适用场景"))
+                        Text(L10n.text("本地字段"))
                     }
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(palette.muted)
 
                     Divider().gridCellColumns(3)
-                    proxyModeDescriptionRow("自动探测", scenario: "系统代理或常见本机客户端", fields: "自动")
-                    proxyModeDescriptionRow("直连", scenario: "明确不经过任何代理", fields: "忽略")
-                    proxyModeDescriptionRow("自定义", scenario: "指定服务器与端口", fields: "必填")
+                    proxyModeDescriptionRow(L10n.text("自动探测"), scenario: L10n.text("系统代理或常见本机客户端"), fields: L10n.text("自动"))
+                    proxyModeDescriptionRow(L10n.text("直连"), scenario: L10n.text("明确不经过任何代理"), fields: L10n.text("忽略"))
+                    proxyModeDescriptionRow(L10n.text("自定义"), scenario: L10n.text("指定服务器与端口"), fields: L10n.text("必填"))
                 }
             }
         }
@@ -2101,14 +2301,36 @@ struct SettingsView: View {
 
     private var cacheAndSystemSettings: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            GroupBox(L10n.text("界面语言")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker(L10n.text("语言"), selection: $languageMode) {
+                        Text(L10n.text("跟随系统")).tag("system")
+                        Text("简体中文").tag("zh-Hans")
+                        Text("English").tag("en")
+                    }
+                    Text(L10n.text("语言更改将在下次启动时生效。影片和频道名称保留原文。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                    if languageMode != launchedLanguageMode {
+                        Button(L10n.text("立即重启")) {
+                            do { try AppRelaunchCoordinator.shared.relaunch() }
+                            catch { languageRestartError = error.localizedDescription }
+                        }
+                    }
+                    if let languageRestartError {
+                        Text(languageRestartError).font(.caption).foregroundStyle(palette.color(for: .warning))
+                    }
+                }
+            }
+            CredentialPersistenceStatusView()
+
             GroupBox(label: SettingsPanelLabel(
-                title: "缓存管理",
-                subtitle: "查看并清理可重新生成的数据。",
+                title: L10n.text("缓存管理"),
+                subtitle: L10n.text("查看并清理可重新生成的数据。"),
                 systemImage: "trash"
             )) {
                 VStack(spacing: 0) {
                     SettingsControlRow(
-                        title: "磁盘缓存",
+                        title: L10n.text("磁盘缓存"),
                         caption: cacheDiskBreakdownText
                     ) {
                         Text(displayCacheSize)
@@ -2119,21 +2341,21 @@ struct SettingsView: View {
                     Divider()
 
                     SettingsControlRow(
-                        title: "列表缓存",
+                        title: L10n.text("列表缓存"),
                         caption: cacheMemoryBreakdownText
                     ) {
                         HStack(spacing: 10) {
                             Button(role: .destructive) {
                                 isShowingCacheConfirmation = true
                             } label: {
-                                Label("清理性能缓存", systemImage: "trash")
+                                Label(L10n.text("清理性能缓存"), systemImage: "trash")
                             }
                             .disabled(isClearingCache)
 
                             Button(role: .destructive) {
                                 isShowingWebSessionConfirmation = true
                             } label: {
-                                Label("清除网页会话", systemImage: "person.crop.circle.badge.xmark")
+                                Label(L10n.text("清除网页会话"), systemImage: "person.crop.circle.badge.xmark")
                             }
                             .disabled(isClearingCache)
                         }
@@ -2142,7 +2364,7 @@ struct SettingsView: View {
 
                     if let cacheOperationStatus {
                         Divider()
-                        SettingsControlRow(title: "最近操作", caption: cacheOperationStatus) {
+                        SettingsControlRow(title: L10n.text("最近操作"), caption: cacheOperationStatus) {
                             Image(systemName: cacheOperationFailed ? "exclamationmark.triangle" : "checkmark.circle")
                                 .foregroundStyle(cacheOperationFailed ? palette.color(for: .warning) : palette.color(for: .success))
                         }
@@ -2151,13 +2373,13 @@ struct SettingsView: View {
             }
 
             GroupBox(label: SettingsPanelLabel(
-                title: "WebHome 实验入口",
-                subtitle: "启用后在主侧栏加入 WebHome。",
+                title: L10n.text("WebHome 实验入口"),
+                subtitle: L10n.text("启用后在主侧栏加入 WebHome。"),
                 systemImage: "house"
             )) {
                 VStack(spacing: 0) {
-                    SettingsControlRow(title: "启用 WebHome", caption: "默认关闭") {
-                        Toggle("启用 WebHome 实验入口", isOn: Binding(
+                    SettingsControlRow(title: L10n.text("启用 WebHome"), caption: L10n.text("默认关闭")) {
+                        Toggle(L10n.text("启用 WebHome 实验入口"), isOn: Binding(
                             get: { webHomeEnabled },
                             set: { newValue in
                                 webHomeEnabled = newValue
@@ -2174,7 +2396,7 @@ struct SettingsView: View {
                     Divider()
 
                     SettingsControlRow(title: "WebHome URL", caption: webHomeURLStatusText) {
-                        TextField("留空使用内置本地 demo", text: Binding(
+                        TextField(L10n.text("留空使用内置本地 demo"), text: Binding(
                             get: { webHomeURL },
                             set: { newValue in
                                 webHomeURL = newValue
@@ -2188,21 +2410,21 @@ struct SettingsView: View {
             }
 
             GroupBox(label: SettingsPanelLabel(
-                title: "备份与迁移",
-                subtitle: "Cookie 与 Token 不会写入备份文件。",
+                title: L10n.text("备份与迁移"),
+                subtitle: L10n.text("Cookie 与 Token 不会写入备份文件。"),
                 systemImage: "arrow.up.arrow.down.square"
             )) {
                 VStack(spacing: 0) {
                     SettingsControlRow(
-                        title: "应用数据",
-                        caption: "配置源、历史、收藏和非敏感偏好"
+                        title: L10n.text("应用数据"),
+                        caption: L10n.text("配置源、历史、收藏和非敏感偏好")
                     ) {
                         HStack(spacing: 8) {
                             Button { exportBackup() } label: {
-                                Label("导出备份", systemImage: "square.and.arrow.up")
+                                Label(L10n.text("导出备份"), systemImage: "square.and.arrow.up")
                             }
                             Button { importBackup() } label: {
-                                Label("导入备份", systemImage: "square.and.arrow.down")
+                                Label(L10n.text("导入备份"), systemImage: "square.and.arrow.down")
                             }
                         }
                         .buttonStyle(.bordered)
@@ -2219,15 +2441,15 @@ struct SettingsView: View {
                     Divider()
 
                     SettingsControlRow(
-                        title: "播放进度",
-                        caption: "不包含播放 URL 或敏感凭据"
+                        title: L10n.text("播放进度"),
+                        caption: L10n.text("不包含播放 URL 或敏感凭据")
                     ) {
                         HStack(spacing: 8) {
                             Button { exportPlaybackProgress() } label: {
-                                Label("导出进度", systemImage: "clock.arrow.circlepath")
+                                Label(L10n.text("导出进度"), systemImage: "clock.arrow.circlepath")
                             }
                             Button { importPlaybackProgress() } label: {
-                                Label("导入进度", systemImage: "tray.and.arrow.down")
+                                Label(L10n.text("导入进度"), systemImage: "tray.and.arrow.down")
                             }
                         }
                         .buttonStyle(.bordered)
@@ -2244,22 +2466,29 @@ struct SettingsView: View {
             }
 
             GroupBox(label: SettingsPanelLabel(
-                title: "关于 NetVplayer",
-                subtitle: "macOS 媒体中心",
+                title: L10n.text("关于 NetVplayer"),
+                subtitle: L10n.text("macOS 媒体中心"),
                 systemImage: "gearshape"
             )) {
                 HStack {
-                    Label("原生 macOS 界面 / 内置播放器", systemImage: "macwindow")
+                    Label(L10n.text("原生 macOS 界面 / 内置播放器"), systemImage: "macwindow")
                         .font(.caption)
                         .foregroundStyle(palette.muted)
                     Spacer(minLength: 0)
                     AppUpdateVersionButton(placement: .settings)
                 }
+                MetadataAttributionView().padding(.top, 12)
             }
         }
     }
 
+    private func refreshSubtitleStyle() {
+        MPVPlayerEngine.vod.refreshSubtitleStyle()
+        MPVPlayerEngine.live.refreshSubtitleStyle()
+    }
+
     private func loadSettingsState() {
+        subtitleAppearance = UserPreferences.shared.subtitleAppearance
         vodConfigUrl = UserPreferences.shared.currentVodConfigUrl
         liveConfigUrl = UserPreferences.shared.currentLiveConfigUrl
         loadCloudCredentialState()
@@ -2270,6 +2499,7 @@ struct SettingsView: View {
             )
         })
         cloudCookieSaved = false
+        cloudCookieVerified = false
         cloudCookieStatus = nil
 
         decodeMode = UserPreferences.shared.defaultDecodeMode
@@ -2311,24 +2541,24 @@ struct SettingsView: View {
     private var webHomeURLStatusText: String {
         let trimmed = webHomeURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return "默认关闭；开启后空 URL 加载内置本地 demo。远程页面只能通过白名单 bridge 和 /webResource 访问资源，不暴露网盘凭据。"
+            return L10n.text("默认关闭；开启后空 URL 加载内置本地 demo。远程页面只能通过白名单 bridge 和 /webResource 访问资源，不暴露网盘凭据。")
         }
         do {
             _ = try WebHomeDestination.resolve(trimmed)
-            return "URL 校验通过；加载时仍会走白名单 bridge 和响应脱敏。"
+            return L10n.text("URL 校验通过；加载时仍会走白名单 bridge 和响应脱敏。")
         } catch {
             return UserFacingErrorPresenter.message(for: error, context: .webContent)
         }
     }
 
     private var cacheDiskBreakdownText: String {
-        guard let cacheSnapshot else { return "正在统计海报与网络缓存" }
-        return "海报 \(formattedCacheBytes(cacheSnapshot.posterBytes)) · 网络 \(formattedCacheBytes(cacheSnapshot.networkBytes))"
+        guard let cacheSnapshot else { return L10n.text("正在统计海报与网络缓存") }
+        return L10n.text("海报 {0} · 网络 {1}", ["\(formattedCacheBytes(cacheSnapshot.posterBytes))", "\(formattedCacheBytes(cacheSnapshot.networkBytes))"])
     }
 
     private var cacheMemoryBreakdownText: String {
-        guard let cacheSnapshot else { return "正在统计分类与详情条目" }
-        return "分类 \(cacheSnapshot.catalogPages) 页 / \(cacheSnapshot.catalogVods) 部 · 详情 \(cacheSnapshot.detailEntries) 项"
+        guard let cacheSnapshot else { return L10n.text("正在统计分类与详情条目") }
+        return L10n.text("分类 {0} 页 / {1} 部 · 详情 {2} 项", ["\(cacheSnapshot.catalogPages)", "\(cacheSnapshot.catalogVods)", "\(cacheSnapshot.detailEntries)"])
     }
 
     private func formattedCacheBytes(_ size: Int64) -> String {
@@ -2364,7 +2594,7 @@ struct SettingsView: View {
             isClearingCache = false
             cacheOperationFailed = !report.succeeded
             cacheOperationStatus = report.succeeded
-                ? "性能缓存已清理，登录状态和用户数据已保留。"
+                ? L10n.text("性能缓存已清理，登录状态和用户数据已保留。")
                 : report.failures.joined(separator: "；")
             refreshCacheSize()
         }
@@ -2378,7 +2608,7 @@ struct SettingsView: View {
             isClearingCache = false
             cacheOperationFailed = !report.succeeded
             cacheOperationStatus = report.succeeded
-                ? "网页会话已清除；原生网盘账号保持不变。"
+                ? L10n.text("网页会话已清除；原生网盘账号保持不变。")
                 : report.failures.joined(separator: "；")
             refreshCacheSize()
         }
@@ -2403,12 +2633,12 @@ struct SettingsView: View {
         do {
             try appState.exportBackup(to: url)
             backupStatusIsError = false
-            backupStatus = "备份已导出"
+            backupStatus = L10n.text("备份已导出")
         } catch {
             backupStatusIsError = true
             backupStatus = UserFacingErrorPresenter.message(
                 for: error,
-                context: .storage(operation: "导出备份")
+                context: .storage(operation: L10n.text("导出备份"))
             )
         }
     }
@@ -2420,32 +2650,32 @@ struct SettingsView: View {
         panel.canChooseDirectories = false
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let preview = try appState.inspectBackup(from: url)
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "确认导入备份？"
-            let legacyNote = preview.isLegacy ? "\n这是旧版备份，历史播放引用会先迁移和清洗。" : ""
-            alert.informativeText = "将覆盖当前的 \(preview.configCount) 个配置、\(preview.historyCount) 条历史、\(preview.keepCount) 个收藏和 \(preview.trackCount) 条轨道偏好。\(legacyNote)"
-            alert.addButton(withTitle: "导入")
-            alert.addButton(withTitle: "取消")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task { @MainActor in
+            do {
+                let preview = try appState.inspectBackup(from: url)
+                let legacyNote = preview.isLegacy ? L10n.text("\n这是旧版备份，历史播放引用会先迁移和清洗。") : ""
+                guard await AppDialogCenter.shared.present(
+                    title: L10n.text("确认导入备份？"),
+                    message: L10n.text("将覆盖当前的 {0} 个配置、{1} 条历史、{2} 个收藏和 {3} 条轨道偏好。{4}", ["\(preview.configCount)", "\(preview.historyCount)", "\(preview.keepCount)", "\(preview.trackCount)", legacyNote]),
+                    confirmTitle: L10n.text("导入"), isDestructive: true
+                ) != nil else { return }
 
-            let backup = try appState.importBackup(from: url)
-            backupStatusIsError = false
-            backupStatus = "已导入 \(backup.configs.count) 个配置、\(backup.history.count) 条历史、\(backup.keeps.count) 个收藏"
-            vodConfigUrl = UserPreferences.shared.currentVodConfigUrl
-            liveConfigUrl = UserPreferences.shared.currentLiveConfigUrl
-            decodeMode = UserPreferences.shared.defaultDecodeMode
-            subtitleFontSize = UserPreferences.shared.subtitleFontSize
-            subtitlePosition = UserPreferences.shared.subtitlePosition
-            subtitleOverrideSourceStyle = UserPreferences.shared.subtitleOverrideSourceStyle
-        } catch {
-            backupStatusIsError = true
-            backupStatus = UserFacingErrorPresenter.message(
-                for: error,
-                context: .storage(operation: "导入备份")
-            )
+                let backup = try appState.importBackup(from: url)
+                backupStatusIsError = false
+                backupStatus = L10n.text("已导入 {0} 个配置、{1} 条历史、{2} 个收藏", ["\(backup.configs.count)", "\(backup.history.count)", "\(backup.keeps.count)"])
+                vodConfigUrl = UserPreferences.shared.currentVodConfigUrl
+                liveConfigUrl = UserPreferences.shared.currentLiveConfigUrl
+                decodeMode = UserPreferences.shared.defaultDecodeMode
+                subtitleFontSize = UserPreferences.shared.subtitleFontSize
+                subtitlePosition = UserPreferences.shared.subtitlePosition
+                subtitleOverrideSourceStyle = UserPreferences.shared.subtitleOverrideSourceStyle
+            } catch {
+                backupStatusIsError = true
+                backupStatus = UserFacingErrorPresenter.message(
+                    for: error,
+                    context: .storage(operation: L10n.text("导入备份"))
+                )
+            }
         }
     }
 
@@ -2459,12 +2689,12 @@ struct SettingsView: View {
         do {
             try appState.exportPlaybackProgress(to: url)
             progressSyncStatusIsError = false
-            progressSyncStatus = "播放进度已导出"
+            progressSyncStatus = L10n.text("播放进度已导出")
         } catch {
             progressSyncStatusIsError = true
             progressSyncStatus = UserFacingErrorPresenter.message(
                 for: error,
-                context: .storage(operation: "导出播放进度")
+                context: .storage(operation: L10n.text("导出播放进度"))
             )
         }
     }
@@ -2479,18 +2709,19 @@ struct SettingsView: View {
         do {
             let progress = try appState.importPlaybackProgress(from: url)
             progressSyncStatusIsError = false
-            progressSyncStatus = "已导入 \(progress.records.count) 条播放进度"
+            progressSyncStatus = L10n.text("已导入 {0} 条播放进度", ["\(progress.records.count)"])
         } catch {
             progressSyncStatusIsError = true
             progressSyncStatus = UserFacingErrorPresenter.message(
                 for: error,
-                context: .storage(operation: "导入播放进度")
+                context: .storage(operation: L10n.text("导入播放进度"))
             )
         }
     }
 
     private func backupDateString() -> String {
         let formatter = DateFormatter()
+        formatter.locale = L10n.locale
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
@@ -2501,6 +2732,7 @@ struct SettingsView: View {
         let provider = selectedCloudProvider
         isValidatingCloudCookie = true
         cloudCookieSaved = false
+        cloudCookieVerified = false
         cloudCookieStatus = nil
 
         Task {
@@ -2535,11 +2767,13 @@ struct SettingsView: View {
                     )
                 }
 
+                try UserPreferences.shared.checkCredentialPersistence()
                 await MainActor.run {
                     cloudCookieSaved = true
-                    cloudCookieStatus = provider == .quark || provider == .uc || provider == .baidu
-                        ? "\(provider.rawValue)凭据已验证并保存"
-                        : "\(provider.rawValue)凭据已保存，将在播放时校验"
+                    cloudCookieVerified = provider == .quark || provider == .uc || provider == .baidu
+                    cloudCookieStatus = cloudCookieVerified
+                        ? L10n.text("{0}凭据已验证并保存", [L10n.text(provider.rawValue)])
+                        : L10n.text("{0}凭据已保存，将在播放时校验", [L10n.text(provider.rawValue)])
                     quarkCookie = UserPreferences.shared.quarkCookie
                     ucCookie = UserPreferences.shared.ucCookie
                     baiduCookie = UserPreferences.shared.baiduCookie
@@ -2557,6 +2791,7 @@ struct SettingsView: View {
             } catch {
                 await MainActor.run {
                     cloudCookieSaved = false
+                    cloudCookieVerified = false
                     cloudCookieStatus = UserFacingErrorPresenter.message(
                         for: error,
                         context: .authorization(providerName: provider.rawValue)
@@ -2568,6 +2803,7 @@ struct SettingsView: View {
     }
 
     private func clearSelectedCloudProvider() {
+        cloudCookieVerified = false
         switch selectedCloudProvider {
         case .quark:
             quarkCookie = ""
@@ -2617,8 +2853,10 @@ struct SettingsView: View {
             UserPreferences.shared.baiduCookie = ""
         }
 
+        do { try UserPreferences.shared.checkCredentialPersistence() }
+        catch { cloudCookieSaved = false; cloudCookieStatus = error.localizedDescription; return }
         cloudCookieSaved = true
-        cloudCookieStatus = "已清空\(selectedCloudProvider.rawValue)授权"
+        cloudCookieStatus = L10n.text("已清空{0}授权", ["\(selectedCloudProvider.rawValue)"])
     }
 }
 
@@ -2710,15 +2948,21 @@ struct SettingsControlRow<Control: View>: View {
     @Environment(\.appThemePalette) private var palette
     let title: String
     let caption: String
+    let labelWidth: CGFloat
+    let requirement: FormFieldRequirement?
     let control: Control
 
     init(
         title: String,
-        caption: String,
+        caption: String = "",
+        labelWidth: CGFloat = 240,
+        requirement: FormFieldRequirement? = nil,
         @ViewBuilder control: () -> Control
     ) {
         self.title = title
         self.caption = caption
+        self.labelWidth = labelWidth
+        self.requirement = requirement
         self.control = control()
     }
 
@@ -2726,8 +2970,9 @@ struct SettingsControlRow<Control: View>: View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .center, spacing: 22) {
                 label
-                    .frame(width: 240, alignment: .leading)
+                    .frame(width: labelWidth, alignment: .leading)
                 control
+                    .frame(minWidth: 160)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
 
@@ -2742,13 +2987,14 @@ struct SettingsControlRow<Control: View>: View {
 
     private var label: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
+            FormFieldLabel(title: title, requirement: requirement)
                 .foregroundStyle(palette.foreground)
-            Text(caption)
-                .font(.system(size: 11))
-                .foregroundStyle(palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            if !caption.isEmpty {
+                Text(caption)
+                    .font(.system(size: 11))
+                    .foregroundStyle(palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

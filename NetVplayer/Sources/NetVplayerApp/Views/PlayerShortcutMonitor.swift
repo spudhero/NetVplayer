@@ -131,7 +131,13 @@ final class PlayerWindowContext: ObservableObject {
 
     func attach(_ window: NSWindow) {
         let isNewWindow = self.window !== window
+        if isNewWindow, let previous = self.window { PlayerFullScreenCoordinator.detach(from: previous) }
         self.window = window
+        PlayerFullScreenCoordinator.attached(to: window).onStateChange = { [weak self, weak window] actual in
+            guard let self, let window else { return }
+            self.updateFullScreenState(actual, for: window)
+            self.updateWindowMetrics(for: window)
+        }
         updateFullScreenState(window.styleMask.contains(.fullScreen), for: window)
         if isNewWindow {
             restorePersistedFrameIfAvailable(for: window)
@@ -141,6 +147,7 @@ final class PlayerWindowContext: ObservableObject {
 
     func detach(_ window: NSWindow?) {
         guard self.window === window else { return }
+        if let window { PlayerFullScreenCoordinator.detach(from: window) }
         setAlwaysOnTop(false)
         self.window = nil
         isFullScreen = false
@@ -165,7 +172,7 @@ final class PlayerWindowContext: ObservableObject {
             return
         }
         setAlwaysOnTop(false)
-        guard !isFullScreen else { return }
+        guard !isFullScreen, PlayerFullScreenCoordinator.attached(to: window).state.transition == nil else { return }
         lastRegularWindowFrame = window.frame
         if let screen = window.screen ?? NSScreen.main {
             preferenceStore?.save(

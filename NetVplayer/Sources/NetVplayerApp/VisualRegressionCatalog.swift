@@ -31,14 +31,15 @@ enum VisualRegressionScenarioCatalog {
         VisualRegressionScenario(
             id: "player-hud-normal",
             surface: .playerHUD,
-            title: "点播播放器 HUD",
-            stateSummary: "OpenDesign 同源背景、标题、线路、时间和状态 badge",
+            title: L10n.text("点播播放器 HUD"),
+            stateSummary: L10n.text("OpenDesign 同源背景、标题、线路、时间和状态 badge"),
             viewport: "1480x833",
             capturesSensitiveData: false,
             fixtureAssetPath: "docs/design/player-ui/assets/w700d1q75cms.jpg",
             captureStates: [
                 "normal",
                 "settings-drawer",
+                "subtitle-settings",
                 "episode-drawer",
                 "skip-dialog",
                 "warning",
@@ -46,46 +47,50 @@ enum VisualRegressionScenarioCatalog {
                 "loading",
                 "buffering",
                 "hud-hidden",
+                "ended",
+                "time-preview",
+                "chapter-navigation",
+                "chapter-preview",
             ],
             responsiveViewports: ["1480x833", "1200x675", "427x240", "fullscreen-16:10"]
         ),
         VisualRegressionScenario(
             id: "webhome-debug-panel",
             surface: .webHomeDebugPanel,
-            title: "WebHome 调试面板",
-            stateSummary: "本地 demo、bridge 调用日志、URL 校验和 cache key 数量",
+            title: L10n.text("WebHome 调试面板"),
+            stateSummary: L10n.text("本地 demo、bridge 调用日志、URL 校验和 cache key 数量"),
             viewport: "1280x860",
             capturesSensitiveData: false
         ),
         VisualRegressionScenario(
             id: "danmaku-overlay-limited",
             surface: .danmakuOverlay,
-            title: "弹幕 overlay 限流",
-            stateSummary: "缓存命中、最多 120 条可见 cue、字号/透明度生效",
+            title: L10n.text("弹幕 overlay 限流"),
+            stateSummary: L10n.text("缓存命中、最多 120 条可见 cue、字号/透明度生效"),
             viewport: "1440x900",
             capturesSensitiveData: false
         ),
         VisualRegressionScenario(
             id: "search-drive-grouping",
             surface: .searchDriveGrouping,
-            title: "搜索网盘分组",
-            stateSummary: "Quark/UC/Ali/115/PikPak/其它分组和状态 badge",
+            title: L10n.text("搜索网盘分组"),
+            stateSummary: L10n.text("Quark/UC/Ali/115/PikPak/其它分组和状态 badge"),
             viewport: "1280x860",
             capturesSensitiveData: false
         ),
         VisualRegressionScenario(
             id: "settings-diagnostics",
             surface: .settingsDiagnostics,
-            title: "设置诊断面板",
-            stateSummary: "配置聚合、站点健康、WebHome 和样本状态诊断",
+            title: L10n.text("设置诊断面板"),
+            stateSummary: L10n.text("配置聚合、站点健康、WebHome 和样本状态诊断"),
             viewport: "1280x860",
             capturesSensitiveData: false
         ),
         VisualRegressionScenario(
             id: "playback-error-panel",
             surface: .playbackErrorPanel,
-            title: "播放错误面板",
-            stateSummary: "provider/scenario/sampleStatus/relay mode/弹幕解析状态",
+            title: L10n.text("播放错误面板"),
+            stateSummary: L10n.text("provider/scenario/sampleStatus/relay mode/弹幕解析状态"),
             viewport: "1440x900",
             capturesSensitiveData: false
         )
@@ -108,6 +113,7 @@ enum VisualRegressionScenarioCatalog {
 enum PlayerVisualRegressionState: String, CaseIterable {
     case normal
     case settingsDrawer = "settings-drawer"
+    case subtitleSettings = "subtitle-settings"
     case episodeDrawer = "episode-drawer"
     case skipDialog = "skip-dialog"
     case warning
@@ -115,6 +121,10 @@ enum PlayerVisualRegressionState: String, CaseIterable {
     case loading
     case buffering
     case hudHidden = "hud-hidden"
+    case ended
+    case timePreview = "time-preview"
+    case chapterNavigation = "chapter-navigation"
+    case chapterPreview = "chapter-preview"
 }
 
 struct PlayerVisualRegressionConfiguration: Equatable {
@@ -158,27 +168,39 @@ struct PlayerVisualRegressionConfiguration: Equatable {
     func apply(to appState: AppState) {
         let playerState = appState.playerState
         playerState.currentSpec = PlaySpec(
-            title: "南部档案 - 第02集",
-            flag: "极速源",
+            title: L10n.text("南部档案 - 第02集"),
+            flag: L10n.text("极速源"),
             siteKey: "visual-regression"
         )
+        playerState.currentSpec?.metadata["vod.pic"] = fixtureURL?.absoluteString ?? ""
+        playerState.currentSpec?.metadata["vod.name"] = L10n.text("南部档案")
         playerState.isPlaying = false
+        playerState.endDisposition = state == .ended ? .natural : nil
         playerState.position = 1_185
         playerState.duration = 8_538
+        if state == .chapterNavigation || state == .chapterPreview {
+            playerState.position = 42
+            playerState.duration = 6_913
+            playerState.chapters = [0.0, 287, 645, 952, 1_217, 1_406, 1_886, 2_202, 2_397,
+                2_922, 3_329, 3_608, 4_305, 4_684, 5_330, 6_033, 6_327].enumerated().map { index, seconds in
+                PlayerChapter(id: index, title: "Chapter \(index + 1)", seconds: seconds)
+            }
+            playerState.chapterOwnerID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")
+        }
         playerState.bufferedUntil = 4_800
         playerState.speed = 1.25
         playerState.volume = 0.64
-        playerState.subtitleStatus = "外挂字幕 2 条"
+        playerState.subtitleStatus = L10n.text("外挂字幕 2 条")
         playerState.drivePlaybackStatus = nil
-        playerState.danmakuStatus = "弹幕 已缓存 120 条"
+        playerState.danmakuStatus = L10n.text("弹幕 已缓存 120 条")
         playerState.audioTracks = [
-            PlayerTrackInfo(id: "audio-1", kind: .audio, name: "中文 AAC"),
+            PlayerTrackInfo(id: "audio-1", kind: .audio, name: L10n.text("中文 AAC")),
         ]
         playerState.selectedAudioTrackID = "audio-1"
-        appState.selectedPlayFlag = "极速源"
+        appState.selectedPlayFlag = L10n.text("极速源")
         appState.episodes = (1...24).map { number in
             Episode(
-                name: "第 \(number) 集",
+                name: L10n.text("第 {0} 集", ["\(number)"]),
                 url: "visual-regression://episode/\(number)",
                 isSelected: number == 2,
                 season: 2,
@@ -187,15 +209,15 @@ struct PlayerVisualRegressionConfiguration: Equatable {
         }
 
         appState.isPlayerLoading = state == .loading
-        appState.playerLoadingMessage = "正在解析高清播放地址..."
+        appState.playerLoadingMessage = L10n.text("正在解析高清播放地址...")
         playerState.isBuffering = state == .buffering
         playerState.cacheBufferingProgress = state == .buffering ? 0.68 : nil
         playerState.cacheSpeedBytesPerSecond = state == .buffering ? 3_600_000 : nil
         appState.playbackWarningMessage = state == .warning
-            ? "当前线路响应较慢，播放器已自动切换到兼容模式。"
+            ? L10n.text("当前线路响应较慢，播放器已自动切换到兼容模式。")
             : nil
         playerState.errorMessage = state == .error
-            ? "播放地址暂时不可用，请重试或切换线路。"
+            ? L10n.text("播放地址暂时不可用，请重试或切换线路。")
             : nil
     }
 

@@ -39,6 +39,14 @@ public final class StorageManager: @unchecked Sendable {
         return try JSONDecoder().decode(type, from: data)
     }
 
+    public func loadBounded<T: Decodable>(_ type: T.Type, from filename: String, maximumBytes: Int) throws -> T {
+        let file = try FileHandle(forReadingFrom: storageDirectory.appendingPathComponent(filename))
+        defer { try? file.close() }
+        let data = try file.read(upToCount: max(0, maximumBytes) + 1) ?? Data()
+        guard data.count <= maximumBytes else { throw CocoaError(.fileReadTooLarge) }
+        return try JSONDecoder().decode(type, from: data)
+    }
+
     public func delete(_ filename: String) throws {
         let url = storageDirectory.appendingPathComponent(filename)
         if fileManager.fileExists(atPath: url.path) {
@@ -93,13 +101,15 @@ public final class StorageManager: @unchecked Sendable {
             history: loadHistory(),
             keeps: loadKeeps(),
             tracks: loadTracks(),
-            preferences: includePreferences ? UserPreferenceSnapshot() : nil
+            preferences: includePreferences ? UserPreferenceSnapshot() : nil,
+            fileServices: FileServiceStore(storage: self).load(),
+            mediaCorrections: FileServiceStore(storage: self).loadCorrections()
         )
     }
 
     public func restoreBackup(_ backup: StorageBackup, restorePreferences: Bool = true) throws {
         let backup = try StorageBackupCodec.validatedPayload(backup, allowHistoryMigration: true)
-        let filenames = ["configs.json", "history.json", "keeps.json", "tracks.json"]
+        let filenames = ["configs.json", "history.json", "keeps.json", "tracks.json", "file-services.json", "media-corrections.json"]
         var snapshots: [String: Data?] = [:]
         for filename in filenames {
             let url = storageDirectory.appendingPathComponent(filename)
@@ -115,6 +125,8 @@ public final class StorageManager: @unchecked Sendable {
             try saveHistory(backup.history)
             try saveKeeps(backup.keeps)
             try saveTracks(backup.tracks)
+            if let catalog = backup.fileServices { try save(catalog, to: "file-services.json") }
+            if let corrections = backup.mediaCorrections { try save(corrections, to: "media-corrections.json") }
         } catch {
             for filename in filenames {
                 let url = storageDirectory.appendingPathComponent(filename)
@@ -194,19 +206,19 @@ public enum StorageError: LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .unsupportedBackupVersion(let version):
-            return "不支持的备份版本: \(version)"
+            return L10n.text("不支持的备份版本: {0}", ["\(version)"])
         case .unsupportedProgressVersion(let version):
-            return "不支持的播放进度版本: \(version)"
+            return L10n.text("不支持的播放进度版本: {0}", ["\(version)"])
         case .invalidBackup:
-            return "备份文件格式无效"
+            return L10n.text("备份文件格式无效")
         case .backupTooLarge:
-            return "备份文件超过 32 MiB 上限"
+            return L10n.text("备份文件超过 32 MiB 上限")
         case .backupChecksumMismatch:
-            return "备份文件校验失败，内容可能已损坏或被修改"
+            return L10n.text("备份文件校验失败，内容可能已损坏或被修改")
         case .backupCollectionLimitExceeded:
-            return "备份文件包含过多记录"
+            return L10n.text("备份文件包含过多记录")
         case .unsafeHistoryReference:
-            return "备份包含不安全的播放引用"
+            return L10n.text("备份包含不安全的播放引用")
         }
     }
 }

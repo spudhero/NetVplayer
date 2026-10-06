@@ -28,23 +28,23 @@ enum CloudAuthP115QRCodeLoginError: LocalizedError, Equatable, UserFacingDescrib
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            return "115 扫码接口返回了无法识别的数据，请刷新二维码重试。"
+            return L10n.text("115 扫码接口返回了无法识别的数据，请刷新二维码重试。")
         case .missingQRCode:
-            return "115 登录二维码生成失败，请刷新重试。"
+            return L10n.text("115 登录二维码生成失败，请刷新重试。")
         case .expired:
-            return "115 登录二维码已过期，请刷新后重新扫码。"
+            return L10n.text("115 登录二维码已过期，请刷新后重新扫码。")
         case .cancelled:
-            return "已在 115生活 App 中取消登录，请刷新后重试。"
+            return L10n.text("已在 115生活 App 中取消登录，请刷新后重试。")
         case .rejected(let message):
-            return message.isEmpty ? "115 扫码登录失败，请刷新后重试。" : message
+            return message.isEmpty ? L10n.text("115 扫码登录失败，请刷新后重试。") : message
         }
     }
 
     var userFacingDescription: String {
         if case .rejected = self {
-            return "115 未能完成扫码登录，请刷新二维码后重试。"
+            return L10n.text("115 未能完成扫码登录，请刷新二维码后重试。")
         }
-        return errorDescription ?? "115 扫码登录失败，请刷新后重试。"
+        return errorDescription ?? L10n.text("115 扫码登录失败，请刷新后重试。")
     }
 }
 

@@ -13,6 +13,8 @@ public struct StorageBackup: Codable, Sendable {
     public var keeps: [Keep]
     public var tracks: [Track]
     public var preferences: UserPreferenceSnapshot?
+    public var fileServices: FileServiceCatalog?
+    public var mediaCorrections: [MediaManualCorrection]?
 
     public init(
         schemaVersion: Int = 1,
@@ -21,7 +23,9 @@ public struct StorageBackup: Codable, Sendable {
         history: [History] = [],
         keeps: [Keep] = [],
         tracks: [Track] = [],
-        preferences: UserPreferenceSnapshot? = nil
+        preferences: UserPreferenceSnapshot? = nil,
+        fileServices: FileServiceCatalog? = nil,
+        mediaCorrections: [MediaManualCorrection]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.exportedAt = exportedAt
@@ -30,10 +34,12 @@ public struct StorageBackup: Codable, Sendable {
         self.keeps = keeps
         self.tracks = tracks
         self.preferences = preferences
+        self.fileServices = fileServices
+        self.mediaCorrections = mediaCorrections
     }
 
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, exportedAt, configs, history, keeps, tracks, preferences
+        case schemaVersion, exportedAt, configs, history, keeps, tracks, preferences, fileServices, mediaCorrections
     }
 
     public init(from decoder: Decoder) throws {
@@ -45,6 +51,8 @@ public struct StorageBackup: Codable, Sendable {
         self.keeps = try container.decodeIfPresent([Keep].self, forKey: .keeps) ?? []
         self.tracks = try container.decodeIfPresent([Track].self, forKey: .tracks) ?? []
         self.preferences = try container.decodeIfPresent(UserPreferenceSnapshot.self, forKey: .preferences)
+        self.fileServices = try container.decodeIfPresent(FileServiceCatalog.self, forKey: .fileServices)
+        self.mediaCorrections = try container.decodeIfPresent([MediaManualCorrection].self, forKey: .mediaCorrections)
     }
 }
 
@@ -171,6 +179,23 @@ public enum StorageBackupCodec {
             throw StorageError.backupCollectionLimitExceeded
         }
         var result = backup
+        if let corrections = backup.mediaCorrections {
+            guard corrections.count <= 50000 else { throw StorageError.backupCollectionLimitExceeded }
+            for correction in corrections {
+                guard FileResourceReference(locator: correction.reference.locator) == correction.reference else { throw StorageError.invalidBackup }
+            }
+        }
+        if let catalog = backup.fileServices {
+            guard catalog.services.count <= 1000, catalog.libraries.count <= 1000,
+                  Set(catalog.services.map(\.id)).count == catalog.services.count,
+                  Set(catalog.libraries.map(\.id)).count == catalog.libraries.count else { throw StorageError.backupCollectionLimitExceeded }
+            let ids = Set(catalog.services.map(\.id))
+            for service in catalog.services { _ = try service.validated() }
+            for library in catalog.libraries {
+                guard ids.contains(library.serviceID), !library.name.isEmpty else { throw StorageError.invalidBackup }
+                _ = try FileServicePath.normalize(library.path)
+            }
+        }
         result.history = backup.history.map(HistoryPersistencePolicy.sanitized)
         if !allowHistoryMigration, result.history != backup.history {
             throw StorageError.unsafeHistoryReference
@@ -205,6 +230,7 @@ public enum StorageBackupCodec {
 }
 
 public struct UserPreferenceSnapshot: Codable, Sendable {
+    public var xtreamConfigurations: [XtreamConfiguration]
     public var currentVodConfigUrl: String
     public var currentLiveConfigUrl: String
     public var currentLiveName: String
@@ -218,6 +244,9 @@ public struct UserPreferenceSnapshot: Codable, Sendable {
     public var subtitleFontSize: Int
     public var subtitlePosition: Int
     public var subtitleOverrideSourceStyle: Bool
+    public var onlineSubtitleSearchEnabled: Bool?
+    public var subtitleAppearance: SubtitleAppearance?
+    public var subtitleDelayRecords: [SubtitleDelayRecord]?
     public var proxyMode: Int
     public var customProxyServer: String
     public var customProxyPort: Int
@@ -233,9 +262,11 @@ public struct UserPreferenceSnapshot: Codable, Sendable {
     public var appearanceThemeID: String?
 
     enum CodingKeys: String, CodingKey {
+        case xtreamConfigurations
         case currentVodConfigUrl, currentLiveConfigUrl, currentLiveName, currentLiveGroupName
         case currentLiveChannelName, currentLiveChannelUrlIndex, defaultDecodeMode, defaultPlaybackSpeed
         case defaultOpeningSkip, defaultEndingSkip, subtitleFontSize, subtitlePosition
+        case subtitleAppearance, subtitleDelayRecords, onlineSubtitleSearchEnabled
         case subtitleOverrideSourceStyle, proxyMode, customProxyServer, customProxyPort, defaultSearchSiteKeys
         case siteHealthSortingEnabled, chunkedRangeRelayEnabled, webHomeEnabled, webHomeURL
         case danmakuEnabled, danmakuOpacity, danmakuFontSize, danmakuOffsetMs
@@ -243,6 +274,7 @@ public struct UserPreferenceSnapshot: Codable, Sendable {
     }
 
     public init(preferences: UserPreferences = .shared) {
+        self.xtreamConfigurations = preferences.xtreamConfigurations
         self.currentVodConfigUrl = preferences.currentVodConfigUrl
         self.currentLiveConfigUrl = preferences.currentLiveConfigUrl
         self.currentLiveName = preferences.currentLiveName
@@ -256,6 +288,9 @@ public struct UserPreferenceSnapshot: Codable, Sendable {
         self.subtitleFontSize = preferences.subtitleFontSize
         self.subtitlePosition = preferences.subtitlePosition
         self.subtitleOverrideSourceStyle = preferences.subtitleOverrideSourceStyle
+        self.onlineSubtitleSearchEnabled = preferences.onlineSubtitleSearchEnabled
+        self.subtitleAppearance = preferences.subtitleAppearance
+        self.subtitleDelayRecords = preferences.subtitleDelayRecords
         self.proxyMode = preferences.proxyMode
         self.customProxyServer = preferences.customProxyServer
         self.customProxyPort = preferences.customProxyPort
@@ -273,6 +308,7 @@ public struct UserPreferenceSnapshot: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.xtreamConfigurations = (try container.decodeIfPresent([XtreamConfiguration].self, forKey: .xtreamConfigurations) ?? []).compactMap { try? $0.validated() }
         self.currentVodConfigUrl = try container.decodeIfPresent(String.self, forKey: .currentVodConfigUrl) ?? ""
         self.currentLiveConfigUrl = try container.decodeIfPresent(String.self, forKey: .currentLiveConfigUrl) ?? ""
         self.currentLiveName = try container.decodeIfPresent(String.self, forKey: .currentLiveName) ?? ""
@@ -286,6 +322,9 @@ public struct UserPreferenceSnapshot: Codable, Sendable {
         self.subtitleFontSize = try container.decodeIfPresent(Int.self, forKey: .subtitleFontSize) ?? 44
         self.subtitlePosition = try container.decodeIfPresent(Int.self, forKey: .subtitlePosition) ?? 95
         self.subtitleOverrideSourceStyle = try container.decodeIfPresent(Bool.self, forKey: .subtitleOverrideSourceStyle) ?? true
+        self.onlineSubtitleSearchEnabled = try container.decodeIfPresent(Bool.self, forKey: .onlineSubtitleSearchEnabled)
+        self.subtitleAppearance = try container.decodeIfPresent(SubtitleAppearance.self, forKey: .subtitleAppearance)
+        self.subtitleDelayRecords = try container.decodeIfPresent([SubtitleDelayRecord].self, forKey: .subtitleDelayRecords).map(SubtitleDelayRecord.sanitized)
         self.proxyMode = try container.decodeIfPresent(Int.self, forKey: .proxyMode) ?? 0
         self.customProxyServer = try container.decodeIfPresent(String.self, forKey: .customProxyServer) ?? "127.0.0.1"
         self.customProxyPort = try container.decodeIfPresent(Int.self, forKey: .customProxyPort) ?? 7897
@@ -302,6 +341,10 @@ public struct UserPreferenceSnapshot: Codable, Sendable {
     }
 
     public func apply(to preferences: UserPreferences = .shared) {
+        // Keep an existing account's origin bound to its stored credentials.
+        var accounts = preferences.xtreamConfigurations
+        for account in xtreamConfigurations where !accounts.contains(where: { $0.id == account.id }) { accounts.append(account) }
+        preferences.xtreamConfigurations = accounts
         preferences.currentVodConfigUrl = currentVodConfigUrl
         preferences.currentLiveConfigUrl = currentLiveConfigUrl
         preferences.currentLiveName = currentLiveName
@@ -315,6 +358,9 @@ public struct UserPreferenceSnapshot: Codable, Sendable {
         preferences.subtitleFontSize = subtitleFontSize
         preferences.subtitlePosition = subtitlePosition
         preferences.subtitleOverrideSourceStyle = subtitleOverrideSourceStyle
+        if let onlineSubtitleSearchEnabled { preferences.onlineSubtitleSearchEnabled = onlineSubtitleSearchEnabled }
+        if let subtitleAppearance { preferences.subtitleAppearance = subtitleAppearance }
+        if let subtitleDelayRecords { preferences.subtitleDelayRecords = subtitleDelayRecords }
         preferences.proxyMode = proxyMode
         preferences.customProxyServer = customProxyServer
         preferences.customProxyPort = customProxyPort

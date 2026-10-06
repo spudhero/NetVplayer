@@ -63,7 +63,7 @@ public final class QuarkCookieDriver: @unchecked Sendable {
         guard let selected = client.selectPlayableFile(from: playableFiles, share: share) else {
             throw DriveEngineError.noPlayableFile(share.originalURL)
         }
-        guard selected.file.isPlayableVideo else {
+        guard selected.file.isPlayableMedia else {
             throw DriveEngineError.noPlayableFile(selected.file.name)
         }
 
@@ -71,7 +71,7 @@ public final class QuarkCookieDriver: @unchecked Sendable {
     }
 
     private func savedPersonalLink(for selected: QuarkPlayableFile, share: QuarkShareRequest, cookie: String) async throws -> CloudDriveLink {
-        guard selected.file.isPlayableVideo else {
+        guard selected.file.isPlayableMedia else {
             throw DriveEngineError.noPlayableFile(selected.file.name)
         }
         let savedResult = try await client.fetchSavedDownloadURLResult(for: selected, share: share, cookie: cookie)

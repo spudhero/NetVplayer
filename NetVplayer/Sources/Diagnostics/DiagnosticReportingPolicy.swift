@@ -5,6 +5,26 @@ public enum DiagnosticReportingConfiguration {
     public static let dsnInfoKey = "NetVplayerSentryDSN"
     public static let tracesSampleRate = 0.05
 
+    static func identity(info: [String: Any]) -> (environment: String, release: String, dist: String) {
+        #if DEBUG
+        let defaultEnvironment = "development"
+        #else
+        let defaultEnvironment = "production"
+        #endif
+        let configuredEnvironment = info["NetVplayerSentryEnvironment"] as? String
+        let environment = ["production", "development"].contains(configuredEnvironment ?? "")
+            ? configuredEnvironment! : defaultEnvironment
+        let version = info["CFBundleShortVersionString"] as? String ?? "development"
+        let build = info["CFBundleVersion"] as? String ?? "0"
+        guard environment == "development" else {
+            return (environment, "com.netvplayer.app@\(version)+\(build)", build)
+        }
+        let buildID = (info["NetVplayerSentryBuildID"] as? String)
+            .flatMap(UUID.init(uuidString:))?.uuidString.lowercased() ?? "unpackaged"
+        let dist = "\(build).\(buildID)"
+        return (environment, "com.netvplayer.app@\(version)-dev+\(dist)", dist)
+    }
+
     public static func dsn(environment: [String: String], info: [String: Any]) -> String? {
         let value = (environment["NETVPLAYER_SENTRY_DSN"] ?? info[dsnInfoKey] as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)

@@ -5,6 +5,7 @@ import SwiftUI
 import AppKit
 import OSLog
 import Models
+import Storage
 import PlayerEngine
 
 /// 主容器视图
@@ -12,6 +13,7 @@ struct MainContainerView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.openWindow) private var openWindow
     @StateObject private var playerWindowContext = PlayerWindowContext(preferenceStore: .main)
+    @ObservedObject private var dialogs = AppDialogCenter.shared
 
     var body: some View {
         let palette = appState.appearancePalette
@@ -98,12 +100,31 @@ struct MainContainerView: View {
                 .preferredColorScheme(palette.preferredColorScheme)
             }
         }
+        .environment(\.locale, L10n.locale)
         .environment(\.appThemePalette, palette)
-        .sheet(item: $appState.cloudAuthRequest) { request in
-            CloudAuthView(request: request) { credential in
-                try await appState.completeCloudAuth(credential: credential)
+        .sheet(item: Binding(
+            get: { dialogs.request },
+            set: { if $0 == nil, let request = dialogs.request { dialogs.complete(id: request.id, selection: nil) } }
+        )) { request in
+            AppDialogView(request: request) { selection in
+                dialogs.complete(id: request.id, selection: selection)
             }
             .environment(\.appThemePalette, palette)
+            .onDisappear { dialogs.complete(id: request.id, selection: nil) }
+        }
+        .sheet(item: $appState.cloudAuthRequest) { request in
+            CloudAuthView(request: request) { credential in
+                let completion = try await appState.completeCloudAuth(credential: credential, requestID: request.id)
+                if completion.shouldDismiss {
+                    NotificationCenter.default.post(
+                        name: .contentSourceCloudAuthCompleted,
+                        object: ContentSourceCloudAuthResult(provider: credential.provider, completion: completion)
+                    )
+                }
+                return completion
+            }
+            .environment(\.locale, L10n.locale)
+        .environment(\.appThemePalette, palette)
         }
         .sheet(item: $appState.playbackVerificationRequest) { request in
             PlaybackVerificationView(
@@ -111,7 +132,8 @@ struct MainContainerView: View {
                 onVerified: appState.completePlaybackVerification,
                 onCancel: appState.cancelPlaybackVerification
             )
-            .environment(\.appThemePalette, palette)
+            .environment(\.locale, L10n.locale)
+        .environment(\.appThemePalette, palette)
         }
         .background {
             PlayerWindowChromeController(
@@ -354,16 +376,7 @@ enum PlayerWindowChromePolicy {
         logger.info(
             "Fullscreen requested: window=\(window.windowNumber, privacy: .public) fullScreen=\(wasFullScreen, privacy: .public) key=\(wasKeyWindow, privacy: .public) behavior=\(behavior, privacy: .public)"
         )
-        window.toggleFullScreen(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak window] in
-            guard let window else { return }
-            let isFullScreen = window.styleMask.contains(.fullScreen)
-            let isKeyWindow = window.isKeyWindow
-            let isVisible = window.isVisible
-            logger.info(
-                "Fullscreen settled: window=\(window.windowNumber, privacy: .public) fullScreen=\(isFullScreen, privacy: .public) key=\(isKeyWindow, privacy: .public) visible=\(isVisible, privacy: .public)"
-            )
-        }
+        PlayerFullScreenCoordinator.attached(to: window).toggle()
     }
 }
 
@@ -601,21 +614,21 @@ private struct PlayerWindowChromeController: NSViewRepresentable {
 
         @objc private func playerWindowDidEnterFullScreen(_ notification: Notification) {
             if let window = notification.object as? NSWindow {
-                windowContext?.updateFullScreenState(true, for: window)
+                windowContext?.updateFullScreenState(window.styleMask.contains(.fullScreen), for: window)
             }
             activatePlayerWindow(from: notification)
         }
 
         @objc private func playerWindowDidExitFullScreen(_ notification: Notification) {
             if let window = notification.object as? NSWindow {
-                windowContext?.updateFullScreenState(false, for: window)
+                windowContext?.updateFullScreenState(window.styleMask.contains(.fullScreen), for: window)
             }
             activatePlayerWindow(from: notification)
         }
 
         private func activatePlayerWindow(from notification: Notification) {
             guard let window = notification.object as? NSWindow,
-                  window === fullScreenWindow else { return }
+                  window === fullScreenWindow, window.isVisible, !window.isMiniaturized else { return }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -700,10 +713,7 @@ private struct PlayerWindowChromeController: NSViewRepresentable {
         }
 
         func leavePlayerMode(window: NSWindow) {
-            guard PlayerWindowLifecyclePolicy.dismissalAction(
-                isFullScreen: window.styleMask.contains(.fullScreen)
-            ) == .exitFullScreen else { return }
-            window.toggleFullScreen(nil)
+            PlayerFullScreenCoordinator.attached(to: window).request(false)
         }
 
         deinit {

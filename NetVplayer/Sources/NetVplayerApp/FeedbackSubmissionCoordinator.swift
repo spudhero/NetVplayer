@@ -39,9 +39,10 @@ enum FeedbackReportFileStore {
 
     static func cleanupExpiredReports(
         now: Date = Date(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        directoryOverride: URL? = nil
     ) {
-        guard let directory = try? directoryURL(fileManager: fileManager),
+        guard let directory = try? (directoryOverride ?? directoryURL(fileManager: fileManager)),
               let files = try? fileManager.contentsOfDirectory(
                 at: directory,
                 includingPropertiesForKeys: [.contentModificationDateKey],
@@ -58,9 +59,11 @@ enum FeedbackReportFileStore {
     static func write(
         report: FeedbackReport,
         now: Date = Date(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        directoryOverride: URL? = nil
     ) throws -> URL {
-        let directory = try directoryURL(fileManager: fileManager)
+        let directory = try directoryOverride ?? directoryURL(fileManager: fileManager)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
@@ -112,7 +115,7 @@ enum FeedbackSubmissionCoordinator {
         }
         guard workspace.open(handoff.url) else {
             throw CocoaError(.fileNoSuchFile, userInfo: [
-                NSLocalizedDescriptionKey: "无法打开 GitHub 反馈页面",
+                NSLocalizedDescriptionKey: L10n.text("无法打开 GitHub 反馈页面"),
             ])
         }
         return FeedbackHandoffResult(

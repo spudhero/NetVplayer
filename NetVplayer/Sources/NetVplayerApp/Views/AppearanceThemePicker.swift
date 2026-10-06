@@ -1,3 +1,4 @@
+import Models
 import SwiftUI
 
 struct AppearanceThemePicker: View {
@@ -11,13 +12,13 @@ struct AppearanceThemePicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             themeGroup(
-                title: "亮色主题",
+                title: L10n.text("亮色主题"),
                 systemImage: "sun.max",
                 ids: AppThemeCatalog.lightThemeIDs
             )
 
             themeGroup(
-                title: "暗色主题",
+                title: L10n.text("暗色主题"),
                 systemImage: "moon.stars",
                 ids: AppThemeCatalog.darkThemeIDs
             )
@@ -92,7 +93,7 @@ private struct AppearanceThemePreview: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.14), value: isHovered)
-        .accessibilityLabel("\(palette.id.displayName)主题")
+        .accessibilityLabel(L10n.text("{0}主题", ["\(palette.id.displayName)"]))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 

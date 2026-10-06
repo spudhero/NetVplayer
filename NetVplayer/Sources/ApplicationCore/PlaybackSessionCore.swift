@@ -18,6 +18,7 @@ public struct PlaybackEpisodeIntent: Sendable {
     public var resumePosition: Int64?
     public var resumeDuration: Int64?
     public var isAutomatic: Bool
+    public var restartFromBeginning: Bool
     public var preferenceKey: String
 
     public init(
@@ -27,6 +28,7 @@ public struct PlaybackEpisodeIntent: Sendable {
         resumePosition: Int64? = nil,
         resumeDuration: Int64? = nil,
         isAutomatic: Bool = false,
+        restartFromBeginning: Bool = false,
         preferenceKey: String = ""
     ) {
         self.generation = generation
@@ -35,6 +37,7 @@ public struct PlaybackEpisodeIntent: Sendable {
         self.resumePosition = resumePosition
         self.resumeDuration = resumeDuration
         self.isAutomatic = isAutomatic
+        self.restartFromBeginning = restartFromBeginning
         self.preferenceKey = preferenceKey
     }
 }
@@ -181,6 +184,7 @@ public enum PlaybackSessionCore {
         resumePosition: Int64? = nil,
         resumeDuration: Int64? = nil,
         automaticSelection: Bool = false,
+        restartFromBeginning: Bool = false,
         preferenceKey: String = ""
     ) -> PlaybackSessionState {
         var state = current
@@ -193,6 +197,7 @@ public enum PlaybackSessionCore {
             resumePosition: resumePosition,
             resumeDuration: resumeDuration,
             isAutomatic: automaticSelection,
+            restartFromBeginning: restartFromBeginning,
             preferenceKey: preferenceKey
         )
         state.selection = nil

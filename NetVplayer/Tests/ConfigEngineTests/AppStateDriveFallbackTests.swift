@@ -751,6 +751,59 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
 }
 
 @MainActor
+@Test(arguments: [false, true])
+func testDriveUCRefreshedLinkFailureBeforeFirstFrameCompletesRecovery(hasFallback: Bool) async throws {
+    let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
+    var original = PlaySpec(url: "https://video-play-c-zb.drive.uc.cn/media.m3u8?auth_key=old")
+    original.metadata[DrivePlaybackMetadataKey.provider] = DriveProvider.uc.rawValue
+    original.metadata[DrivePlaybackMetadataKey.route] = DrivePlaybackRoute.personalTranscode
+    original.metadata["vod.episodeURL"] = "netvplayer-drive://uc/file?fid=fixture"
+    if hasFallback {
+        original.metadata[TestDriveFallbackMetadataKey.fallbackURL] = "https://video-play-c-zb.drive.uc.cn/fallback.m3u8"
+        original.metadata[TestDriveFallbackMetadataKey.fallbackRoute] = DrivePlaybackRoute.ucSmartPlay
+    }
+    original = installDriveSpec(original, in: appState)
+
+    var refreshCount = 0
+    var submitted: [PlaySpec] = []
+    appState.drivePlaybackSourceRefreshHandler = { spec, _ in
+        refreshCount += 1
+        var refreshed = spec
+        refreshed.url = "https://video-play-c-zb.drive.uc.cn/media.m3u8?auth_key=new"
+        return typedDriveSpec(refreshed)
+    }
+    appState.playSpecHandler = { spec in
+        submitted.append(spec)
+        appState.playerState.currentSpec = spec
+        if submitted.count == 1 {
+            // The refreshed URL fails before playbackStarted can acknowledge it.
+            appState.handleMPVPlaybackFailure(spec: spec, message: "HTTP 403 Forbidden")
+        } else {
+            appState.handleMPVPlaybackStarted(spec: spec)
+        }
+    }
+
+    appState.handleMPVPlaybackFailure(spec: original, message: "HTTP 403 Forbidden")
+    for _ in 0..<50 where submitted.count < (hasFallback ? 2 : 1) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(refreshCount == 1)
+    #expect(submitted.count == (hasFallback ? 2 : 1))
+    let expectedError = hasFallback ? nil : "UC网盘原片和兼容线路均播放失败，请重试或切换来源。"
+    #expect(appState.playerState.errorMessage == expectedError)
+    #expect(appState.pendingDrivePlaybackRouteID == nil)
+    if hasFallback {
+        #expect(submitted.last?.metadata[DrivePlaybackMetadataKey.route] == DrivePlaybackRoute.ucSmartPlay)
+    } else {
+        #expect(appState.playerState.drivePlaybackStatus == nil)
+    }
+
+    appState.handleMPVPlaybackFailure(spec: original, message: "late failure from the old URL")
+    #expect(appState.playerState.errorMessage == expectedError)
+    #expect(refreshCount == 1)
+}
+
+@MainActor
 @Test func testDriveUCOriginalWithoutFallbackShowsTerminalError() async throws {
     let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
     var original = PlaySpec(url: "http://localhost:9978/stream?id=uc-no-fallback")
@@ -877,7 +930,9 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
     appState.openCloudAuthFromPlaybackError()
 
     #expect(appState.playbackWarningMessage == nil)
-    #expect(appState.cloudAuthRequest == CloudAuthRequest(provider: .uc, pendingEpisodeURL: episode.url))
+    #expect(appState.cloudAuthRequest?.provider == .uc)
+    #expect(appState.cloudAuthRequest?.pendingEpisodeURL == episode.url)
+    #expect(appState.cloudAuthRequest?.resume?.episode.url == episode.url)
 }
 
 @MainActor
@@ -918,7 +973,9 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
     #expect(appState.isPlayerPresented == false)
     #expect(appState.isPlaybackErrorPresented == false)
     #expect(appState.playbackErrorAuthProvider == .uc)
-    #expect(appState.cloudAuthRequest == CloudAuthRequest(provider: .uc, pendingEpisodeURL: episode.url))
+    #expect(appState.cloudAuthRequest?.provider == .uc)
+    #expect(appState.cloudAuthRequest?.pendingEpisodeURL == episode.url)
+    #expect(appState.cloudAuthRequest?.resume?.episode.url == episode.url)
 }
 
 @MainActor

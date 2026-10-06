@@ -159,7 +159,8 @@ struct MacCMSInputTests {
 
     @MainActor
     @Test func appStateUsesInitialResultOnceAndDoesNotPersistInvalidInput() async throws {
-        let previousPreference = UserPreferences.shared.currentVodConfigUrl
+        let preferenceSuite = "MacCMSInputTests.\(UUID().uuidString)"
+        let preferences = UserPreferences(defaults: UserDefaults(suiteName: preferenceSuite)!)
         let storageURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("NetVplayer-MacCMS-\(UUID().uuidString)", isDirectory: true)
         let storage = StorageManager(storageDirectory: storageURL)
@@ -168,7 +169,7 @@ struct MacCMSInputTests {
         MacCMSMockURLProtocol.register(path: "/invalid", body: "<html>not a CMS response</html>", contentType: "text/html")
         MacCMSMockURLProtocol.register(path: "/depot", body: fixture("depot_config", extension: "json"))
         defer {
-            UserPreferences.shared.currentVodConfigUrl = previousPreference
+            UserDefaults(suiteName: preferenceSuite)?.removePersistentDomain(forName: preferenceSuite)
             VodConfig.shared.clear()
             MacCMSMockURLProtocol.reset()
             try? FileManager.default.removeItem(at: storageURL)
@@ -178,7 +179,8 @@ struct MacCMSInputTests {
             loadDefaultConfig: false,
             startProxyServer: false,
             configResolver: ConfigResolver(httpClient: makeHTTPClient()),
-            storageManager: storage
+            storageManager: storage,
+            userPreferences: preferences
         )
         let sourceURL = "https://www.direct.example.test/direct?ac=list&token=keep"
         await appState.loadConfig(url: sourceURL, waitForProviderRuntime: false)
@@ -189,16 +191,16 @@ struct MacCMSInputTests {
         #expect(MacCMSMockURLProtocol.requestedURLs.count == 1)
         #expect(storage.loadConfigs().count == 1)
         #expect(storage.loadConfigs().first?.name == "MacCMS · direct.example.test")
-        #expect(UserPreferences.shared.currentVodConfigUrl == "https://www.direct.example.test/direct?token=keep")
+        #expect(preferences.currentVodConfigUrl == "https://www.direct.example.test/direct?token=keep")
 
         let savedBeforeFailure = storage.loadConfigs()
-        let preferenceBeforeFailure = UserPreferences.shared.currentVodConfigUrl
+        let preferenceBeforeFailure = preferences.currentVodConfigUrl
         let vodsBeforeFailure = appState.vods.map(\.vodId)
         await appState.loadConfig(url: "https://bad.example.test/invalid", waitForProviderRuntime: false)
 
         #expect(appState.configError != nil)
         #expect(storage.loadConfigs().map(\.url) == savedBeforeFailure.map(\.url))
-        #expect(UserPreferences.shared.currentVodConfigUrl == preferenceBeforeFailure)
+        #expect(preferences.currentVodConfigUrl == preferenceBeforeFailure)
         #expect(appState.vods.map(\.vodId) == vodsBeforeFailure)
 
         await appState.loadConfig(url: "https://depot.example.test/depot", persistUserConfig: false, waitForProviderRuntime: false)
