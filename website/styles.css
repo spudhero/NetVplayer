@@ -257,6 +257,7 @@ main {
 }
 
 .hero,
+.release-section,
 .origin-section,
 .feature-section,
 .content-section,
@@ -303,6 +304,75 @@ main {
 .footer-inner {
   width: min(100%, var(--content-width));
   margin-inline: auto;
+}
+
+.release-section {
+  padding-block: clamp(72px, 9vw, 120px);
+}
+
+.release-note {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.release-note a,
+.release-section .boundary-note a {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.origin-facts.release-facts div {
+  display: block;
+}
+
+.origin-facts.release-facts dd {
+  margin: 8px 0 18px;
+  font-size: 32px;
+  line-height: 1.2;
+}
+
+.release-facts .text-link {
+  font-size: 14px;
+}
+
+.provider-table-wrap {
+  width: min(100%, var(--content-width));
+  margin: 56px auto 0;
+  overflow-x: auto;
+}
+
+.provider-release-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 16px;
+  text-align: left;
+}
+
+.provider-release-table caption {
+  margin-bottom: 20px;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: left;
+}
+
+.provider-release-table th,
+.provider-release-table td {
+  padding: 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.provider-release-table thead th {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.provider-release-table a {
+  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 
 .hero-copy,
@@ -1289,6 +1359,7 @@ code {
   }
 
   .hero,
+  .release-section,
   .origin-section,
   .feature-section,
   .content-section,
@@ -1554,6 +1625,7 @@ code {
   }
 
   .hero,
+  .release-section,
   .feature-section,
   .content-section,
   .theme-section,

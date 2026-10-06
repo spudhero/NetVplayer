@@ -15,6 +15,7 @@
   <a href="https://spudhero.github.io/NetVplayer/">Website</a> |
   <a href="https://github.com/spudhero/NetVplayer/releases/latest">Download</a> |
   <a href="CHANGELOG.md">Release History</a> |
+  <a href="https://github.com/spudhero/NetVplayer-Provider-Distribution/releases">Provider Releases</a> |
   <a href="provider-sdk/README.md">Provider SDK</a>
 </p>
 
@@ -31,9 +32,15 @@
 
 ### 原生 macOS 媒体播放器
 
-NetVplayer 1.1.0 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+NetVplayer 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
 
-当前主干正在准备 1.1.0（构建号 14），尚未正式发布。下文的开发版功能属于本次候选版本；下载入口继续提供已发布的 1.0.12。
+2026-10-07 已公开最新 **1.1.0 主程序壳源码（构建号 14）**，并正式发布五种 **Provider 1.1.0**。应用安装包的当前稳定版为 **1.0.12**；下文标注的 1.1.0 功能可从当前 main 源码构建。
+
+| 项目 | 当前版本 | 获取入口 |
+| --- | --- | --- |
+| 稳定应用安装包 | 1.0.12 | [最新 GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
+| 公开主程序壳源码 | 1.1.0 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [更新说明](RELEASE_NOTES_1.1.0.md) |
+| 签名播放扩展 | 1.1.0 | [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) |
 
 ### 项目背景
 
@@ -45,9 +52,9 @@ NetVplayer 的目标不是照搬手机或电视端界面，而是把内容浏览
 
 你可以添加自己的兼容配置、Xtream-compatible 服务或受支持的云盘账号。全新安装保持空白，直到用户主动添加内容入口；已保存的配置可以在后续启动时恢复。
 
-未发布开发版将“数据源设置”整理为“内容来源”，按在线内容、网盘账号、NAS / 本地、搜索与检查提供同页分组和快速定位。影视配置与直播列表使用链接入口；支持 Xtream 的影视/电视直播服务使用服务方提供的地址、用户名和密码。网盘登录用于访问需要账号的视频，NAS / 本地用于连接自己的视频文件。分步说明见[内容来源使用指南](NetVplayer/Docs/content_source_settings_guide_20261002.md)。1.0.12 的对应设置菜单仍名为“数据源设置”。
+1.1.0 源码构建将“数据源设置”整理为“内容来源”，按在线内容、网盘账号、NAS / 本地、搜索与检查提供同页分组和快速定位。影视配置与直播列表使用链接入口；支持 Xtream 的服务使用服务方提供的地址、用户名和密码。网盘登录用于访问需要账号的视频，NAS / 本地用于连接自己的视频文件。1.0.12 的对应设置菜单名为“数据源设置”。
 
-开发版支持在“设置 → 内容来源 → NAS / 本地 → 视频文件位置”添加 WebDAV、AList、OpenList、SMB 和本机文件夹，填写服务器参数并测试连接，在首页线路的“文件服务”分组浏览目录和播放。账号与密码在本机加密保存，本地目录使用系统授权书签。已完成本机真实服务的认证、超过 200 项分页及中文大文件范围读取验收，具体步骤与限制见 [文件服务配置说明](NetVplayer/Docs/file_service_configuration_status_20261001.md)。
+1.1.0 源码构建支持在“设置 → 内容来源 → NAS / 本地 → 视频文件位置”添加 WebDAV、AList、OpenList、SMB 和本机文件夹。填写服务器参数、测试连接并保存后，在首页选择该文件服务，浏览目录或添加媒体库。账号与密码在本机加密保存，本地目录使用系统授权书签。
 
 每个文件服务可以添加多个电影、剧集或混合媒体库，首页提供“媒体库／文件”切换。媒体库优先读取本地 NFO 和图片，支持自动、TMDB、豆瓣、仅本地四种信息来源，并可手动修正匹配和海报。首次保存自动扫描，后续增量更新；修改影视信息不改变播放历史和续播身份。TMDB 由发布方配置应用凭据，普通用户无需填写令牌；无凭据的开发构建仍可使用豆瓣和本地资料。
 
@@ -60,7 +67,7 @@ NetVplayer 的目标不是照搬手机或电视端界面，而是把内容浏览
 | <img src="website/assets/screen-detail.webp" alt="影片详情与选集界面" width="720"> | <img src="website/assets/screen-player.webp" alt="点播播放器界面" width="720"> |
 | **详情、线路与选集**<br>集中呈现影片信息、多线路和自然排序后的剧集。 | **原生播放控制**<br>使用 libmpv 播放，支持字幕、音轨、倍速、画面比例和紧凑窗口。 |
 
-未发布开发版的章节面板提供画面预览、名称、时间范围和当前章节提示；悬停进度条节点可预览，点击可跳到章节起点，拖动仍可自由定位。没有章节的媒体隐藏入口，无法生成预览时仍可跳转。设计与验证见 [章节 UI 记录](docs/design/player-chapters-ui/README.md)。
+1.1.0 源码构建的章节面板提供画面预览、名称、时间范围和当前章节提示；悬停进度条节点可预览，点击可跳到章节起点，拖动仍可自由定位。没有章节的媒体隐藏入口，无法生成预览时仍可跳转。
 
 | 跨来源搜索 | 直播播放 |
 | :---: | :---: |
@@ -88,6 +95,20 @@ Provider 是与主应用分离的扩展包。NetVplayer 只接受固定 HTTPS �
 当前公开壳只会自动安装声明 `user-configured-only` 的 Provider。运行时、Runner、Provider 和依赖都必须位于签名包内；Runner 不会在运行时下载代码或安装依赖。其它用户配置策略需要单独的壳层与发行审查，不能借自动安装路径激活。
 
 设置页会分别显示组件、缓存和用户数据占用。用户可以安全清理旧版本，或停用并卸载可识别组件；账号、Provider `.state`、配置、历史和未知文件保持不变，未完成维护可恢复。
+
+### 签名扩展发布
+
+五种 Provider 1.1.0 已正式发布，面向 **macOS 14+ / Apple Silicon arm64**。通常由应用自动安装与更新；可在“设置 → 扩展支持”选择“重新检查”。应用会核对主程序兼容版本，历史版本继续保留在官方索引中。
+
+| Provider | 版本 | 最低主程序版本 |
+| --- | --- | --- |
+| [Java 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.java-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+| [JavaScript 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.javascript-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+| [Python 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.python-v1.1.0-arm64) | 1.1.0 | 1.1.0 |
+| [QuickJS 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.quickjs-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+| [可配置 Python](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.configurable.python-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+
+Python 目录 1.1.0 包含最新目录兼容修复，需要主程序 1.1.0 提供的新播放能力。Provider 实现源码保持私有；签名安装包与[官方 stable 索引](https://spudhero.github.io/NetVplayer-Provider-Distribution/stable/index.json)公开分发。
 
 ### 项目架构
 
@@ -143,7 +164,7 @@ flowchart TB
 4. 首次启动时，在 Finder 中右键 NetVplayer 并选择“打开”，再在确认框中选择一次“打开”。
 5. 如果仍被系统拦截，进入“系统设置 → 隐私与安全性”，确认应用名称后选择“仍要打开”。当前版本使用社区 ad-hoc 签名，首次放行通常只需一次。
 6. 启动后等待“扩展支持”显示就绪。首次准备和后续更新扩展时，网络需要能够正常连接 GitHub；下载并验证完成后，离线时仍可继续使用本机已经安装且有效的组件。
-7. 正式版进入“设置 → 数据源设置”，填写你自己有权使用的兼容配置；未发布开发版使用“设置 → 内容来源 → 在线内容”。看到加载成功后返回首页即可开始浏览和播放。
+7. 正式版进入“设置 → 数据源设置”，填写你自己有权使用的兼容配置；1.1.0 源码构建使用“设置 → 内容来源 → 在线内容”。看到加载成功后返回首页即可开始浏览和播放。
 
 ![NetVplayer 设置中的扩展支持页面，显示扩展能力已就绪与重新检查按钮](website/assets/screen-extension-support.webp)
 
@@ -158,7 +179,7 @@ swift test --package-path NetVplayer --disable-sandbox --no-parallel
 
 生成隔离的无源发布应用：
 
-发布前，在构建环境中设置项目专用的 `NETVPLAYER_TMDB_API_KEY` 或 `NETVPLAYER_TMDB_READ_ACCESS_TOKEN`，二选一；不要将真实凭据提交到仓库。打包会注入应用资源，缺少凭据时公开发布构建会明确失败。开发验收可使用 `--package-dev /absolute/path/to/fresh-output`，允许缺少 TMDB 凭据。详见[媒体库实现与验收](NetVplayer/Docs/media_library_metadata_implementation_20261001.md)。
+发布前，在构建环境中设置项目专用的 `NETVPLAYER_TMDB_API_KEY` 或 `NETVPLAYER_TMDB_READ_ACCESS_TOKEN`，二选一；不要将真实凭据提交到仓库。打包会注入应用资源，缺少凭据时公开发布构建会明确失败。开发验收可使用 `--package-dev /absolute/path/to/fresh-output`，允许缺少 TMDB 凭据。详见 [TMDB 配置指南](TMDB_SETUP.md)。
 
 本机可把项目凭据保存在仓库外的 `~/.config/netvplayer/tmdb.env`（文件权限 `0600`）；规范打包脚本自动读取，显式环境变量优先。具体格式、覆盖规则和安装包检查见 [TMDB 配置指南](TMDB_SETUP.md)。
 
@@ -176,7 +197,7 @@ bash NetVplayer/script/build_and_run.sh \
 - **软件自带视频源或直播列表吗？** 不自带。公开应用不内置、不提供也不托管视频源、直播列表、账号或媒体内容。
 - **配置地址从哪里获得？** 请使用你自己维护、购买或明确获得授权的内容服务。项目不提供、推荐或代找视频源地址。
 - **播放扩展需要手动安装吗？** 正常情况下不需要。首次准备或后续更新时，网络必须能连接 GitHub，否则下载与更新无法完成。已经安装并验证通过的组件在离线时仍可继续使用；状态异常时可在“设置 → 扩展支持”中选择“重新检查”。
-- **配置和授权凭据保存在哪里？** 配置只保存在本机；开发版账号使用本机加密库，公开 1.0.12 的旧明文登录在升级时自动迁移，后续 ad-hoc 更新无需重复钥匙串授权。应用导出备份不包含密码、Token、Cookie 或密钥。加密库由当前用户的文件权限保护，不提供应用隔离；详见[存储与升级说明](NetVplayer/Docs/ad_hoc_credential_storage_20261003.md)。
+- **配置和授权凭据保存在哪里？** 配置只保存在本机；1.1.0 源码构建的账号使用本机加密库，公开 1.0.12 的旧明文登录在升级时自动迁移，后续 ad-hoc 更新无需重复钥匙串授权。应用导出备份不包含密码、Token、Cookie 或密钥。加密库由当前用户的文件权限保护，不提供应用隔离。
 - **NAS 和本地影片怎么显示海报墙？** 添加文件服务后，在首页选择该服务，切到“媒体库”并添加目录、类型和信息来源；保存后开始扫描。右键海报可修正影视信息，来源菜单可重新匹配。扫描和信息匹配均可取消，失败会保留已有资料。
 - **TMDB 必须填令牌吗？** 普通用户无需填写。发布方统一提供 NetVplayer 专用应用凭据；个人 API Key 或 Read Access Token 仅作为高级设置中的可选覆盖。豆瓣遇到网页验证时，可在应用内正常完成验证后恢复匹配。
 - **为什么错误提示不再显示 Android、Provider 或播放器内部名称？** 这些属于兼容和诊断实现，不是用户可执行的问题说明。普通界面会说明配置、来源、网络、授权或播放出了什么问题，并提示重试、切换来源/线路或重新授权；技术细节继续保留在脱敏诊断中。
@@ -210,9 +231,15 @@ NetVplayer 与 FongMi/TV 没有隶属或官方合作关系。NetVplayer 使用�
 
 ### A native media player for macOS
 
-NetVplayer 1.1.0 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+NetVplayer is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
 
-The current main branch is preparing the 1.1.0 release candidate (build 14), which is not yet published. Development features described below belong to this candidate; download links continue to serve the published 1.0.12 release.
+The latest **1.1.0 application shell source (build 14)** and all five **Provider 1.1.0** packages were published on 2026-10-07. The current stable application download is **1.0.12**. Features marked as 1.1.0 are available by building the current main branch.
+
+| Component | Current version | Get it |
+| --- | --- | --- |
+| Stable application | 1.0.12 | [Latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
+| Public application shell source | 1.1.0 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [Update notes](RELEASE_NOTES_1.1.0.md) |
+| Signed playback extensions | 1.1.0 | [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) |
 
 ### Project background
 
@@ -224,9 +251,9 @@ The goal is not to copy a phone or TV interface. NetVplayer reorganizes discover
 
 You can add your own compatible configuration, Xtream-compatible service, or supported cloud-drive account. A fresh installation stays empty until the user adds an entry point. Saved configurations can be restored on later launches.
 
-The unreleased development build renames Data Sources to Content Sources, with same-page groups and quick navigation for Online Content, Cloud Drive Accounts, NAS / Local, and Search & Checks. Use links for video configurations or channel lists; Xtream services require the server address, username, and password supplied by the service. Cloud sign-in enables videos that require a drive account; NAS / Local connects your own video files. See the [Content Sources guide](NetVplayer/Docs/content_source_settings_guide_20261002.md). The 1.0.12 release still calls this menu Data Sources.
+The 1.1.0 source build renames Data Sources to Content Sources, with same-page groups and quick navigation for Online Content, Cloud Drive Accounts, NAS / Local, and Search & Checks. Use links for video configurations or channel lists; Xtream services require the server address, username, and password supplied by the service. Cloud sign-in enables videos that require a drive account; NAS / Local connects your own video files. The 1.0.12 release calls this menu Data Sources.
 
-In the development build, add WebDAV, AList, OpenList, SMB, or a local folder under Settings → Content Sources → NAS / Local → Video File Locations. Test and save the connection, then select it from the home source menu to browse files or create movie, TV, and mixed libraries. Credentials are encrypted in a local vault; local folders use persistent access bookmarks. Local NFO files and artwork take priority, with Automatic, TMDB, Douban, and Local Only metadata options. Publisher builds provide the TMDB application credential; ordinary users do not need a token. Development builds without it can use Douban and local metadata. Local protocol servers, pagination, Chinese paths, playback, and large-file ranges have been tested. See the [configuration guide](NetVplayer/Docs/file_service_configuration_status_20261001.md) and [implementation and acceptance results](NetVplayer/Docs/media_library_metadata_implementation_20261001.md) for usage and limits.
+In the 1.1.0 source build, add WebDAV, AList, OpenList, SMB, or a local folder under Settings → Content Sources → NAS / Local → Video File Locations. Test and save the connection, then select it from the home source menu to browse files or create movie, TV, and mixed libraries. Credentials are encrypted in a local vault; local folders use persistent access bookmarks. Local NFO files and artwork take priority, with Automatic, TMDB, Douban, and Local Only metadata options. Publisher builds provide the TMDB application credential; ordinary users do not need a token. Development builds without it can use Douban and local metadata. See the [TMDB setup guide](TMDB_SETUP.md) for publisher and optional personal credentials.
 
 Catalogs, details, and posters use clearable performance caches to make repeat navigation faster. Expired lists stay visible while refreshing, and slow cloud-drive details show movie metadata before episode expansion finishes in the background. Clearing performance caches preserves web sessions, configurations, history, favorites, and extensions; website cookies and data are removed only by the separate Clear Web Sessions action.
 
@@ -250,7 +277,7 @@ NetVplayer supplies playback, connection, and compatibility capabilities. It doe
 - Configuration URLs, site lists, accounts, and credentials are supplied by the user and remain within local application boundaries.
 - Users must access only content they are authorized to use and comply with applicable law and service terms.
 - Provider extensions participate only after an exact match against user-supplied configuration. They cannot silently add content entry points.
-- Development builds encrypt cloud-drive and Xtream credentials locally; history, favorites, and app exports retain only credential-free resource identities. Plaintext sign-ins from public 1.0.12 are migrated automatically and removed only after verification. The vault uses the current user's file permissions without per-app isolation; see the [storage and upgrade notes](NetVplayer/Docs/ad_hoc_credential_storage_20261003.md).
+- The 1.1.0 source build encrypts cloud-drive and Xtream credentials locally; history, favorites, and app exports retain only credential-free resource identities. Plaintext sign-ins from public 1.0.12 are migrated automatically and removed only after verification. The vault uses the current user's file permissions without per-app isolation.
 - Users can add their own Xtream-compatible service for Movies, Series, search, and basic live channels. Server differences still apply.
 - Application-owned UI ships in Simplified Chinese and English. Provider-supplied content names remain unchanged.
 
@@ -261,6 +288,20 @@ Providers are separate from the main application. NetVplayer considers releases 
 The current public shell automatically installs only Providers that declare `user-configured-only`. The runtime, Runner, Provider, and dependencies must all live inside the signed package. Runners never download code or install dependencies at runtime. Any other user-configured policy requires separate shell and release review and cannot use the automatic activation path.
 
 Settings reports component, cache, and user-data storage separately. Users can remove old versions or disable and uninstall recognized components while preserving accounts, Provider state, configurations, history, and unknown files. Interrupted maintenance remains recoverable.
+
+### Provider releases
+
+All five Provider 1.1.0 packages are published for **macOS 14+ / Apple Silicon arm64**. The application normally installs and updates compatible packages automatically. Select Settings → Verified Extensions → Check Again to check for updates; historical compatible versions remain in the official index.
+
+| Provider | Version | Minimum application version |
+| --- | --- | --- |
+| [Java catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.java-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+| [JavaScript catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.javascript-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+| [Python catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.python-v1.1.0-arm64) | 1.1.0 | 1.1.0 |
+| [QuickJS catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.quickjs-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+| [Configurable Python](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.configurable.python-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+
+Python catalog 1.1.0 includes the latest compatibility fixes and requires the updated playback support in application 1.1.0. Provider implementation sources remain private; signed bundles and the [official stable index](https://spudhero.github.io/NetVplayer-Provider-Distribution/stable/index.json) are publicly distributed.
 
 ### Architecture
 
@@ -290,7 +331,7 @@ The app checks for application updates and marks the version in the sidebar and 
 4. On first launch, right-click NetVplayer in Finder, choose Open, and confirm Open once more.
 5. If macOS still blocks the app, open System Settings → Privacy & Security, confirm the application name, and choose Open Anyway. The community ad-hoc build normally needs this approval only once.
 6. Wait for Verified Extensions to become ready. The first preparation and later updates require a network connection that can reach GitHub. After the components are downloaded and verified, installed components that remain valid can continue to work offline.
-7. Open Settings → Data Sources in the release build, or Settings → Content Sources → Online Content in the unreleased development build, and load a compatible configuration that you are authorized to use.
+7. Open Settings → Data Sources in the release build, or Settings → Content Sources → Online Content in the 1.1.0 source build, and load a compatible configuration that you are authorized to use.
 
 ![NetVplayer Verified Extensions screen showing that extension support is ready and the Check Again button](website/assets/screen-extension-support.webp)
 

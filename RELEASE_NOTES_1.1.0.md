@@ -1,6 +1,10 @@
 # NetVplayer 1.1.0
 
-发布说明草稿 / Draft release notes. Version: `1.1.0 (14)`.
+主程序壳源码与扩展更新 / Application shell source and Provider update. Version: `1.1.0 (14)`.
+
+2026-10-07：最新主程序壳源码已公开，五种 Provider 1.1.0 已[正式分发](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases)。Python 目录包要求主程序至少 1.1.0，其余四包最低 1.0.0。当前稳定应用安装包为[1.0.12](https://github.com/spudhero/NetVplayer/releases/latest)，1.1.0 应用安装包继续保留候选验收状态。
+
+2026-10-07: The latest application shell source is public and all five Provider 1.1.0 bundles are [published](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases). Python catalog requires application 1.1.0; the other four packages require 1.0.0 or later. The stable application download is [1.0.12](https://github.com/spudhero/NetVplayer/releases/latest); the 1.1.0 application bundle remains a release candidate.
 
 ## 中文
 

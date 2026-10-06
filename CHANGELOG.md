@@ -4,9 +4,15 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
-### 1.1.0（发布准备，尚未发布）
+### 1.1.0（源码已公开，应用安装包待发布）
 
 本次候选版本汇总以下主干变更，构建号为 14。版本概览见[候选发布说明](RELEASE_NOTES_1.1.0.md)。
+
+#### 2026-10-07
+
+- 最新主程序壳源码进入公开 main，包含光影与 AI 短漫剧兼容、章节预览、内容来源、文件服务与媒体库等更新；公开主干完整回归与发行门禁通过。
+- Java、JavaScript、Python、QuickJS 目录和可配置 Python 五种签名 Provider 1.1.0 已在 [Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) 正式发布，官方 stable 索引已上线。
+- Python 目录 1.1.0 要求主程序至少 1.1.0，其余四包最低为 1.0.0；历史兼容版本保留。当前正式应用下载为 1.0.12。
 
 #### 2026-10-06
 
@@ -140,9 +146,15 @@ This file records user-visible release and fix history. For installation require
 
 ## English
 
-### 1.1.0 (release preparation, unpublished)
+### 1.1.0 (public source; application release pending)
 
 This candidate includes the main-branch changes below and uses build 14. See the [candidate release notes](RELEASE_NOTES_1.1.0.md) for an overview.
+
+#### 2026-10-07
+
+- Publish the latest application shell source to public main, including compatibility, chapter previews, Content Sources, file services, and media libraries. Full public-source regression and distribution gates passed.
+- Publish all five signed Provider 1.1.0 bundles—Java, JavaScript, Python, QuickJS catalogs, and configurable Python—to [Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) and the official stable index.
+- Python catalog 1.1.0 requires application 1.1.0; the other four packages require 1.0.0 or later. Historical compatible versions remain available. The stable application download is 1.0.12.
 
 #### 2026-10-06
 
