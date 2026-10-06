@@ -45,6 +45,7 @@ struct PlaybackEndedTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let (state, provider, site) = await fixture(directory)
+        let normalRefreshTimeout = state.episodeListRefreshTimeout
         if change == "timeout" { state.episodeListRefreshTimeout = .milliseconds(350) }
         var submissions: [PlaySpec] = []
         state.playSpecHandler = { spec in
@@ -53,7 +54,10 @@ struct PlaybackEndedTests {
             submissions.append(spec)
         }
         let load = Task { await state.selectVod(Vod(vodId: "film", siteKey: site.key)) }
-        try await Task.sleep(for: .milliseconds(50))
+        let loadingDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while state.episodeListState != .loading, ContinuousClock.now < loadingDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
         #expect(state.episodeListState == .loading)
         await state.playEpisode(Episode(name: "第1集", url: "first"))
         let spec = try #require(state.playerState.currentSpec)
@@ -66,7 +70,10 @@ struct PlaybackEndedTests {
         case "film": state.detailVod = Vod(vodId: "other")
         case "close": state.isPlayerPresented = false
         case "timeout":
-            try await Task.sleep(for: .milliseconds(180))
+            let timeoutDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while state.episodeListState == .loading, ContinuousClock.now < timeoutDeadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
             #expect(state.episodeListState == .incomplete)
             #expect(!state.isDetailLoading)
         default: break
@@ -81,6 +88,8 @@ struct PlaybackEndedTests {
             #expect(submissions.last?.metadata["vod.episodeURL"] == "second")
         } else if change == "timeout" {
             #expect(state.episodeListState == .incomplete)
+            // Only the blocked request uses a short budget; retry gets the production budget.
+            state.episodeListRefreshTimeout = normalRefreshTimeout
             await state.retryEpisodeList()
             try await waitForPreparedPlayback(state)
             #expect(state.episodeListState == .ready)
