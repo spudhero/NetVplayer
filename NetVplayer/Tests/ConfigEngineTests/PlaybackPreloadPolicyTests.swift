@@ -594,7 +594,17 @@ func thunderNextEpisodeCacheStopsRepeatedOriginOnlyProbes(originOnly: Bool) asyn
 }
 
 @MainActor
-@Test func nextEpisodePreloadCoordinatorConsumesMetadataWithoutWaitingForMediaUpgrade() async {
+private func waitForPreloadTestCondition(_ condition: @MainActor () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while !condition() {
+        guard ContinuousClock.now < deadline else { return false }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return true
+}
+
+@MainActor
+@Test func nextEpisodePreloadCoordinatorConsumesMetadataWithoutWaitingForMediaUpgrade() async throws {
     let coordinator = NextEpisodePreloadCoordinator(ttl: 90)
     let site = Site(key: "site", name: "Site", type: 3, api: "csp_Test")
     let episode = Episode(name: "E2", url: "episode-2")
@@ -610,17 +620,19 @@ func thunderNextEpisodeCacheStopsRepeatedOriginOnlyProbes(originOnly: Bool) asyn
     var upgradeCalls = 0
     var upgradeFinished = false
     var discardCalls = 0
+    let (upgradeRelease, upgradeReleaseContinuation) = AsyncStream<Void>.makeStream()
+    defer { upgradeReleaseContinuation.finish() }
     let operation: NextEpisodePreloadCoordinator.Operation = { decision, reusable in
         if var reusable {
             upgradeCalls += 1
-            try? await Task.sleep(for: .milliseconds(100))
+            var release = upgradeRelease.makeAsyncIterator()
+            _ = await release.next()
             reusable.decision = decision
             reusable.mediaBytes = 1_024
             upgradeFinished = true
             return reusable
         }
         coldCalls += 1
-        try? await Task.sleep(for: .milliseconds(10))
         return PreparedEpisodePlayback(
             key: key,
             site: site,
@@ -637,18 +649,25 @@ func thunderNextEpisodeCacheStopsRepeatedOriginOnlyProbes(originOnly: Bool) asyn
     }
     coordinator.request(key: key, decision: .metadataOnly, onDiscard: onDiscard, operation: operation)
     coordinator.request(key: key, decision: .metadataAndMedia, onDiscard: onDiscard, operation: operation)
-    let startedAt = ContinuousClock.now
-    let prepared = await coordinator.consume(key: key)
-    let elapsed = startedAt.duration(to: .now)
+    try #require(await waitForPreloadTestCondition { upgradeCalls == 1 })
+    var prepared: PreparedEpisodePlayback?
+    var consumptionFinished = false
+    let consumption = Task { @MainActor in
+        prepared = await coordinator.consume(key: key)
+        consumptionFinished = true
+    }
+    let consumedWhileUpgradeBlocked = await waitForPreloadTestCondition { consumptionFinished }
 
     #expect(coldCalls == 1)
     #expect(upgradeCalls == 1)
+    #expect(consumedWhileUpgradeBlocked)
     #expect(prepared?.decision == .metadataOnly)
     #expect(prepared?.mediaBytes == 0)
-    #expect(elapsed < .milliseconds(80))
+    #expect(!upgradeFinished)
 
-    try? await Task.sleep(for: .milliseconds(130))
-    #expect(upgradeFinished)
+    upgradeReleaseContinuation.finish()
+    await consumption.value
+    #expect(await waitForPreloadTestCondition { upgradeFinished })
     #expect(discardCalls == 0)
 }
 
@@ -665,9 +684,11 @@ func thunderNextEpisodeCacheStopsRepeatedOriginOnlyProbes(originOnly: Bool) asyn
         targetEpisodeURL: episode.url,
         playbackGeneration: 7
     )
-    var discarded = false
-    coordinator.request(key: key, decision: .metadataOnly, onDiscard: { _ in
-        discarded = true
+    var discarded: PreparedEpisodePlayback?
+    var discardedWhileFresh = false
+    coordinator.request(key: key, decision: .metadataOnly, onDiscard: { prepared in
+        discarded = prepared
+        discardedWhileFresh = prepared.isFresh(ttl: 0.02)
     }) { decision, _ in
         PreparedEpisodePlayback(
             key: key,
@@ -680,8 +701,9 @@ func thunderNextEpisodeCacheStopsRepeatedOriginOnlyProbes(originOnly: Bool) asyn
         )
     }
 
-    try? await Task.sleep(for: .milliseconds(60))
-    #expect(discarded)
+    #expect(await waitForPreloadTestCondition { discarded != nil })
+    #expect(discarded?.key == key)
+    #expect(!discardedWhileFresh)
     #expect(coordinator.currentKey == nil)
     #expect(await coordinator.consume(key: key) == nil)
 }
