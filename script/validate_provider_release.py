@@ -154,7 +154,7 @@ def runtime_architecture_probe_errors(
                 check=False,
                 capture_output=True,
                 text=True,
-                env={"PATH": str(executable.parent)},
+                  env={"PATH": f"{executable.parent}:/usr/bin:/bin" if runtime == "quickjs" else str(executable.parent)},
                 timeout=60,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
@@ -235,7 +235,7 @@ def runtime_errors(
             check=False,
             capture_output=True,
             text=True,
-            env={"PATH": str(executable.parent)},
+            env={"PATH": f"{executable.parent}:/usr/bin:/bin"},
             timeout=60,
         )
         try:

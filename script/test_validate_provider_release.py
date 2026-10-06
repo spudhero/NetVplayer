@@ -68,6 +68,12 @@ class ProviderReleaseValidationTests(unittest.TestCase):
             executable = root / "bin/qjs"
             executable.parent.mkdir(parents=True)
             executable.write_text(
+                "#!/bin/sh\nset -eu\n"
+                "runtime_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+                "exec /bin/sh \"$runtime_dir/qjs-cosmo\" \"$@\"\n",
+                encoding="utf-8",
+            )
+            (executable.parent / "qjs-cosmo").write_text(
                 "#!/bin/sh\nprintf '%s\\n' '{\"engine\":\"QuickJS\",\"bigint\":true}'\n",
                 encoding="utf-8",
             )
