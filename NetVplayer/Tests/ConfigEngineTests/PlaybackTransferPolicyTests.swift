@@ -207,7 +207,7 @@ private final class BaiduRepairOriginProtocol: URLProtocol, @unchecked Sendable 
     let storedProfile = try #require(server.seekableResourceTransferProfile(forLocalURL: url))
     #expect(storedProfile.steadyReadBytes == 4_194_304)
     let warmed = try #require(try await server.prefetchRemoteStream(forLocalURL: url, mode: .essentials))
-    #expect(warmed.covers([.init(start: 0, end: 512 * 1024 - 1)]))
+    #expect(warmed.covers([.init(start: 0, end: Int64(512 * 1024 - 1))]))
     #expect(warmed.cachedBytes == 512 * 1024)
     var request = URLRequest(url: URL(string: url)!); request.setValue("bytes=0-65535", forHTTPHeaderField: "Range")
     let (data, _) = try await URLSession.shared.data(for: request)
