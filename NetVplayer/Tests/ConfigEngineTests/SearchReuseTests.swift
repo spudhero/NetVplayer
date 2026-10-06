@@ -95,11 +95,17 @@ struct SearchReuseTests {
         state.results.append(SearchResult(siteKey: "second"))
         publisher.submit(state)
         #expect(counts == [1])
-        try await Task.sleep(for: .milliseconds(50))
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while counts.count < 2, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         #expect(counts == [1, 2])
         state.results.append(SearchResult(siteKey: "third"))
         publisher.submit(state)
         publisher.cancel()
+        publisher.flush()
+        #expect(counts == [1, 2])
         try await Task.sleep(for: .milliseconds(40))
         #expect(counts == [1, 2])
     }
