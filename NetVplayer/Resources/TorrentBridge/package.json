@@ -1,0 +1,8 @@
+{
+  "name": "netvplayer-torrent-bridge",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "webtorrent": "3.0.21"
+  }
+}

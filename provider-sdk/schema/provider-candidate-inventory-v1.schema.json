@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netvplayer.example/schema/provider-candidate-inventory-v1.schema.json",
+  "title": "NetVplayer Provider candidate inventory v1",
+  "type": "object",
+  "required": ["schema_version", "source", "summary", "payload_scan", "candidates"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "source": {
+      "type": "object",
+      "required": ["project", "repository_url", "root", "license_file", "license_sha256", "snapshot_sha256"],
+      "properties": {
+        "project": { "type": "string", "minLength": 1 },
+        "repository_url": { "type": "string", "format": "uri" },
+        "root": { "type": "string", "minLength": 1 },
+        "license_file": { "type": "string", "minLength": 1 },
+        "license_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "snapshot_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["runtime_bridges", "dynamic_remote_routes", "blocked_license", "in_tree_provider_implementations", "distribution_ready"],
+      "properties": {
+        "runtime_bridges": { "type": "integer", "minimum": 0 },
+        "dynamic_remote_routes": { "type": "integer", "minimum": 0 },
+        "blocked_license": { "type": "integer", "minimum": 0 },
+        "in_tree_provider_implementations": { "type": "integer", "minimum": 0 },
+        "distribution_ready": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "payload_scan": {
+      "type": "object",
+      "required": ["provider_implementations", "excluded_tool_archives"],
+      "properties": {
+        "provider_implementations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "excluded_tool_archives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "reason"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "reason": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "candidate_id", "name", "artifact_kind", "runtime", "migration_target",
+          "original_api", "original_ext", "original_jar", "original_spider", "capabilities",
+          "dependencies", "source_paths", "source_sha256", "detected_markers",
+          "dynamic_remote_execution", "in_tree_provider_implementation", "license",
+          "license_status", "compatibility", "network", "playback_verified",
+          "distribution_ready", "reason"
+        ],
+        "properties": {
+          "candidate_id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+          "name": { "type": "string", "minLength": 1 },
+          "artifact_kind": { "const": "runtime-bridge" },
+          "runtime": { "enum": ["java", "js", "quickjs", "python", "android-dex"] },
+          "migration_target": { "enum": ["java", "js", "python"] },
+          "original_api": { "type": ["string", "null"] },
+          "original_ext": { "type": ["string", "null"] },
+          "original_jar": { "type": ["string", "null"] },
+          "original_spider": { "type": ["string", "null"] },
+          "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "dependencies": { "type": "array", "items": { "type": "string" } },
+          "source_paths": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true },
+          "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "detected_markers": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "dynamic_remote_execution": { "const": true },
+          "in_tree_provider_implementation": { "const": false },
+          "license": { "type": "string", "minLength": 1 },
+          "license_status": { "const": "blocked-license" },
+          "compatibility": { "enum": ["needs-port", "unsupported"] },
+          "network": { "enum": ["usable", "network-blocked", "empty", "configuration", "untested"] },
+          "playback_verified": { "const": false },
+          "distribution_ready": { "const": false },
+          "reason": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "canonical_licenses": {
+    "BSD-2-Clause": {
+      "path": "THIRD_PARTY_LICENSES/BSD-2-Clause.txt",
+      "sha256": "017b5ee48f680e82cba79141c7895a1f02b856df2512225f5c427fe36765ef0b",
+      "source": "https://github.com/spdx/license-list-data/blob/5bf6d9610255540bfbee6890765a616042bf1e11/text/BSD-2-Clause.txt"
+    },
+    "MIT": {
+      "path": "THIRD_PARTY_LICENSES/MIT.txt",
+      "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+      "source": "https://github.com/spdx/license-list-data/blob/5bf6d9610255540bfbee6890765a616042bf1e11/text/MIT.txt"
+    }
+  },
+  "packages": [
+    {
+      "name": "block-iterator",
+      "version": "1.1.2",
+      "license": "MIT",
+      "author": "ThaUnknown",
+      "package_json_sha256": "167e98966b28f21283da55f23faada780b87cce9fe627d6e652fff47ac933a9e",
+      "integrity": "sha512-yAHUP44v2K25xLPdrgVTgwtuQctlullzjczu9CoUZom5AP3g4p1R1+aWHjS1GHG9JtcSUVUnbEPiuXiW5YZ24w==",
+      "resolved": "https://registry.npmjs.org/block-iterator/-/block-iterator-1.1.2.tgz"
+    },
+    {
+      "name": "chunk-store-iterator",
+      "version": "1.0.4",
+      "license": "MIT",
+      "author": "ThaUnknown",
+      "package_json_sha256": "33a2b75d2fba950dc758ee6f8db460de21e26cfa2db01fce46241ab61b1dc36d",
+      "integrity": "sha512-LGjzJNmk7W1mrdaBoJNztPumT2ACmgjHmI1AMm8aeGYOl4+LKaYC/yfnx27i++LiAtoe/dR+3jC8HRzb6gW4/A==",
+      "resolved": "https://registry.npmjs.org/chunk-store-iterator/-/chunk-store-iterator-1.0.4.tgz"
+    },
+    {
+      "name": "cross-fetch-ponyfill",
+      "version": "1.0.3",
+      "license": "MIT",
+      "author": "ThaUnknown",
+      "package_json_sha256": "c55bfe5f651b8275e3f377ae80917ff60a3d8f51c0cb44772bb3eec72ea073da",
+      "integrity": "sha512-uOBkDhUAGAbx/FEzNKkOfx3w57H8xReBBXoZvUnOKTI0FW0Xvrj3GrYv2iZXUqlffC1LMGfQzhmBM/ke+6eTDA==",
+      "resolved": "https://registry.npmjs.org/cross-fetch-ponyfill/-/cross-fetch-ponyfill-1.0.3.tgz"
+    },
+    {
+      "name": "default-gateway",
+      "version": "7.2.2",
+      "license": "BSD-2-Clause",
+      "author": "silverwind",
+      "package_json_sha256": "2a00655ec3cc05aa341c5fd39fd34614797c877fa6e8a1ebf270e6ff41f52587",
+      "integrity": "sha512-AD7TrdNNPXRZIGw63dw+lnGmT4v7ggZC5NHNJgAYWm5njrwoze1q5JSAW9YuLy2tjnoLUG/r8FEB93MCh9QJPg==",
+      "resolved": "https://registry.npmjs.org/default-gateway/-/default-gateway-7.2.2.tgz"
+    },
+    {
+      "name": "err-code",
+      "version": "3.0.1",
+      "license": "MIT",
+      "author": "IndigoUnited <hello@indigounited.com> (http://indigounited.com)",
+      "package_json_sha256": "7cbd3e3ccbae581d787c38a39b288835da067eb6cf8e0e82cd6a4561276f065a",
+      "integrity": "sha512-GiaH0KJUewYok+eeY05IIgjtAe4Yltygk9Wqp1V5yVWLdhf0hYZchRjNIT9bb0mSwRcIusT3cx7PJUf3zEIfUA==",
+      "resolved": "https://registry.npmjs.org/err-code/-/err-code-3.0.1.tgz"
+    },
+    {
+      "name": "fast-readable-async-iterator",
+      "version": "2.0.0",
+      "license": "MIT",
+      "author": "ThaUnknown_",
+      "package_json_sha256": "c91a8b0851f6d31674b51c3b65092cf8e3b817ab84109303554143dbd67d8107",
+      "integrity": "sha512-8Sld+DuyWRIftl86ZguJxR2oXCBccOiJxrY/Rj9/7ZBynW8pYMWzIcqxFL1da+25jaWJZVa+HHX/8SsA21JdTA==",
+      "resolved": "https://registry.npmjs.org/fast-readable-async-iterator/-/fast-readable-async-iterator-2.0.0.tgz"
+    },
+    {
+      "name": "freelist",
+      "version": "1.0.3",
+      "license": "MIT",
+      "author": "Kenan Sulayman",
+      "package_json_sha256": "5c1ca8afbf7d86f6fd3acaca02574497f262fdd4818d7d01060a4eb89019fa03",
+      "integrity": "sha512-Ji7fEnMdZDGbS5oXElpRJsn9jPvBR8h/037D3bzreNmS8809cISq/2D9//JbA/TaZmkkN8cmecXwmQHmM+NHhg==",
+      "resolved": "https://registry.npmjs.org/freelist/-/freelist-1.0.3.tgz"
+    },
+    {
+      "name": "piece-length",
+      "version": "2.0.1",
+      "license": "MIT",
+      "author": [
+        "Jimmy Wärting <jimmy@warting.se>",
+        "Michael Rhodes"
+      ],
+      "package_json_sha256": "eb57b45c40252838ab4a72918658e0cd3f2ef969aba9056dc5cec474b60f2577",
+      "integrity": "sha512-dBILiDmm43y0JPISWEmVGKBETQjwJe6mSU9GND+P9KW0SJGUwoU/odyH1nbalOP9i8WSYuqf1lQnaj92Bhw+Ug==",
+      "resolved": "https://registry.npmjs.org/piece-length/-/piece-length-2.0.1.tgz"
+    },
+    {
+      "name": "random-access-file",
+      "version": "4.1.2",
+      "license": "MIT",
+      "author": "Mathias Buus (@mafintosh)",
+      "package_json_sha256": "18c79553508f64951769b6d131af4c79c11027672f69fa67bc44d1783d7cc4e6",
+      "integrity": "sha512-GQM6R78DceZDcQod8KxlDFwXIiUvlvuy1EOzxTDsjuDjW5NlnlZi0MOk6iI4itAj/2vcvdqcEExYbVpC/dJcEw==",
+      "resolved": "https://registry.npmjs.org/random-access-file/-/random-access-file-4.1.2.tgz"
+    },
+    {
+      "name": "throughput",
+      "version": "1.0.2",
+      "license": "MIT",
+      "author": "ThaUnknown",
+      "package_json_sha256": "83f3ff3fc5a8a92309c43a69d9bf98b591dc381250594a6d32067528868f79c9",
+      "integrity": "sha512-jvK1ZXuhsggjb3qYQjMiU/AVYYiTeqT5thWvYR2yuy2LGM84P5MSSyAinwHahGsdBYKR9m9HncVR/3f3nFKkxg==",
+      "resolved": "https://registry.npmjs.org/throughput/-/throughput-1.0.2.tgz"
+    },
+    {
+      "name": "uint8-util",
+      "version": "2.3.2",
+      "license": "MIT",
+      "author": "ThaUnknown",
+      "package_json_sha256": "298f58075c744e509a4f24e52931e606e69bc96273aa0dc9ae646634d6facc86",
+      "integrity": "sha512-u1c0/eiT1IW+c5+ogbmE2Fu2hmtJQPkuzDmXD/4crMU4FPMjkTkFnjJ2NN/9AsZ9YWcc7yE869uc3WB8wIZEEA==",
+      "resolved": "https://registry.npmjs.org/uint8-util/-/uint8-util-2.3.2.tgz"
+    },
+    {
+      "name": "webrtc-polyfill",
+      "version": "1.2.2",
+      "license": "MIT",
+      "author": "ThaUnknown",
+      "package_json_sha256": "520cceac56edf48009769ca4bbae05d40ed88f6f07642ac044c57f50995bc870",
+      "integrity": "sha512-t/H2OySa7lZSq2f5j4whmr+IWCl5TqF4daGotE8VhPP7U+E4x5x8MK1wqOkqlb4xxRlag4kBB9enU4oxNk//+g==",
+      "resolved": "https://registry.npmjs.org/webrtc-polyfill/-/webrtc-polyfill-1.2.2.tgz"
+    }
+  ]
+}

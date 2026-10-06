@@ -1,0 +1,3017 @@
+// NetVplayerApp/Views/SettingsView.swift
+// 系统设置视图
+
+import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
+import Models
+import Storage
+import Networking
+import PlayerEngine
+import ProviderRuntime
+import ProviderSDK
+import WebHomeEngine
+
+enum SavedVodConfigSelectionPolicy {
+    static func resolvedSelection(savedURLs: [String], activeURL: String) -> String {
+        guard let fallbackURL = savedURLs.first else { return "" }
+
+        let normalizedActiveURL = activeURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedActiveURL.isEmpty else { return fallbackURL }
+
+        return savedURLs.first {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedActiveURL
+        } ?? fallbackURL
+    }
+}
+
+struct SettingsView: View {
+    @AppStorage(L10n.preferenceKey) private var languageMode = "system"
+    @State private var launchedLanguageMode = UserDefaults.standard.string(forKey: L10n.preferenceKey) ?? "system"
+    @State private var languageRestartError: String?
+    @Environment(\.appThemePalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private enum SettingsSection: String, CaseIterable, Identifiable {
+        case appearance
+        case dataSource
+        case providers
+        case playback
+        case network
+        case system
+        case feedback
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .appearance: L10n.text("外观")
+            case .dataSource: L10n.text("内容来源")
+            case .providers: L10n.text("扩展支持")
+            case .playback: L10n.text("播放偏好")
+            case .network: L10n.text("网络与代理")
+            case .system: L10n.text("缓存与系统")
+            case .feedback: L10n.text("问题反馈")
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .appearance: return "paintpalette"
+            case .dataSource: return "link"
+            case .providers: return "puzzlepiece.extension"
+            case .playback: return "play.circle"
+            case .network: return "network"
+            case .system: return "wrench"
+            case .feedback: return "exclamationmark.bubble"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .appearance: return L10n.text("背景、主题与控件色彩")
+            case .dataSource: return L10n.text("按视频所在位置，选择适合你的接入方式")
+            case .providers: return L10n.text("自动维护播放兼容能力")
+            case .playback: return L10n.text("画面、字幕与播放行为")
+            case .network: return L10n.text("代理、端口与中继")
+            case .system: return L10n.text("缓存、备份与实验功能")
+            case .feedback: return L10n.text("复现资料、脱敏日志与 Issue")
+            }
+        }
+    }
+
+    private enum CloudProvider: String, CaseIterable, Identifiable, Hashable {
+        case quark = "夸克"
+        case uc = "UC"
+        case ali = "阿里云盘"
+        case baidu = "百度网盘"
+        case p115 = "115"
+        case pikpak = "PikPak"
+
+        var id: String { rawValue }
+
+        var credentialKind: String {
+            switch self {
+            case .quark: return "Cookie / Token"
+            case .uc: return "Cookie"
+            case .ali: return "Refresh Token"
+            case .p115: return "Cookie / Access Token"
+            case .pikpak: return "Access / Refresh Token"
+            case .baidu: return "Cookie"
+            }
+        }
+
+        var driveProvider: DriveProvider {
+            switch self {
+            case .quark: return .quark
+            case .uc: return .uc
+            case .ali: return .ali
+            case .p115: return .p115
+            case .pikpak: return .pikpak
+            case .baidu: return .baidu
+            }
+        }
+
+        var authorizationGuidance: String {
+            L10n.text("{0}授权凭据仅保存在本机；手动输入只用于授权流程不可用时的高级兜底。敏感凭据不会写入备份文件。", ["\(rawValue)"])
+        }
+    }
+
+    @EnvironmentObject var appState: AppState
+
+    @State private var selectedSection: SettingsSection = .appearance
+    @State private var hoveredSection: SettingsSection?
+    @State private var selectedCloudProvider: CloudProvider = .quark
+    @State private var selectedSavedVodConfigURL: String = ""
+    @State private var configReportExpanded: Bool = false
+    @State private var sourceFormatsExpanded = false
+    @State private var compatibilityReportExpanded: Bool = false
+    @State private var vodConfigUrl: String = ""
+    @State private var liveConfigUrl: String = ""
+    @State private var isLoadingVod: Bool = false
+    @State private var pendingSavedVodConfigRemoval: Config?
+    @State private var quarkCookie: String = ""
+    @State private var ucCookie: String = ""
+    @State private var baiduCookie: String = ""
+    @State private var aliRefreshToken: String = ""
+    @State private var aliAccessToken: String = ""
+    @State private var aliOpenToken: String = ""
+    @State private var aliDefaultDriveID: String = ""
+    @State private var p115Cookie: String = ""
+    @State private var p115AccessToken: String = ""
+    @State private var pikpakAccessToken: String = ""
+    @State private var pikpakRefreshToken: String = ""
+    @State private var pikpakDeviceID: String = ""
+    @State private var cloudCookieSaved: Bool = false
+    @State private var cloudCookieVerified = false
+    @State private var isValidatingCloudCookie: Bool = false
+    @State private var cloudCookieStatus: String?
+    @State private var isManualCloudAuthExpanded: Bool = false
+    @State private var cloudAutoDeleteSavedFiles: [CloudProvider: Bool] = [:]
+    @State private var backupStatus: String?
+    @State private var backupStatusIsError: Bool = false
+    @State private var windowPreferenceStatus: String?
+    @State private var progressSyncStatus: String?
+    @State private var progressSyncStatusIsError: Bool = false
+
+    // 偏好选项本地状态
+    @State private var decodeMode: Int = 0
+    @State private var subtitleAppearance = UserPreferences.shared.subtitleAppearance
+    @State private var subtitleFontSize: Int = SubtitleRenderSettings.defaultFontSize
+    @State private var subtitlePosition: Int = SubtitleRenderSettings.defaultPosition
+    @State private var subtitleOverrideSourceStyle: Bool = SubtitleRenderSettings.defaultOverrideSourceStyle
+    @State private var danmakuEnabled: Bool = false
+    @State private var danmakuOpacity: Double = 0.8
+    @State private var danmakuFontSize: Int = 36
+    @State private var danmakuOffsetMs: Int = 0
+    @State private var siteHealthSortingEnabled: Bool = true
+    @State private var sourceHygieneExpanded: Bool = false
+    @State private var credentialRiskExpanded: Bool = false
+    @State private var resourceDiagnosticsExpanded: Bool = false
+    @State private var liveLineQualityExpanded: Bool = false
+    @State private var isProbingCurrentLiveGroup: Bool = false
+
+    // 缓存大小本地展示
+    @State private var displayCacheSize: String = L10n.text("正在计算...")
+    @State private var cacheSnapshot: CacheSnapshot?
+    @State private var cacheOperationStatus: String?
+    @State private var cacheOperationFailed = false
+    @State private var isClearingCache = false
+    @State private var cacheRefreshTask: Task<Void, Never>?
+    @State private var isShowingCacheConfirmation: Bool = false
+    @State private var isShowingWebSessionConfirmation: Bool = false
+
+    // 网络代理本地状态
+    @State private var proxyMode: Int = 0
+    @State private var customProxyServer: String = "127.0.0.1"
+    @State private var customProxyPort: Int = 7897
+    @State private var chunkedRangeRelayEnabled: Bool = false
+    @State private var webHomeEnabled: Bool = false
+    @State private var webHomeURL: String = ""
+
+    var body: some View {
+        HStack(spacing: 0) {
+            settingsSectionSidebar
+                .background {
+                    AppGlassSurface(cornerRadius: 0, role: .chrome)
+                }
+
+            Rectangle()
+                .fill(palette.foreground.opacity(0.08))
+                .frame(width: 1)
+
+            ScrollViewReader { proxy in
+                VStack(spacing: 0) {
+                    settingsContentHeader
+                        .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+
+                    if selectedSection == .dataSource {
+                        contentSourceNavigation { category in
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                                proxy.scrollTo(category, anchor: .top)
+                            }
+                        }
+                        .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                        .padding(.bottom, 16)
+                    }
+
+                    ThemedScrollView {
+                        selectedSectionContent
+                            .id(selectedSection)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                            .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth, alignment: .topLeading)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                            .padding(.top, 4)
+                            .padding(.bottom, AppSurfaceVisualPolicy.settingsBottomPadding)
+                    }
+                    .id(selectedSection)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        }
+        .foregroundStyle(palette.foreground)
+        .tint(palette.accent)
+        .groupBoxStyle(AppGroupBoxStyle())
+        .ignoresSafeArea(edges: .top)
+        .onAppear {
+            loadSettingsState()
+            applySettingsNavigationDestination(appState.settingsNavigationDestination)
+        }
+        .onChange(of: appState.settingsNavigationDestination) { _, destination in
+            applySettingsNavigationDestination(destination)
+        }
+        .onChange(of: appState.cloudAuthRequest) { previousRequest, request in
+            guard previousRequest != nil, request == nil else { return }
+            loadCloudCredentialState()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .contentSourceCloudAuthCompleted)) { notification in
+            guard let result = notification.object as? ContentSourceCloudAuthResult,
+                  result.provider == selectedCloudProvider.driveProvider else { return }
+            loadCloudCredentialState()
+            cloudCookieSaved = true
+            cloudCookieVerified = result.completion.credentialsValidated
+            cloudCookieStatus = result.completion.message ?? L10n.text(
+                result.completion.credentialsValidated ? "{0}凭据已验证并保存" : "{0}凭据已保存，将在播放时校验",
+                [L10n.text(selectedCloudProvider.rawValue)]
+            )
+        }
+        .onChange(of: selectedSection) { _, section in
+            if section == .system { refreshCacheSize() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .netVplayerCacheDidChange)) { _ in
+            if selectedSection == .system { refreshCacheSize(debounced: true) }
+        }
+        .themedConfirmation(
+            L10n.text("清理性能缓存？"),
+            isPresented: $isShowingCacheConfirmation,
+            confirmTitle: L10n.text("确认清理"),
+            message: L10n.text("将清空海报、网络、分类与详情缓存。登录状态、Provider、配置、历史、收藏和反馈文件会保留。")
+        ) {
+            clearPerformanceCaches()
+        }
+        .themedConfirmation(
+            L10n.text("清除网页会话？"),
+            isPresented: $isShowingWebSessionConfirmation,
+            confirmTitle: L10n.text("清除网页会话"),
+            message: L10n.text("将删除内置网页的 Cookie、LocalStorage 和网站数据，相关网页可能需要重新登录。原生网盘账号仍需在账号管理中单独移除。")
+        ) {
+            clearWebSessions()
+        }
+        .themedConfirmation(
+            L10n.text("删除已保存配置？"),
+            isPresented: Binding(
+                get: { pendingSavedVodConfigRemoval != nil },
+                set: { if !$0 { pendingSavedVodConfigRemoval = nil } }
+            ),
+            confirmTitle: L10n.text("删除配置"),
+            message: L10n.text("“{0}”将从本机保存记录中删除。当前已加载内容不会立即切换。", ["\(pendingSavedVodConfigRemovalName)"])
+        ) {
+            guard let config = pendingSavedVodConfigRemoval else { return }
+            pendingSavedVodConfigRemoval = nil
+            guard appState.deleteSavedConfig(config) else { return }
+
+            if vodConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+                == config.url.trimmingCharacters(in: .whitespacesAndNewlines) {
+                vodConfigUrl = ""
+            }
+            syncSavedVodConfigSelection(
+                appState.savedConfigs.filter { $0.type == .vod }.map(\.url)
+            )
+        }
+    }
+
+    private func applySettingsNavigationDestination(_ destination: SettingsNavigationDestination?) {
+        guard let destination else { return }
+        switch destination {
+        case .dataSource:
+            selectedSection = .dataSource
+        case .providers:
+            selectedSection = .providers
+        case .playback:
+            selectedSection = .playback
+        case .network:
+            selectedSection = .network
+        case .system:
+            selectedSection = .system
+        case .appearance:
+            selectedSection = .appearance
+        case .feedback:
+            selectedSection = .feedback
+        }
+        appState.consumeSettingsNavigationDestination(destination)
+    }
+
+    private var settingsSectionSidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.text("设置"))
+                    .font(.system(size: 22, weight: .bold))
+                Text(L10n.text("NetVplayer 偏好"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(palette.muted)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 18)
+
+            VStack(spacing: AppSurfaceVisualPolicy.localNavigationGap) {
+                ForEach(SettingsSection.allCases) { section in
+                    settingsSectionButton(section)
+                }
+            }
+            .padding(.horizontal, 12)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.top, AppSurfaceVisualPolicy.settingsTitleTopPadding)
+        .frame(width: AppSurfaceVisualPolicy.localSidebarWidth)
+        .frame(maxHeight: .infinity)
+    }
+
+    private func settingsSectionButton(_ section: SettingsSection) -> some View {
+        let isSelected = selectedSection == section
+        let isHovered = hoveredSection == section
+
+        return Button {
+            withAnimation(.easeOut(duration: 0.18)) {
+                selectedSection = section
+            }
+        } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    AppNavigationIconBackground(
+                        isSelected: isSelected,
+                        isHovered: isHovered
+                    )
+                    Image(systemName: section.icon)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(
+                            isSelected ? palette.color(for: .onAccent) : palette.muted
+                        )
+                }
+                .frame(width: HomeVisualPolicy.sidebarIconBoxSize, height: HomeVisualPolicy.sidebarIconBoxSize)
+
+                Text(section.title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? palette.foreground : palette.muted)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 9)
+            .frame(maxWidth: .infinity, minHeight: AppSurfaceVisualPolicy.localNavigationRowHeight)
+            .background {
+                AppNavigationRowBackground(
+                    isSelected: isSelected,
+                    isHovered: isHovered
+                )
+            }
+            .contentShape(RoundedRectangle(cornerRadius: HomeVisualPolicy.sidebarCornerRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.14)) {
+                hoveredSection = hovering ? section : (hoveredSection == section ? nil : hoveredSection)
+            }
+        }
+    }
+
+    private var settingsContentHeader: some View {
+        HStack(spacing: 20) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(selectedSection.title)
+                    .font(.system(size: 24, weight: .bold))
+                Text(selectedSection.subtitle)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(palette.muted)
+            }
+
+            Spacer(minLength: 12)
+
+            if selectedSection == .feedback {
+                Label(L10n.text("提交前需预览并确认"), systemImage: "checkmark.shield")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(palette.muted)
+            } else {
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(palette.color(for: .success))
+                        .frame(width: 6, height: 6)
+                        .shadow(
+                            color: palette.color(for: .success).opacity(0.35),
+                            radius: 4
+                        )
+                    Text(L10n.text("更改将自动保存"))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(palette.muted)
+                }
+            }
+        }
+        .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth)
+        .padding(.top, AppSurfaceVisualPolicy.settingsTitleTopPadding)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: AppSurfaceVisualPolicy.settingsHeaderHeight,
+            alignment: .topLeading
+        )
+    }
+
+    @ViewBuilder
+    private var selectedSectionContent: some View {
+        switch selectedSection {
+        case .appearance:
+            appearanceSettings
+        case .dataSource:
+            dataSourceSettings
+        case .providers:
+            providerRuntimeSettings
+        case .playback:
+            playbackSettings
+        case .network:
+            networkSettings
+        case .system:
+            cacheAndSystemSettings
+        case .feedback:
+            FeedbackView()
+        }
+    }
+
+    private var appearanceSettings: some View {
+        VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            SettingsPanelLabel(
+                title: L10n.text("界面主题"),
+                subtitle: L10n.text("选择浏览界面的背景与强调色。"),
+                systemImage: "paintpalette"
+            )
+
+            AppearanceThemePicker(selectedThemeID: appState.appearanceThemeID) { id in
+                if reduceMotion {
+                    appState.selectAppearanceTheme(id)
+                } else {
+                    withAnimation(.easeOut(duration: 0.16)) {
+                        appState.selectAppearanceTheme(id)
+                    }
+                }
+            }
+        }
+    }
+
+    private var dataSourceSettings: some View {
+        VStack(alignment: .leading, spacing: 32) {
+            CredentialPersistenceStatusView()
+            ContentSourceGroup(category: .online) {
+                GroupBox(label: SettingsPanelLabel(
+                    title: L10n.text("影视与直播链接"),
+                    subtitle: L10n.text("添加影视配置链接或直播频道列表，加载后即可浏览和播放。"),
+                    systemImage: "link",
+                    statusText: sourceConfigurationStatus,
+                    statusColor: sourceConfigurationStatusColor
+                )) {
+                    VStack(spacing: 0) {
+                        vodSourceSettings
+
+                        Divider()
+                        liveSourceSettings
+
+                        Divider()
+                        savedVodConfigs
+                        Divider()
+                        DisclosureGroup(L10n.text("支持格式与填写示例"), isExpanded: $sourceFormatsExpanded) {
+                            Text(L10n.text("影视支持 JSON 配置、MacCMS JSON / XML 接口；直播支持 JSON 配置、M3U 和 TXT 频道列表。填写服务方提供的完整配置地址，例如 https://server.example/config.json。"))
+                                .font(.system(size: 12))
+                                .foregroundStyle(palette.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                                .padding(.top, 8)
+                        }
+                        .padding(.vertical, 10)
+                    }
+                    .padding(.leading, 27)
+                }
+                XtreamAccountSettings()
+            }
+            ContentSourceGroup(category: .cloud) { cloudDriveAuthSettings }
+            ContentSourceGroup(category: .files) {
+                FileServiceSettings()
+                MetadataSettings()
+            }
+            ContentSourceGroup(category: .search) {
+                searchSourceSettings
+                connectionCheckSettings
+            }
+        }
+        .groupBoxStyle(AppGroupBoxStyle(expandsToFillWidth: true))
+        .textFieldStyle(SettingsFieldStyle())
+    }
+
+    private func contentSourceNavigation(_ navigate: @escaping (ContentSourceCategory) -> Void) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                ForEach(ContentSourceCategory.allCases) { category in
+                    contentSourceNavigationButton(category, navigate: navigate)
+                }
+            }.fixedSize(horizontal: true, vertical: false)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(ContentSourceCategory.allCases) { category in
+                    contentSourceNavigationButton(category, navigate: navigate)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L10n.text("快速定位"))
+    }
+
+    private func contentSourceNavigationButton(_ category: ContentSourceCategory, navigate: @escaping (ContentSourceCategory) -> Void) -> some View {
+        Button { navigate(category) } label: {
+            Text(category.navigationTitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(palette.foreground)
+                .padding(.horizontal, 12)
+                .frame(minWidth: 120, maxWidth: .infinity, minHeight: 34)
+                .background {
+                    AppGlassSurface(cornerRadius: 8, role: .control, usesSystemMaterial: false)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(category.title)
+    }
+
+    private var providerRuntimeSettings: some View {
+        VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("播放扩展支持"),
+                subtitle: L10n.text("自动准备并更新播放所需组件，无需手动安装。"),
+                systemImage: "puzzlepiece.extension",
+                statusText: providerRuntimeSummaryStatus,
+                statusColor: providerRuntimeSummaryColor
+            )) {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .center, spacing: 14) {
+                        Image(systemName: providerRuntimeSummaryIcon)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(providerRuntimeSummaryColor)
+                            .frame(width: 42, height: 42)
+                            .background {
+                                Circle()
+                                    .fill(providerRuntimeSummaryColor.opacity(0.14))
+                            }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(providerRuntimeSummaryTitle)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(palette.foreground)
+                            Text(providerRuntimeSummaryDescription)
+                                .font(.system(size: 12))
+                                .foregroundStyle(palette.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer(minLength: 12)
+
+                        Button {
+                            appState.refreshProviderRuntimeCatalog()
+                        } label: {
+                            Label(L10n.text("重新检查"), systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(appState.providerRuntimeBusy || !appState.providerRuntimeIsConfigured)
+                        .help(L10n.text("检查并自动更新播放扩展"))
+                    }
+
+                    if appState.providerInstallation.shouldShowNetworkHint {
+                        Label(
+                            L10n.text("首次安装需从 GitHub 下载播放扩展，请确保当前网络可以访问 GitHub 及其下载服务。"),
+                            systemImage: "network"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if let progress = appState.providerRuntimeProgress,
+                       !appState.providerInstallation.detailsExpanded {
+                        if !appState.providerRuntimeInstalled.isEmpty,
+                           !appState.providerInstallation.isInitialInstallation,
+                           progress.phase == .fetchingCatalog {
+                            Label(L10n.text("播放扩展已可用，正在后台检查更新"), systemImage: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(palette.color(for: .success))
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                                    ? L10n.text("正在安全准备播放扩展")
+                                    : L10n.text("正在后台更新播放扩展"))
+                                    .font(.caption)
+                                    .foregroundStyle(palette.muted)
+                                if let fraction = progress.fractionCompleted {
+                                    ProgressView(value: fraction)
+                                } else {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    DisclosureGroup(isExpanded: Binding(
+                        get: { appState.providerInstallation.detailsExpanded },
+                        set: { appState.setProviderRuntimeDetailsExpanded($0) }
+                    )) {
+                        providerRuntimeTechnicalDetails
+                            .padding(.top, 10)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.text("高级诊断"))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(palette.foreground)
+                            Text(appState.providerRuntimeBusy || appState.providerInstallation.shouldShowNetworkHint
+                                ? L10n.text("查看各组件的安装进度与失败原因")
+                                : L10n.text("仅在扩展无法正常工作或客服要求时查看"))
+                                .font(.system(size: 11))
+                                .foregroundStyle(palette.muted)
+                        }
+                    }
+                }
+            }
+
+            GroupBox(L10n.text("组件存储")) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let usage = appState.providerStorageUsage {
+                        Text(L10n.text("组件：{0} · 用户数据：{1}", ["\(ByteCountFormatter.string(fromByteCount: usage.componentBytes, countStyle: .file))", "\(ByteCountFormatter.string(fromByteCount: usage.stateBytes, countStyle: .file))"]))
+                        Text(L10n.text("清理旧版本保留当前版本与回滚版本；卸载组件保留账号和用户数据。"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button(L10n.text("清理旧版本")) { appState.prepareProviderMaintenance(.obsoleteVersions) }
+                                .disabled(usage.obsoleteBytes == 0 || usage.pendingRecovery)
+                            Button(L10n.text("停用并卸载组件"), role: .destructive) { appState.prepareProviderMaintenance(.uninstall) }
+                                .disabled(usage.componentBytes == 0 || usage.pendingRecovery)
+                            if usage.pendingRecovery { Button(L10n.text("恢复维护")) { appState.recoverProviderMaintenance() } }
+                            if appState.providerComponentsDisabled { Button(L10n.text("重新启用组件")) { appState.enableProviderComponents() } }
+                        }
+                    } else { Text(L10n.text("正在统计组件占用…")) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .disabled(appState.providerRuntimeBusy)
+            .task { await appState.refreshProviderStorage() }
+            .sheet(item: $appState.providerMaintenancePlan) { plan in
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(plan.mode == .uninstall ? L10n.text("停用并卸载组件") : L10n.text("清理旧版本")).font(.headline)
+                    Text(L10n.text("预计释放 {0}。账号、配置、历史和用户数据将保留。", ["\(ByteCountFormatter.string(fromByteCount: plan.bytes, countStyle: .file))"]))
+                    if plan.mode == .uninstall { Text(L10n.text("卸载后暂停自动安装，需要时可重新启用。")) }
+                    HStack {
+                        Button(L10n.text("取消")) { appState.providerMaintenancePlan = nil }
+                        Spacer()
+                        Button(L10n.text("确认清理"), role: .destructive) { appState.executeProviderMaintenance() }.disabled(plan.paths.isEmpty && plan.mode != .uninstall)
+                    }
+                }.padding(24).frame(width: 440).themedPresentation()
+            }
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("隐私与安全"),
+                subtitle: L10n.text("扩展在受限环境中运行，账号权限始终由你控制。"),
+                systemImage: "hand.raised.fill"
+            )) {
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingsControlRow(title: L10n.text("安全更新"), caption: L10n.text("只接受固定地址和签名校验通过的扩展")) {
+                        Label(L10n.text("已开启"), systemImage: "checkmark.shield.fill")
+                            .font(.caption)
+                            .foregroundStyle(palette.color(for: .success))
+                    }
+                    Divider().padding(.vertical, 8)
+                    SettingsControlRow(title: L10n.text("凭据保护"), caption: L10n.text("网盘与自有后端凭据仅保存在本机")) {
+                        Label(L10n.text("本机保存"), systemImage: "lock.fill")
+                            .font(.caption)
+                            .foregroundStyle(palette.color(for: .success))
+                    }
+                    Divider().padding(.vertical, 8)
+                    SettingsControlRow(title: L10n.text("网络保护"), caption: L10n.text("默认拒绝明文连接和跨站凭据转发")) {
+                        Label(L10n.text("受保护"), systemImage: "network.badge.shield.half.filled")
+                            .font(.caption)
+                            .foregroundStyle(palette.color(for: .success))
+                    }
+                }
+                .padding(.leading, 27)
+            }
+
+            Text(L10n.text("扩展只提供格式兼容能力，不包含视频源，也不会执行配置中的远程脚本。"))
+                .font(.caption)
+                .foregroundStyle(palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear {
+            if appState.providerRuntimeIsConfigured,
+               !appState.providerRuntimeBusy,
+               !appState.providerComponentsDisabled,
+               appState.providerInstallation.sessionID == nil,
+               appState.providerRuntimeCatalog.isEmpty,
+               appState.providerRuntimeInstalled.isEmpty {
+                appState.refreshProviderRuntimeCatalog()
+            }
+        }
+    }
+
+    private var providerRuntimeSummaryStatus: String {
+        if !appState.providerRuntimeIsConfigured { return L10n.text("未配置") }
+        if appState.providerRuntimeBusy {
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                ? L10n.text("正在准备") : L10n.text("后台检查")
+        }
+        if appState.providerRuntimeLocalPackageInvalid { return L10n.text("需要修复") }
+        if !appState.providerRuntimeInitialInstallCompleted { return L10n.text("安装未完成") }
+        if !appState.providerRuntimePendingVersions.isEmpty { return L10n.text("更新待处理") }
+        if providerRuntimeHasFailure {
+            return appState.providerRuntimeInstalled.isEmpty ? L10n.text("安装未完成") : L10n.text("检查未完成")
+        }
+        return appState.providerRuntimeInstalled.isEmpty ? L10n.text("尚未就绪") : L10n.text("运行正常")
+    }
+
+    private var providerRuntimeSummaryTitle: String {
+        if !appState.providerRuntimeIsConfigured { return L10n.text("当前构建未启用扩展支持") }
+        if appState.providerRuntimeBusy {
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                ? L10n.text("正在准备扩展能力") : L10n.text("扩展能力已就绪")
+        }
+        if appState.providerRuntimeLocalPackageInvalid { return L10n.text("本地扩展需要重新安装") }
+        if !appState.providerRuntimeInitialInstallCompleted { return L10n.text("首次扩展安装未完成") }
+        if !appState.providerRuntimePendingVersions.isEmpty { return L10n.text("扩展更新待处理") }
+        if providerRuntimeHasFailure {
+            return appState.providerRuntimeInstalled.isEmpty ? L10n.text("扩展安装未完成") : L10n.text("扩展更新检查未完成")
+        }
+        return appState.providerRuntimeInstalled.isEmpty ? L10n.text("等待自动准备") : L10n.text("扩展能力已就绪")
+    }
+
+    private var providerRuntimeSummaryDescription: String {
+        if !appState.providerRuntimeIsConfigured {
+            return L10n.text("当前安装包缺少签名公钥或分发地址，请安装已配置扩展支持的版本。")
+        }
+        if appState.providerRuntimeBusy {
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                ? L10n.text("NetVplayer 正在检查并自动更新所需组件。")
+                : L10n.text("已启用 {0} 项兼容组件，正在后台检查更新。", ["\(appState.providerRuntimeInstalled.count)"])
+        }
+        if appState.providerRuntimeLocalPackageInvalid {
+            return L10n.text("此前安装的扩展未通过本地校验，正在等待重新安装。")
+        }
+        if !appState.providerRuntimeInitialInstallCompleted {
+            return L10n.text("所需扩展尚未全部准备好，数据源会在安装完成后加载。")
+        }
+        if !appState.providerRuntimePendingVersions.isEmpty {
+            return L10n.text("有 {0} 项更新未完成，已安装版本仍可使用。", ["\(appState.providerRuntimePendingVersions.count)"])
+        }
+        if providerRuntimeHasFailure {
+            return appState.providerRuntimeInstalled.isEmpty
+                ? L10n.text("播放扩展安装未完成，请重新检查。")
+                : L10n.text("暂时无法检查更新，已安装组件仍可正常使用。")
+        }
+        if appState.providerRuntimeInstalled.isEmpty {
+            return L10n.text("NetVplayer 会在需要时自动准备，无需选择版本或安装位置。")
+        }
+        return L10n.text("已自动启用 {0} 项兼容组件，并会保持更新。", ["\(appState.providerRuntimeInstalled.count)"])
+    }
+
+    private var providerRuntimeSummaryIcon: String {
+        if !appState.providerRuntimeIsConfigured { return "puzzlepiece.extension" }
+        if appState.providerRuntimeBusy {
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                ? "arrow.triangle.2.circlepath"
+                : "checkmark.circle.fill"
+        }
+        if appState.providerRuntimeLocalPackageInvalid
+            || !appState.providerRuntimeInitialInstallCompleted
+            || !appState.providerRuntimePendingVersions.isEmpty
+            || providerRuntimeHasFailure { return "exclamationmark.triangle.fill" }
+        return appState.providerRuntimeInstalled.isEmpty ? "clock.fill" : "checkmark.circle.fill"
+    }
+
+    private var providerRuntimeSummaryColor: Color {
+        if !appState.providerRuntimeIsConfigured { return palette.muted }
+        if appState.providerRuntimeBusy {
+            return appState.providerInstallation.isInitialInstallation || appState.providerRuntimeInstalled.isEmpty
+                ? palette.color(for: .loading)
+                : palette.color(for: .success)
+        }
+        if appState.providerRuntimeLocalPackageInvalid
+            || !appState.providerRuntimeInitialInstallCompleted
+            || !appState.providerRuntimePendingVersions.isEmpty
+            || providerRuntimeHasFailure { return palette.color(for: .warning) }
+        return appState.providerRuntimeInstalled.isEmpty ? palette.muted : palette.color(for: .success)
+    }
+
+    private var providerRuntimeHasFailure: Bool {
+        appState.providerRuntimeHasFailure
+    }
+
+    private var latestProviderRuntimeCatalog: [ProviderRelease] {
+        Dictionary(grouping: appState.providerRuntimeCatalog, by: \.providerID)
+            .values
+            .compactMap { releases in
+                releases.max { lhs, rhs in
+                    lhs.version.compare(rhs.version, options: .numeric) == .orderedAscending
+                }
+            }
+            .sorted { providerRuntimeDisplayName($0.providerID) < providerRuntimeDisplayName($1.providerID) }
+    }
+
+    private var providerRuntimeTechnicalDetails: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if appState.providerInstallation.sessionID != nil {
+                ProviderInstallationProgressView(
+                    installation: appState.providerInstallation,
+                    isBusy: appState.providerRuntimeBusy,
+                    displayName: providerRuntimeDisplayName,
+                    retry: { appState.installProvider(providerID: $0.providerID, version: $0.version) }
+                )
+                if !appState.providerRuntimeInstalled.isEmpty {
+                    Divider().padding(.vertical, 10)
+                    providerRuntimeInstalledDetails
+                }
+            } else {
+                providerRuntimeVersionDetails
+            }
+        }
+    }
+
+    private var providerRuntimeInstalledDetails: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L10n.text("已启用组件"))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.foreground)
+
+            if appState.providerRuntimeInstalled.isEmpty {
+                Text(L10n.text("暂无已启用组件"))
+                    .font(.caption)
+                    .foregroundStyle(palette.muted)
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(appState.providerRuntimeInstalled, id: \.manifest.providerID) { document in
+                    SettingsControlRow(
+                        title: providerRuntimeDisplayName(document.manifest.providerID),
+                        caption: "\(document.manifest.providerID) · \(providerRuntimeDisplayName(document.manifest.runtime.rawValue)) · v\(document.manifest.version)"
+                    ) {
+                        Label(L10n.text("已启用"), systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(palette.color(for: .success))
+                    }
+                }
+            }
+        }
+    }
+
+    private var providerRuntimeVersionDetails: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            providerRuntimeInstalledDetails
+            Divider().padding(.vertical, 10)
+
+            Text(L10n.text("推荐版本"))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.foreground)
+            Text(L10n.text("每类只显示当前推荐版本，历史版本由应用自动管理。"))
+                .font(.system(size: 11))
+                .foregroundStyle(palette.muted)
+                .padding(.top, 2)
+
+            if latestProviderRuntimeCatalog.isEmpty {
+                Text(L10n.text("暂时无法获取推荐版本"))
+                    .font(.caption)
+                    .foregroundStyle(palette.muted)
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(latestProviderRuntimeCatalog, id: \.providerID) { release in
+                    let installed = appState.providerRuntimeInstalled.first {
+                        $0.manifest.providerID == release.providerID
+                    }
+                    let isCurrent = installed?.manifest.version == release.version
+                    let isRetry = appState.providerRuntimeFailedRelease == ProviderVersionReference(
+                        providerID: release.providerID,
+                        version: release.version
+                    )
+
+                    SettingsControlRow(
+                        title: providerRuntimeDisplayName(release.providerID),
+                        caption: L10n.text("{0} · 推荐 v{1}", ["\(release.providerID)", "\(release.version)"])
+                    ) {
+                        if isCurrent {
+                            Label(L10n.text("已是最新"), systemImage: "checkmark")
+                                .font(.caption)
+                                .foregroundStyle(palette.muted)
+                        } else {
+                            Button {
+                                appState.installProvider(
+                                    providerID: release.providerID,
+                                    version: release.version
+                                )
+                            } label: {
+                                Label(
+                                    isRetry ? L10n.text("重试") : (installed == nil ? L10n.text("修复") : L10n.text("更新")),
+                                    systemImage: isRetry ? "arrow.clockwise" : "arrow.down.circle"
+                                )
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(appState.providerRuntimeBusy)
+                            .help(L10n.text("下载并启用此播放扩展"))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func providerRuntimeDisplayName(_ value: String) -> String {
+        switch value {
+        case "netvplayer.configurable.python": return L10n.text("通用配置兼容")
+        case "netvplayer.catalog.python": return L10n.text("常用数据源兼容")
+        case "netvplayer.catalog.java": return L10n.text("Java 数据源兼容")
+        case "netvplayer.catalog.javascript": return L10n.text("JavaScript 数据源兼容")
+        case "netvplayer.catalog.quickjs": return L10n.text("轻量脚本兼容")
+        case "python": return "Python"
+        case "java": return "Java"
+        case "js": return "JavaScript"
+        case "quickjs": return "QuickJS"
+        default: return L10n.text("扩展组件")
+        }
+    }
+
+    private var vodSourceSettings: some View {
+        SettingsControlRow(title: L10n.text("影视配置链接"), caption: L10n.text("使用已有的影视配置")) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 9) {
+                    TextField(L10n.text("粘贴影视配置链接"), text: $vodConfigUrl)
+                        .textFieldStyle(SettingsFieldStyle())
+
+                    Button(L10n.text("加载影视")) {
+                        isLoadingVod = true
+                        Task {
+                            await appState.loadConfig(url: vodConfigUrl)
+                            isLoadingVod = false
+                        }
+                    }
+                    .disabled(vodConfigUrl.isEmpty || isLoadingVod)
+                    .buttonStyle(.borderedProminent)
+                    .tint(palette.accent)
+                }
+
+                if isLoadingVod {
+                    Label(L10n.text("正在加载点播源"), systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(palette.muted)
+                        .font(.caption)
+                } else if let error = appState.configError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(palette.color(for: .danger))
+                        .font(.caption)
+                } else if appState.isConfigLoaded {
+                    Label(L10n.text("点播源已加载成功"), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(palette.color(for: .success))
+                        .font(.caption)
+                } else {
+                    Text(L10n.text("尚未加载点播配置"))
+                        .foregroundStyle(palette.muted)
+                        .font(.caption)
+                }
+
+                if let notice = appState.configNotice, !notice.isEmpty {
+                    Label(notice, systemImage: "megaphone")
+                        .font(.caption)
+                        .foregroundStyle(palette.muted)
+                }
+            }
+        }
+    }
+
+    private var savedVodConfigs: some View {
+        let configs = appState.savedConfigs.filter { $0.type == .vod }
+
+        return SettingsControlRow(title: L10n.text("已保存的影视配置"), caption: L10n.text("快速切换本机保存的影视配置")) {
+            HStack(spacing: 9) {
+                SettingsChoicePicker(title: L10n.text("已保存的影视配置"), selection: $selectedSavedVodConfigURL, choices: [""] + configs.map(\.url)) { url in
+                    guard let config = configs.first(where: { $0.url == url }) else {
+                        return configs.isEmpty ? L10n.text("未检测到已保存配置") : L10n.text("选择一个配置")
+                    }
+                    return config.name.isEmpty ? config.url : config.name
+                }
+                .frame(maxWidth: .infinity)
+
+                Button(L10n.text("加载")) {
+                    guard let config = configs.first(where: { $0.url == selectedSavedVodConfigURL }) else { return }
+                    vodConfigUrl = config.url
+                    isLoadingVod = true
+                    Task {
+                        await appState.loadConfig(url: config.url)
+                        isLoadingVod = false
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(selectedSavedVodConfigURL.isEmpty || isLoadingVod)
+
+                Button(role: .destructive) {
+                    pendingSavedVodConfigRemoval = configs.first {
+                        $0.url == selectedSavedVodConfigURL
+                    }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.bordered)
+                .disabled(selectedSavedVodConfigURL.isEmpty || isLoadingVod)
+                .help(L10n.text("删除所选配置"))
+                .accessibilityLabel(L10n.text("删除所选配置"))
+            }
+            .onAppear {
+                syncSavedVodConfigSelection(configs.map(\.url))
+            }
+            .onChange(of: configs.map(\.url)) { _, urls in
+                syncSavedVodConfigSelection(urls)
+            }
+        }
+    }
+
+    private var pendingSavedVodConfigRemovalName: String {
+        guard let config = pendingSavedVodConfigRemoval else { return L10n.text("所选配置") }
+        let name = config.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? config.url : name
+    }
+
+    private var searchSourceSettings: some View {
+        GroupBox(label: SettingsPanelLabel(
+            title: L10n.text("搜索设置"),
+            subtitle: L10n.text("选择搜索哪些站点，并优先搜索响应稳定的站点。"),
+            systemImage: "magnifyingglass"
+        )) {
+            VStack(spacing: 0) {
+                compactDefaultSearchSites
+
+                Divider()
+
+                SettingsControlRow(title: L10n.text("优先搜索响应稳定的站点"), caption: L10n.text("根据近期响应情况调整请求顺序")) {
+                    Toggle(L10n.text("优先搜索响应稳定的站点"), isOn: Binding(
+                        get: { siteHealthSortingEnabled },
+                        set: { newValue in
+                            siteHealthSortingEnabled = newValue
+                            UserPreferences.shared.siteHealthSortingEnabled = newValue
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+
+            }
+            .padding(.leading, 27)
+        }
+    }
+
+    private var connectionCheckSettings: some View {
+        GroupBox(label: SettingsPanelLabel(
+            title: L10n.text("连接检查"),
+            subtitle: L10n.text("搜索或播放遇到问题时，查看配置、站点响应和账号相关检查结果。"),
+            systemImage: "network"
+        )) {
+            VStack(spacing: 0) {
+                configReportDisclosureRow
+                if configReportExpanded {
+                    Divider()
+                    advancedConfigDiagnostics.padding(.vertical, 10)
+                }
+            }
+            .padding(.leading, 27)
+        }
+    }
+
+    private var compactDefaultSearchSites: some View {
+        let sites = appState.sites.filter(\.isSearchable)
+        let enabledCount = sites.filter { appState.isDefaultSearchSiteEnabled($0) }.count
+
+        return SettingsControlRow(title: L10n.text("搜索范围"), caption: L10n.text("未自定义时使用全部站点")) {
+            HStack(spacing: 9) {
+                Menu {
+                    ForEach(sites, id: \.key) { site in
+                        Button {
+                            appState.setDefaultSearchSite(
+                                site,
+                                enabled: !appState.isDefaultSearchSiteEnabled(site)
+                            )
+                        } label: {
+                            Label(
+                                site.name,
+                                systemImage: appState.isDefaultSearchSiteEnabled(site) ? "checkmark" : "circle"
+                            )
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(enabledCount == sites.count ? L10n.text("全部站点") : L10n.text("已选 {0} / {1}", ["\(enabledCount)", "\(sites.count)"]))
+                            .fontWeight(.semibold)
+                        Text(enabledCount == sites.count ? L10n.text("默认") : L10n.text("自定义"))
+                            .foregroundStyle(palette.muted)
+                    }
+                }
+                .menuStyle(.button)
+
+                Button(L10n.text("全部启用")) {
+                    appState.resetDefaultSearchSites()
+                }
+                .buttonStyle(.bordered)
+                .disabled(sites.isEmpty || enabledCount == sites.count)
+            }
+        }
+    }
+
+    private var configReportDisclosureRow: some View {
+        let snapshot = appState.configAggregationSnapshot
+        let hasScan = appState.isConfigLoaded || !appState.externalSourceReports.isEmpty
+
+        return SettingsControlRow(title: L10n.text("查看详细检查报告"), caption: L10n.text("配置兼容性、账号风险与资源状态")) {
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    configReportExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    SettingsStatusTag(
+                        label: L10n.text("外部源"),
+                        value: hasScan ? "\(snapshot.fetchedSources.count)" : L10n.text("尚未扫描")
+                    )
+                    SettingsStatusTag(
+                        label: L10n.text("风险"),
+                        value: hasScan ? "\(snapshot.credentialRiskCount)" : L10n.text("尚未扫描")
+                    )
+                    Spacer(minLength: 6)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .rotationEffect(.degrees(configReportExpanded ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var advancedConfigDiagnostics: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !appState.availableDepots.isEmpty {
+                DisclosureGroup(L10n.text("配置仓库")) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(appState.availableDepots, id: \.url) { depot in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(depot.name.isEmpty ? L10n.text("未命名配置") : depot.name)
+                                        .font(.caption.weight(.medium))
+                                    Text(depot.url)
+                                        .font(.caption2)
+                                        .foregroundStyle(palette.muted)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Button(L10n.text("加载")) {
+                                    vodConfigUrl = depot.url
+                                    isLoadingVod = true
+                                    Task {
+                                        await appState.loadDepot(depot)
+                                        isLoadingVod = false
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+            }
+
+            configAggregationReport
+
+            if !appState.externalSourceReports.isEmpty {
+                Divider()
+                DisclosureGroup(isExpanded: $compatibilityReportExpanded) {
+                    externalSourceCompatibilityReport
+                        .padding(.top, 8)
+                } label: {
+                    Label(L10n.text("外部源兼容状态"), systemImage: "checkmark.shield")
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
+
+            Divider()
+            sourceHygieneReport
+
+            Divider()
+            credentialRiskReport
+
+            Divider()
+            resourceDiagnosticsReport
+
+            if !appState.siteHealthSummaries.isEmpty {
+                Divider()
+                siteHealthDiagnostics
+            }
+
+            Divider()
+            liveLineQualityReport
+        }
+    }
+
+    private var sourceConfigurationStatus: String {
+        if isLoadingVod || appState.isLoadingLiveConfiguration || appState.isLoadingLive { return L10n.text("正在加载") }
+        if appState.configError != nil || appState.liveConfigurationError != nil { return L10n.text("配置异常") }
+        if appState.isConfigLoaded || !appState.channelGroups.isEmpty { return L10n.text("配置已就绪") }
+        return L10n.text("等待配置")
+    }
+
+    private var sourceConfigurationStatusColor: Color {
+        if appState.configError != nil || appState.liveConfigurationError != nil { return palette.color(for: .danger) }
+        if appState.isConfigLoaded || !appState.channelGroups.isEmpty { return palette.color(for: .success) }
+        return palette.muted
+    }
+
+    private func syncSavedVodConfigSelection(_ urls: [String]) {
+        selectedSavedVodConfigURL = SavedVodConfigSelectionPolicy.resolvedSelection(
+            savedURLs: urls,
+            activeURL: UserPreferences.shared.currentVodConfigUrl
+        )
+    }
+
+    private var externalSourceCompatibilityReport: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(L10n.text("外部源兼容状态")).font(.subheadline).bold()
+                Spacer()
+                Text(L10n.text("{0} 个站点", ["\(appState.externalSourceReports.count)"]))
+                    .font(.caption)
+                    .foregroundColor(palette.muted)
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), alignment: .leading)], alignment: .leading, spacing: 8) {
+                ForEach(ExternalSourceSupportStatus.allCases, id: \.self) { status in
+                    let count = appState.externalSourceReportCount(for: status)
+                    if count > 0 {
+                        Label("\(status.userFacingTitle) \(count)", systemImage: compatibilityStatusIcon(status))
+                            .font(.caption)
+                            .foregroundColor(compatibilityStatusColor(status))
+                    }
+                }
+            }
+
+            let visibleReports = appState.externalSourceReports
+                .filter { $0.status != .cms || !$0.reason.isEmpty }
+                .prefix(16)
+            ForEach(visibleReports) { report in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: compatibilityStatusIcon(report.status))
+                        .foregroundColor(compatibilityStatusColor(report.status))
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(report.siteName.isEmpty ? report.siteKey : report.siteName)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Text(report.status.userFacingTitle)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(compatibilityStatusColor(report.status))
+                        Text(report.reason)
+                            .font(.caption2)
+                            .foregroundColor(palette.muted)
+                            .lineLimit(2)
+                        if !report.suggestion.isEmpty {
+                            Text(L10n.text("建议：{0}", ["\(report.suggestion)"]))
+                                .font(.caption2)
+                                .foregroundColor(palette.muted)
+                                .lineLimit(2)
+                        }
+                        if !report.sourceURL.isEmpty {
+                            Text(L10n.text("来源：{0}", ["\(report.sourceURL)"]))
+                                .font(.caption2)
+                                .foregroundColor(palette.muted)
+                                .lineLimit(1)
+                        }
+                        if !report.credentialRequirements.isEmpty {
+                            Text(L10n.text("凭据：{0}", ["\(report.credentialRequirements.map(\.provider).joined(separator: ", "))"]))
+                                .font(.caption2)
+                                .foregroundColor(palette.color(for: .warning))
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    private var configAggregationReport: some View {
+        let snapshot = appState.configAggregationSnapshot
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(L10n.text("配置聚合报告")).font(.subheadline).bold()
+                Spacer()
+                Text(L10n.text("{0} 个条目来源", ["\(snapshot.origins.count)"]))
+                    .font(.caption)
+                    .foregroundColor(palette.muted)
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 8) {
+                Label(L10n.text("外部源 {0}", ["\(snapshot.fetchedSources.count)"]), systemImage: "square.and.arrow.down")
+                Label(L10n.text("URL 归一化 {0}", ["\(snapshot.normalizedURLCount)"]), systemImage: "link")
+                Label(L10n.text("去重 {0}", ["\(snapshot.duplicateCount)"]), systemImage: "rectangle.stack.badge.minus")
+                Label(L10n.text("凭据 {0}", ["\(snapshot.credentialRequirements.count)"]), systemImage: "key")
+                Label(L10n.text("治理 {0}", ["\(snapshot.blockedByUserCount)"]), systemImage: "hand.raised")
+                Label(L10n.text("风险 {0}", ["\(snapshot.credentialRiskCount)"]), systemImage: "exclamationmark.shield")
+                Label(L10n.text("资源 {0}", ["\(snapshot.resourceDiagnostics.count)"]), systemImage: "shippingbox")
+            }
+            .font(.caption)
+            .foregroundColor(palette.muted)
+
+            ForEach(snapshot.fetchedSources.prefix(6)) { source in
+                HStack(spacing: 8) {
+                    Image(systemName: source.status == "success" ? "checkmark.circle" : "exclamationmark.triangle")
+                        .foregroundColor(source.status == "success" ? palette.color(for: .success) : palette.color(for: .warning))
+                    Text(source.field)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    Text(source.finalURL.isEmpty ? source.resolvedURL : source.finalURL)
+                        .font(.caption2)
+                        .foregroundColor(palette.muted)
+                        .lineLimit(1)
+                    Spacer()
+                    if source.status == "success" {
+                        Text("\(source.itemCount)")
+                            .font(.caption2)
+                            .foregroundColor(palette.muted)
+                    }
+                }
+            }
+        }
+    }
+
+    private var sourceHygieneReport: some View {
+        DisclosureGroup(isExpanded: $sourceHygieneExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label(L10n.text("{0} 条本地规则", ["\(appState.sourceHygieneRules.count)"]), systemImage: "line.3.horizontal.decrease.circle")
+                        .font(.caption)
+                        .foregroundColor(palette.muted)
+                    Spacer()
+                    Button {
+                        appState.blockActiveSiteByFingerprint()
+                    } label: {
+                        Label(L10n.text("屏蔽当前站点"), systemImage: "hand.raised")
+                    }
+                    .disabled(appState.activeSite == nil)
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        appState.clearSourceHygieneRules()
+                    } label: {
+                        Label(L10n.text("恢复全部"), systemImage: "arrow.counterclockwise")
+                    }
+                    .disabled(appState.sourceHygieneRules.isEmpty)
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        appState.exportSourceDiagnostics()
+                    } label: {
+                        Label(L10n.text("导出诊断"), systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if let status = appState.sourceDiagnosticExportStatus {
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundColor(palette.muted)
+                        .lineLimit(2)
+                }
+
+                ForEach(appState.sourceHygieneRules.prefix(6)) { rule in
+                    HStack(spacing: 8) {
+                        Image(systemName: rule.isEnabled ? "checkmark.circle" : "pause.circle")
+                            .foregroundColor(rule.isEnabled ? palette.color(for: .success) : palette.muted)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(rule.name.isEmpty ? rule.pattern : rule.name)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("\(sourceHygieneKindTitle(rule.kind)) · \(rule.pattern)")
+                                .font(.caption2)
+                                .foregroundColor(palette.muted)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+
+                ForEach(appState.configAggregationSnapshot.hygieneDecisions.prefix(6)) { decision in
+                    Label("\(decision.entityName.isEmpty ? decision.entityKey : decision.entityName)：\(decision.reason)", systemImage: "slash.circle")
+                        .font(.caption2)
+                        .foregroundColor(palette.color(for: .warning))
+                        .lineLimit(2)
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Label(L10n.text("源治理"), systemImage: "hand.raised")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+        }
+    }
+
+    private var credentialRiskReport: some View {
+        DisclosureGroup(isExpanded: $credentialRiskExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                let risks = appState.configAggregationSnapshot.credentialRiskAssessments
+                HStack {
+                    Label(L10n.text("已扫描 {0} 个站点", ["\(risks.count)"]), systemImage: "key.viewfinder")
+                        .font(.caption)
+                        .foregroundColor(palette.muted)
+                    Spacer()
+                    Label(L10n.text("需关注 {0}", ["\(appState.configAggregationSnapshot.credentialRiskCount)"]), systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundColor(palette.color(for: .warning))
+                }
+
+                ForEach(risks.filter { $0.riskLevel != .safe }.prefix(8)) { risk in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: credentialRiskIcon(risk.riskLevel))
+                            .foregroundColor(credentialRiskColor(risk.riskLevel))
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(risk.siteName.isEmpty ? risk.siteKey : risk.siteName)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text("\(credentialRiskTitle(risk.riskLevel)) · \(risk.reason)")
+                                .font(.caption2)
+                                .foregroundColor(palette.muted)
+                                .lineLimit(2)
+                            if !risk.thirdPartyDomains.isEmpty {
+                                Text(L10n.text("域名：{0}", ["\(risk.thirdPartyDomains.joined(separator: ", "))"]))
+                                    .font(.caption2)
+                                    .foregroundColor(palette.muted)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Label(L10n.text("凭据风险"), systemImage: "exclamationmark.shield")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+        }
+    }
+
+    private var resourceDiagnosticsReport: some View {
+        DisclosureGroup(isExpanded: $resourceDiagnosticsExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                let diagnostics = appState.configAggregationSnapshot.resourceDiagnostics
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), alignment: .leading)], alignment: .leading, spacing: 8) {
+                    ForEach(ExternalResourceDiagnosticStatus.allCases, id: \.self) { status in
+                        let count = diagnostics.filter { $0.status == status }.count
+                        if count > 0 {
+                            Label("\(status.userFacingTitle) \(count)", systemImage: resourceStatusIcon(status))
+                                .foregroundColor(resourceStatusColor(status))
+                        }
+                    }
+                }
+                .font(.caption)
+
+                ForEach(diagnostics.prefix(8)) { diagnostic in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: resourceStatusIcon(diagnostic.status))
+                            .foregroundColor(resourceStatusColor(diagnostic.status))
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(diagnostic.ownerName.isEmpty ? diagnostic.ownerKey : diagnostic.ownerName) · \(diagnostic.resourceType.rawValue)")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text(diagnostic.url)
+                                .font(.caption2)
+                                .foregroundColor(palette.muted)
+                                .lineLimit(1)
+                            Text(diagnostic.reason)
+                                .font(.caption2)
+                                .foregroundColor(palette.muted)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Label(L10n.text("资源诊断"), systemImage: "shippingbox")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+        }
+    }
+
+    private var liveLineQualityReport: some View {
+        DisclosureGroup(isExpanded: $liveLineQualityExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label(L10n.text("{0} 条线路记录", ["\(appState.liveLineHealthSummaries.count)"]), systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.caption)
+                        .foregroundColor(palette.muted)
+                    Spacer()
+                    Button {
+                        isProbingCurrentLiveGroup = true
+                        Task {
+                            await appState.probeCurrentLiveGroup()
+                            isProbingCurrentLiveGroup = false
+                        }
+                    } label: {
+                        Label(L10n.text("检测当前分组"), systemImage: "waveform.path.ecg")
+                    }
+                    .disabled(isProbingCurrentLiveGroup || appState.channelGroups.isEmpty)
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        appState.clearLiveLineHealthRecords()
+                    } label: {
+                        Label(L10n.text("清理记录"), systemImage: "trash")
+                    }
+                    .disabled(appState.liveLineHealthSummaries.isEmpty)
+                    .buttonStyle(.bordered)
+                }
+
+                if isProbingCurrentLiveGroup {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                }
+
+                ForEach(appState.liveLineHealthSummaries.prefix(8)) { summary in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: summary.failureCount > 0 ? "exclamationmark.triangle" : "checkmark.circle")
+                            .foregroundColor(summary.failureCount > 0 ? palette.color(for: .warning) : palette.color(for: .success))
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(summary.channelName)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                            Text(L10n.text("成功 {0} · 失败 {1} · 平均 {2}ms · HTTP {3}", ["\(summary.successCount)", "\(summary.failureCount)", "\(summary.averageTTFBMs)", "\(summary.lastStatusCode)"]))
+                                .font(.caption2)
+                                .foregroundColor(palette.muted)
+                            Text(summary.redactedURL)
+                                .font(.caption2)
+                                .foregroundColor(palette.muted)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Label(L10n.text("直播线路质量"), systemImage: "waveform.path.ecg")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+        }
+    }
+
+    private var siteHealthDiagnostics: some View {
+        let summaries = appState.siteHealthSummaries.values
+            .sorted { lhs, rhs in
+                if lhs.failureCount != rhs.failureCount {
+                    return lhs.failureCount > rhs.failureCount
+                }
+                if lhs.score != rhs.score {
+                    return lhs.score < rhs.score
+                }
+                return lhs.averageDurationMs > rhs.averageDurationMs
+            }
+            .prefix(6)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(L10n.text("站点健康诊断")).font(.subheadline).bold()
+                Spacer()
+                Button {
+                    appState.clearSiteHealthRecords()
+                } label: {
+                    Label(L10n.text("清理健康记录"), systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            ForEach(Array(summaries), id: \.siteKey) { summary in
+                HStack(spacing: 10) {
+                    Image(systemName: summary.failureCount > 0 ? "waveform.path.ecg" : "checkmark.circle")
+                        .foregroundColor(summary.failureCount > 0 ? palette.color(for: .warning) : palette.color(for: .success))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(summary.siteName.isEmpty ? summary.siteKey : summary.siteName)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Text(siteHealthDetailText(summary))
+                            .font(.caption2)
+                            .foregroundColor(palette.muted)
+                    }
+                    Spacer()
+                    Text("\(summary.displayPercent)%")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(siteHealthColor(summary))
+                        .frame(width: 44, alignment: .trailing)
+                }
+            }
+        }
+    }
+
+    private func siteHealthDetailText(_ summary: SiteHealthSummary) -> String {
+        var parts = [
+            L10n.text("失败 {0}", ["\(summary.failureCount)"]),
+            L10n.text("平均 {0}ms", ["\(summary.averageDurationMs)"])
+        ]
+        if let category = summary.lastFailureCategory {
+            parts.append(L10n.text("最后 {0}", ["\(category.rawValue)"]))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func siteHealthColor(_ summary: SiteHealthSummary) -> Color {
+        if summary.score >= 0.8 { return palette.color(for: .success) }
+        if summary.score >= 0.5 { return palette.color(for: .warning) }
+        return palette.color(for: .danger)
+    }
+
+    private func sourceHygieneKindTitle(_ kind: SourceHygieneRuleKind) -> String {
+        switch kind {
+        case .siteFingerprint: return L10n.text("站点指纹")
+        case .siteNameRegex: return L10n.text("名称正则")
+        case .parseURL: return L10n.text("解析 URL")
+        case .liveURL: return L10n.text("直播 URL")
+        }
+    }
+
+    private func credentialRiskTitle(_ level: CredentialRiskLevel) -> String {
+        switch level {
+        case .safe: return L10n.text("安全")
+        case .low: return L10n.text("低风险")
+        case .high: return L10n.text("高风险")
+        case .unaudited: return L10n.text("待审计")
+        }
+    }
+
+    private func credentialRiskIcon(_ level: CredentialRiskLevel) -> String {
+        switch level {
+        case .safe: return "checkmark.shield"
+        case .low: return "exclamationmark.shield"
+        case .high: return "xmark.shield"
+        case .unaudited: return "questionmark.diamond"
+        }
+    }
+
+    private func credentialRiskColor(_ level: CredentialRiskLevel) -> Color {
+        switch level {
+        case .safe: return palette.color(for: .success)
+        case .low: return palette.color(for: .warning)
+        case .high: return palette.color(for: .danger)
+        case .unaudited: return palette.muted
+        }
+    }
+
+    private func resourceStatusIcon(_ status: ExternalResourceDiagnosticStatus) -> String {
+        switch status {
+        case .recorded: return "checkmark.circle"
+        case .blocked: return "nosign"
+        case .androidRuntimeOnly: return "exclamationmark.triangle"
+        case .unsupportedType: return "questionmark.circle"
+        }
+    }
+
+    private func resourceStatusColor(_ status: ExternalResourceDiagnosticStatus) -> Color {
+        switch status {
+        case .recorded: return palette.color(for: .success)
+        case .blocked: return palette.color(for: .danger)
+        case .androidRuntimeOnly: return palette.color(for: .warning)
+        case .unsupportedType: return palette.muted
+        }
+    }
+
+    private func compatibilityStatusIcon(_ status: ExternalSourceSupportStatus) -> String {
+        switch status {
+        case .native: return "arrow.triangle.branch"
+        case .nativePartial: return "circle.lefthalf.filled"
+        case .js: return "curlybraces"
+        case .cms: return "link"
+        case .pendingGuardCapture: return "rectangle.and.text.magnifyingglass"
+        case .upstreamUnavailable: return "bolt.slash"
+        case .invalidConfiguration: return "exclamationmark.octagon"
+        case .unsupportedAndroidCsp: return "exclamationmark.triangle"
+        case .unsupportedBinary: return "xmark.octagon"
+        }
+    }
+
+    private func compatibilityStatusColor(_ status: ExternalSourceSupportStatus) -> Color {
+        switch status {
+        case .native: return palette.accent
+        case .nativePartial: return palette.color(for: .warning)
+        case .js, .cms: return palette.accent
+        case .pendingGuardCapture: return palette.color(for: .warning)
+        case .upstreamUnavailable: return palette.color(for: .danger)
+        case .invalidConfiguration: return palette.color(for: .danger)
+        case .unsupportedAndroidCsp: return palette.color(for: .warning)
+        case .unsupportedBinary: return palette.color(for: .warning)
+        }
+    }
+
+    private var liveSourceSettings: some View {
+        SettingsControlRow(title: L10n.text("直播频道列表"), caption: L10n.text("使用已有的电视直播列表")) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 9) {
+                    TextField(L10n.text("粘贴直播频道列表链接"), text: $liveConfigUrl)
+                        .textFieldStyle(SettingsFieldStyle())
+
+                    Button(L10n.text("加载直播")) {
+                        Task {
+                            await appState.loadLiveConfiguration(url: liveConfigUrl)
+                        }
+                    }
+                    .disabled(liveConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || appState.isLoadingLiveConfiguration)
+                    .buttonStyle(.bordered)
+                }
+
+                if !appState.lives.isEmpty {
+                    LiveSourcePicker()
+                    Text(L10n.text("已发现 {0} 个直播源，请选择要播放的源。", ["\(appState.lives.count)"]))
+                        .foregroundStyle(palette.muted)
+                        .font(.caption)
+                }
+
+                if let error = appState.liveConfigurationError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(palette.color(for: .danger))
+                        .font(.caption)
+                } else if appState.isLoadingLiveConfiguration {
+                    Label(L10n.text("正在加载直播配置"), systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(palette.muted)
+                        .font(.caption)
+                } else if appState.isLoadingLive {
+                    Label(L10n.text("正在加载频道列表"), systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(palette.muted)
+                        .font(.caption)
+                } else if let error = appState.liveError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(palette.color(for: .danger))
+                        .font(.caption)
+                } else if !appState.channelGroups.isEmpty {
+                    Label(L10n.text("直播配置已解析成功"), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(palette.color(for: .success))
+                        .font(.caption)
+                } else {
+                    Text(L10n.text("尚未加载直播配置"))
+                        .foregroundStyle(palette.muted)
+                        .font(.caption)
+                }
+            }
+        }
+    }
+
+    private var cloudDriveAuthSettings: some View {
+        GroupBox(label: SettingsPanelLabel(
+            title: L10n.text("登录网盘"),
+            subtitle: L10n.text("播放需要网盘账号的视频时，在这里登录对应的网盘。"),
+            systemImage: "externaldrive.badge.person.crop"
+        )) {
+            VStack(alignment: .leading, spacing: 12) {
+                ViewThatFits(in: .horizontal) {
+                    Picker(L10n.text("网盘服务"), selection: $selectedCloudProvider) {
+                        ForEach(CloudProvider.allCases) { provider in
+                            Text(L10n.text(provider.rawValue)).tag(provider)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize(horizontal: true, vertical: false)
+                    SettingsChoicePicker(title: L10n.text("网盘服务"), selection: $selectedCloudProvider, choices: CloudProvider.allCases) { L10n.text($0.rawValue) }
+                }
+                .onChange(of: selectedCloudProvider) { _, provider in
+                    cloudCookieSaved = false
+                    cloudCookieVerified = false
+                    cloudCookieStatus = nil
+                    isManualCloudAuthExpanded = !CloudAuthSettingsPolicy.supportsPrimaryQRCodeLogin(
+                        provider.driveProvider
+                    )
+                }
+                .disabled(isValidatingCloudCookie)
+
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(
+                            cloudCookieVerified
+                                ? palette.color(for: .success)
+                                : palette.muted
+                        )
+                        .frame(width: 7, height: 7)
+                    Text(selectedCloudProviderStatus)
+                        .font(.caption)
+                        .foregroundStyle(palette.muted)
+                    Spacer(minLength: 0)
+                }
+
+                Divider()
+
+                HStack(spacing: 10) {
+                    if CloudAuthSettingsPolicy.supportsPrimaryQRCodeLogin(selectedCloudProvider.driveProvider) {
+                        Button {
+                            appState.requestCloudAuthFromSettings(selectedCloudProvider.driveProvider)
+                        } label: {
+                            Label(L10n.text("扫码登录"), systemImage: "qrcode.viewfinder")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isValidatingCloudCookie || appState.cloudAuthRequest != nil)
+                    } else {
+                        Label(L10n.text("暂不支持扫码授权"), systemImage: "key.horizontal")
+                            .font(.caption)
+                            .foregroundStyle(palette.muted)
+                    }
+
+                    Button {
+                        clearSelectedCloudProvider()
+                    } label: {
+                        Label(L10n.text("清空账号"), systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+
+                    if cloudCookieSaved {
+                        Label(
+                            selectedCloudProviderHasCredential || cloudCookieVerified ? L10n.text("已保存") : L10n.text("已清空"),
+                            systemImage: "checkmark.circle.fill"
+                        )
+                            .foregroundStyle(palette.color(for: .success))
+                            .font(.caption)
+                    }
+
+                    if isValidatingCloudCookie {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                    }
+                }
+
+                DisclosureGroup(isExpanded: $isManualCloudAuthExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        selectedCloudProviderFields
+
+                        Button {
+                            saveCloudCookiesFromSettings()
+                        } label: {
+                            Label(
+                                isValidatingCloudCookie ? L10n.text("保存中...") : L10n.text("验证并保存手动凭据"),
+                                systemImage: "checkmark.circle"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isValidatingCloudCookie || !selectedCloudProviderHasCredential)
+                    }
+                    .disabled(isValidatingCloudCookie)
+                    .padding(.top, 8)
+                } label: {
+                    Label(
+                        CloudAuthSettingsPolicy.supportsPrimaryQRCodeLogin(selectedCloudProvider.driveProvider)
+                            ? L10n.text("高级：手动登录（备选）")
+                            : L10n.text("手动授权"),
+                        systemImage: "key.horizontal"
+                    )
+                    .font(.system(size: 12, weight: .medium))
+                }
+
+                if let cloudCookieStatus {
+                    SettingsInlineMessage(message: cloudCookieStatus, role: cloudCookieMessageRole)
+                }
+
+                Divider()
+
+                SettingsControlRow(
+                    title: L10n.text("{0}播放后自动清理", ["\(selectedCloudProvider.rawValue)"]),
+                    caption: L10n.text("删除{0}播放链路创建的临时转存文件；未创建转存时不会删除任何内容", ["\(selectedCloudProvider.rawValue)"])
+                ) {
+                    Toggle(
+                        L10n.text("{0}播放后自动清理", ["\(selectedCloudProvider.rawValue)"]),
+                        isOn: selectedCloudAutoDeleteBinding
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+
+                Text(selectedCloudProvider.authorizationGuidance)
+                    .font(.caption)
+                    .foregroundStyle(palette.muted)
+            }
+            .padding(.leading, 27)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var selectedCloudAutoDeleteBinding: Binding<Bool> {
+        let provider = selectedCloudProvider
+        return Binding(
+            get: {
+                cloudAutoDeleteSavedFiles[provider] ?? false
+            },
+            set: { newValue in
+                cloudAutoDeleteSavedFiles[provider] = newValue
+                UserPreferences.shared.setCloudDriveAutoDeleteSavedFiles(
+                    newValue,
+                    providerID: provider.driveProvider.rawValue
+                )
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var selectedCloudProviderFields: some View {
+        switch selectedCloudProvider {
+        case .quark:
+            cloudSecureField(L10n.text("夸克 Cookie"), placeholder: L10n.text("粘贴 pan.quark.cn Cookie"), text: $quarkCookie)
+        case .uc:
+            cloudSecureField("UC Cookie", placeholder: L10n.text("粘贴 drive.uc.cn Cookie"), text: $ucCookie)
+        case .ali:
+            Text(L10n.text("三种 Token 至少填写一项；Refresh Token 可用于自动续期。"))
+                .font(.caption).foregroundStyle(palette.muted)
+            cloudSecureField("Refresh Token", placeholder: L10n.text("粘贴阿里云盘 refresh_token"), text: $aliRefreshToken, requirement: .serverDependent)
+            cloudSecureField("Access Token", placeholder: L10n.text("可选"), text: $aliAccessToken, requirement: .serverDependent)
+            cloudSecureField("Open Token", placeholder: L10n.text("可选"), text: $aliOpenToken, requirement: .serverDependent)
+            cloudTextField("Default Drive ID", placeholder: L10n.text("转存到个人盘时使用"), text: $aliDefaultDriveID)
+        case .p115:
+            cloudSecureField("115 Cookie", placeholder: L10n.text("粘贴 115.com Cookie"), text: $p115Cookie)
+            cloudSecureField("Open API Token", placeholder: L10n.text("可选"), text: $p115AccessToken, requirement: .optional)
+        case .pikpak:
+            Text(L10n.text("Access Token 和 Refresh Token 至少填写一项。"))
+                .font(.caption).foregroundStyle(palette.muted)
+            cloudSecureField("Access Token", placeholder: L10n.text("粘贴 PikPak access_token"), text: $pikpakAccessToken, requirement: .serverDependent)
+            cloudSecureField("Refresh Token", placeholder: L10n.text("可选"), text: $pikpakRefreshToken, requirement: .serverDependent)
+            cloudTextField("Device ID", placeholder: L10n.text("可选"), text: $pikpakDeviceID)
+        case .baidu:
+            cloudSecureField(L10n.text("百度 Cookie"), placeholder: L10n.text("扫码登录，或粘贴 BDUSS/STOKEN"), text: $baiduCookie)
+        }
+    }
+
+    private func cloudSecureField(_ title: String, placeholder: String, text: Binding<String>, requirement: FormFieldRequirement = .required) -> some View {
+        SettingsControlRow(title: title, caption: L10n.text("输入后仅保存在本机"), requirement: requirement) {
+            SettingsPasswordField(placeholder, text: trackedCloudCredential(text))
+                .id(selectedCloudProvider)
+        }
+    }
+
+    private func cloudTextField(_ title: String, placeholder: String, text: Binding<String>) -> some View {
+        SettingsControlRow(title: title, caption: L10n.text("非敏感标识"), requirement: .optional) {
+            TextField(placeholder, text: trackedCloudCredential(text))
+                .textFieldStyle(SettingsFieldStyle())
+        }
+    }
+
+    private func trackedCloudCredential(_ value: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { value.wrappedValue },
+            set: { newValue in
+                value.wrappedValue = newValue
+                markCloudCredentialsDirty()
+            }
+        )
+    }
+
+    private var selectedCloudProviderHasCredential: Bool {
+        let values: [String]
+        switch selectedCloudProvider {
+        case .quark: values = [quarkCookie]
+        case .uc: values = [ucCookie]
+        case .ali: values = [aliRefreshToken, aliAccessToken, aliOpenToken]
+        case .p115: values = [p115Cookie, p115AccessToken]
+        case .pikpak: values = [pikpakAccessToken, pikpakRefreshToken]
+        case .baidu: values = [baiduCookie]
+        }
+        return values.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private var selectedCloudProviderStatus: String {
+        if let cloudCookieStatus, !cloudCookieStatus.isEmpty {
+            return cloudCookieStatus
+        }
+        return selectedCloudProviderHasCredential
+            ? L10n.text("{0}账号信息已填写，尚未验证", [L10n.text(selectedCloudProvider.rawValue)])
+            : L10n.text("{0}未连接", [L10n.text(selectedCloudProvider.rawValue)])
+    }
+
+    private var cloudCookieMessageRole: AppSemanticColorRole {
+        guard cloudCookieSaved else { return .danger }
+        return cloudCookieVerified || !selectedCloudProviderHasCredential ? .success : .warning
+    }
+
+    private func markCloudCredentialsDirty() {
+        cloudCookieSaved = false
+        cloudCookieVerified = false
+        cloudCookieStatus = nil
+    }
+
+    private var playbackSettings: some View {
+        VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("播放行为"),
+                subtitle: L10n.text("为新播放会话选择默认解码策略。"),
+                systemImage: "play.circle"
+            )) {
+                VStack(spacing: 0) {
+                    SettingsControlRow(title: L10n.text("解码方式"), caption: L10n.text("自动模式沿用播放器默认策略")) {
+                        Picker(L10n.text("解码方式"), selection: $decodeMode) {
+                            Text(L10n.text("自动")).tag(0)
+                            Text(L10n.text("硬件加速")).tag(1)
+                            Text(L10n.text("软解优先")).tag(2)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 330)
+                        .onChange(of: decodeMode) { _, newValue in
+                            UserPreferences.shared.defaultDecodeMode = newValue
+                        }
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(
+                        title: L10n.text("播放器窗口"),
+                        caption: windowPreferenceStatus ?? L10n.text("分别记住点播与直播普通窗口的位置和大小")
+                    ) {
+                        Button {
+                            PlayerWindowPreferenceStore.main.reset()
+                            PlayerWindowPreferenceStore.live.reset()
+                            windowPreferenceStatus = L10n.text("已重置，下次打开窗口时生效")
+                        } label: {
+                            Label(L10n.text("重置窗口位置"), systemImage: "rectangle.badge.xmark")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("字幕"),
+                subtitle: L10n.text("播放器即时刷新字幕样式，不需要重启视频。"),
+                systemImage: "captions.bubble"
+            )) {
+                VStack(spacing: 0) {
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button(L10n.text("恢复默认")) {
+                            UserPreferences.shared.resetSubtitlePreferences()
+                            subtitleAppearance = UserPreferences.shared.subtitleAppearance
+                            refreshSubtitleStyle()
+                            subtitleFontSize = UserPreferences.shared.subtitleFontSize
+                            subtitlePosition = UserPreferences.shared.subtitlePosition
+                            subtitleOverrideSourceStyle = UserPreferences.shared.subtitleOverrideSourceStyle
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.bottom, 6)
+
+                    SettingsControlRow(
+                        title: L10n.text("忽略片源字幕样式"),
+                        caption: L10n.text("避免异常字号和位置覆盖本地偏好")
+                    ) {
+                        Toggle(L10n.text("忽略片源字幕样式"), isOn: $subtitleOverrideSourceStyle)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: subtitleOverrideSourceStyle) { _, newValue in
+                                UserPreferences.shared.subtitleOverrideSourceStyle = newValue
+                                refreshSubtitleStyle()
+                            }
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(title: L10n.text("字幕大小"), caption: L10n.text("范围 16 至 72")) {
+                        SettingsSlider(value: Binding(
+                            get: { Double(subtitleFontSize) },
+                            set: { newValue in
+                                subtitleFontSize = Int(newValue.rounded())
+                                UserPreferences.shared.subtitleFontSize = subtitleFontSize
+                                refreshSubtitleStyle()
+                            }
+                        ), range: 16...72, step: 1, valueText: "\(subtitleFontSize)")
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(title: L10n.text("字幕位置"), caption: L10n.text("100 最靠近画面底部")) {
+                        SettingsSlider(value: Binding(
+                            get: { Double(subtitlePosition) },
+                            set: { newValue in
+                                subtitlePosition = Int(newValue.rounded())
+                                UserPreferences.shared.subtitlePosition = subtitlePosition
+                                refreshSubtitleStyle()
+                            }
+                        ), range: 0...100, step: 1, valueText: "\(subtitlePosition)")
+                    }
+                    Divider()
+                    SubtitleAppearanceControls(appearance: $subtitleAppearance)
+                        .padding(.vertical, 12)
+                    SubtitleAppearanceControls(appearance: $subtitleAppearance, isBitmap: true)
+                        .padding(.vertical, 12)
+                        .onChange(of: subtitleAppearance) { _, value in
+                            UserPreferences.shared.subtitleAppearance = value
+                            refreshSubtitleStyle()
+                        }
+                }
+            }
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("弹幕手动入口"),
+                subtitle: L10n.text("只在播放器中手动搜索并命中缓存后附加。"),
+                systemImage: "text.bubble"
+            )) {
+                VStack(spacing: 0) {
+                    SettingsControlRow(title: L10n.text("启用弹幕入口"), caption: L10n.text("不会自动请求外部弹幕源")) {
+                        Toggle(L10n.text("启用弹幕手动入口"), isOn: Binding(
+                            get: { danmakuEnabled },
+                            set: { newValue in
+                                danmakuEnabled = newValue
+                                UserPreferences.shared.danmakuEnabled = newValue
+                            }
+                        ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(title: L10n.text("透明度"), caption: L10n.text("控制弹幕覆盖强度")) {
+                        SettingsSlider(value: Binding(
+                            get: { danmakuOpacity },
+                            set: { newValue in
+                                danmakuOpacity = min(1, max(0, newValue))
+                                UserPreferences.shared.danmakuOpacity = danmakuOpacity
+                            }
+                        ), range: 0.2...1.0, step: 0.05, valueText: String(format: "%.0f%%", danmakuOpacity * 100))
+                    }
+                    .disabled(!danmakuEnabled)
+                    .opacity(danmakuEnabled ? 1 : 0.48)
+
+                    Divider()
+
+                    SettingsControlRow(title: L10n.text("字号"), caption: L10n.text("范围 18 至 72")) {
+                        SettingsSlider(value: Binding(
+                            get: { Double(danmakuFontSize) },
+                            set: { newValue in
+                                danmakuFontSize = Int(newValue.rounded())
+                                UserPreferences.shared.danmakuFontSize = danmakuFontSize
+                            }
+                        ), range: 18...72, step: 1, valueText: "\(danmakuFontSize)")
+                    }
+                    .disabled(!danmakuEnabled)
+                    .opacity(danmakuEnabled ? 1 : 0.48)
+
+                    Divider()
+
+                    SettingsControlRow(title: L10n.text("时间偏移"), caption: L10n.text("负值提前，正值延后")) {
+                        SettingsSlider(value: Binding(
+                            get: { Double(danmakuOffsetMs) / 1000.0 },
+                            set: { newValue in
+                                danmakuOffsetMs = Int((newValue * 1000).rounded())
+                                UserPreferences.shared.danmakuOffsetMs = danmakuOffsetMs
+                            }
+                        ), range: -30...30, step: 0.5, valueText: String(format: "%.1fs", Double(danmakuOffsetMs) / 1000.0))
+                    }
+                    .disabled(!danmakuEnabled)
+                    .opacity(danmakuEnabled ? 1 : 0.48)
+                }
+            }
+        }
+    }
+
+    private var networkSettings: some View {
+        VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("网络与代理"),
+                subtitle: L10n.text("自动探测适合多数环境，自定义模式可指定本机端口。"),
+                systemImage: "network"
+            )) {
+                VStack(spacing: 0) {
+                    SettingsControlRow(title: L10n.text("代理模式"), caption: L10n.text("变更后应用到后续网络请求")) {
+                        Picker(L10n.text("代理模式"), selection: $proxyMode) {
+                            Text(L10n.text("自动探测")).tag(0)
+                            Text(L10n.text("直连")).tag(1)
+                            Text(L10n.text("自定义")).tag(2)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 330)
+                        .onChange(of: proxyMode) { _, newValue in
+                            UserPreferences.shared.proxyMode = newValue
+                            applyProxyChange()
+                        }
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(title: L10n.text("自定义代理"), caption: L10n.text("仅在自定义模式下启用")) {
+                        HStack(spacing: 8) {
+                            TextField("127.0.0.1", text: $customProxyServer)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 180)
+                                .onChange(of: customProxyServer) { _, newValue in
+                                    UserPreferences.shared.customProxyServer = newValue
+                                    applyProxyChange()
+                                }
+
+                            TextField("7897", value: $customProxyPort, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 84)
+                                .onChange(of: customProxyPort) { _, newValue in
+                                    UserPreferences.shared.customProxyPort = newValue
+                                    applyProxyChange()
+                                }
+                        }
+                        .disabled(proxyMode != 2)
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(title: L10n.text("分片 Range Relay"), caption: L10n.text("实验性分片中继，默认关闭")) {
+                        Toggle(L10n.text("分片 Range Relay"), isOn: Binding(
+                            get: { chunkedRangeRelayEnabled },
+                            set: { newValue in
+                                chunkedRangeRelayEnabled = newValue
+                                UserPreferences.shared.chunkedRangeRelayEnabled = newValue
+                            }
+                        ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(title: L10n.text("连接诊断"), caption: L10n.text("刷新代理探测与网络会话")) {
+                        Button {
+                            applyProxyChange()
+                        } label: {
+                            Label(L10n.text("重新探测"), systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("模式说明"),
+                subtitle: L10n.text("选择与当前网络环境最匹配的请求路径。"),
+                systemImage: "info.circle"
+            )) {
+                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 10) {
+                    GridRow {
+                        Text(L10n.text("模式"))
+                        Text(L10n.text("适用场景"))
+                        Text(L10n.text("本地字段"))
+                    }
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(palette.muted)
+
+                    Divider().gridCellColumns(3)
+                    proxyModeDescriptionRow(L10n.text("自动探测"), scenario: L10n.text("系统代理或常见本机客户端"), fields: L10n.text("自动"))
+                    proxyModeDescriptionRow(L10n.text("直连"), scenario: L10n.text("明确不经过任何代理"), fields: L10n.text("忽略"))
+                    proxyModeDescriptionRow(L10n.text("自定义"), scenario: L10n.text("指定服务器与端口"), fields: L10n.text("必填"))
+                }
+            }
+        }
+    }
+
+    private func proxyModeDescriptionRow(_ mode: String, scenario: String, fields: String) -> some View {
+        GridRow {
+            Text(mode).fontWeight(.medium)
+            Text(scenario).foregroundStyle(palette.muted)
+            Text(fields)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(palette.muted)
+        }
+        .font(.system(size: 12))
+    }
+
+    private var cacheAndSystemSettings: some View {
+        VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            GroupBox(L10n.text("界面语言")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker(L10n.text("语言"), selection: $languageMode) {
+                        Text(L10n.text("跟随系统")).tag("system")
+                        Text("简体中文").tag("zh-Hans")
+                        Text("English").tag("en")
+                    }
+                    Text(L10n.text("语言更改将在下次启动时生效。影片和频道名称保留原文。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                    if languageMode != launchedLanguageMode {
+                        Button(L10n.text("立即重启")) {
+                            do { try AppRelaunchCoordinator.shared.relaunch() }
+                            catch { languageRestartError = error.localizedDescription }
+                        }
+                    }
+                    if let languageRestartError {
+                        Text(languageRestartError).font(.caption).foregroundStyle(palette.color(for: .warning))
+                    }
+                }
+            }
+            CredentialPersistenceStatusView()
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("缓存管理"),
+                subtitle: L10n.text("查看并清理可重新生成的数据。"),
+                systemImage: "trash"
+            )) {
+                VStack(spacing: 0) {
+                    SettingsControlRow(
+                        title: L10n.text("磁盘缓存"),
+                        caption: cacheDiskBreakdownText
+                    ) {
+                        Text(displayCacheSize)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(palette.lavender)
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(
+                        title: L10n.text("列表缓存"),
+                        caption: cacheMemoryBreakdownText
+                    ) {
+                        HStack(spacing: 10) {
+                            Button(role: .destructive) {
+                                isShowingCacheConfirmation = true
+                            } label: {
+                                Label(L10n.text("清理性能缓存"), systemImage: "trash")
+                            }
+                            .disabled(isClearingCache)
+
+                            Button(role: .destructive) {
+                                isShowingWebSessionConfirmation = true
+                            } label: {
+                                Label(L10n.text("清除网页会话"), systemImage: "person.crop.circle.badge.xmark")
+                            }
+                            .disabled(isClearingCache)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if let cacheOperationStatus {
+                        Divider()
+                        SettingsControlRow(title: L10n.text("最近操作"), caption: cacheOperationStatus) {
+                            Image(systemName: cacheOperationFailed ? "exclamationmark.triangle" : "checkmark.circle")
+                                .foregroundStyle(cacheOperationFailed ? palette.color(for: .warning) : palette.color(for: .success))
+                        }
+                    }
+                }
+            }
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("WebHome 实验入口"),
+                subtitle: L10n.text("启用后在主侧栏加入 WebHome。"),
+                systemImage: "house"
+            )) {
+                VStack(spacing: 0) {
+                    SettingsControlRow(title: L10n.text("启用 WebHome"), caption: L10n.text("默认关闭")) {
+                        Toggle(L10n.text("启用 WebHome 实验入口"), isOn: Binding(
+                            get: { webHomeEnabled },
+                            set: { newValue in
+                                webHomeEnabled = newValue
+                                UserPreferences.shared.webHomeEnabled = newValue
+                                if !newValue, appState.selectedTab == .webHome {
+                                    appState.selectedTab = .vodHome
+                                }
+                            }
+                        ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(title: "WebHome URL", caption: webHomeURLStatusText) {
+                        TextField(L10n.text("留空使用内置本地 demo"), text: Binding(
+                            get: { webHomeURL },
+                            set: { newValue in
+                                webHomeURL = newValue
+                                UserPreferences.shared.webHomeURL = newValue
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!webHomeEnabled)
+                    }
+                }
+            }
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("备份与迁移"),
+                subtitle: L10n.text("Cookie 与 Token 不会写入备份文件。"),
+                systemImage: "arrow.up.arrow.down.square"
+            )) {
+                VStack(spacing: 0) {
+                    SettingsControlRow(
+                        title: L10n.text("应用数据"),
+                        caption: L10n.text("配置源、历史、收藏和非敏感偏好")
+                    ) {
+                        HStack(spacing: 8) {
+                            Button { exportBackup() } label: {
+                                Label(L10n.text("导出备份"), systemImage: "square.and.arrow.up")
+                            }
+                            Button { importBackup() } label: {
+                                Label(L10n.text("导入备份"), systemImage: "square.and.arrow.down")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if let backupStatus {
+                        Text(backupStatus)
+                            .font(.caption)
+                            .foregroundColor(backupStatusIsError ? .red : .green)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.bottom, 8)
+                    }
+
+                    Divider()
+
+                    SettingsControlRow(
+                        title: L10n.text("播放进度"),
+                        caption: L10n.text("不包含播放 URL 或敏感凭据")
+                    ) {
+                        HStack(spacing: 8) {
+                            Button { exportPlaybackProgress() } label: {
+                                Label(L10n.text("导出进度"), systemImage: "clock.arrow.circlepath")
+                            }
+                            Button { importPlaybackProgress() } label: {
+                                Label(L10n.text("导入进度"), systemImage: "tray.and.arrow.down")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if let progressSyncStatus {
+                        Text(progressSyncStatus)
+                            .font(.caption)
+                            .foregroundColor(progressSyncStatusIsError ? .red : .green)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.bottom, 8)
+                    }
+                }
+            }
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("关于 NetVplayer"),
+                subtitle: L10n.text("macOS 媒体中心"),
+                systemImage: "gearshape"
+            )) {
+                HStack {
+                    Label(L10n.text("原生 macOS 界面 / 内置播放器"), systemImage: "macwindow")
+                        .font(.caption)
+                        .foregroundStyle(palette.muted)
+                    Spacer(minLength: 0)
+                    AppUpdateVersionButton(placement: .settings)
+                }
+                MetadataAttributionView().padding(.top, 12)
+            }
+        }
+    }
+
+    private func refreshSubtitleStyle() {
+        MPVPlayerEngine.vod.refreshSubtitleStyle()
+        MPVPlayerEngine.live.refreshSubtitleStyle()
+    }
+
+    private func loadSettingsState() {
+        subtitleAppearance = UserPreferences.shared.subtitleAppearance
+        vodConfigUrl = UserPreferences.shared.currentVodConfigUrl
+        liveConfigUrl = UserPreferences.shared.currentLiveConfigUrl
+        loadCloudCredentialState()
+        cloudAutoDeleteSavedFiles = Dictionary(uniqueKeysWithValues: CloudProvider.allCases.map { provider in
+            (
+                provider,
+                UserPreferences.shared.cloudDriveAutoDeleteSavedFiles(providerID: provider.driveProvider.rawValue)
+            )
+        })
+        cloudCookieSaved = false
+        cloudCookieVerified = false
+        cloudCookieStatus = nil
+
+        decodeMode = UserPreferences.shared.defaultDecodeMode
+        subtitleFontSize = UserPreferences.shared.subtitleFontSize
+        subtitlePosition = UserPreferences.shared.subtitlePosition
+        subtitleOverrideSourceStyle = UserPreferences.shared.subtitleOverrideSourceStyle
+        danmakuEnabled = UserPreferences.shared.danmakuEnabled
+        danmakuOpacity = UserPreferences.shared.danmakuOpacity
+        danmakuFontSize = UserPreferences.shared.danmakuFontSize
+        danmakuOffsetMs = UserPreferences.shared.danmakuOffsetMs
+        siteHealthSortingEnabled = UserPreferences.shared.siteHealthSortingEnabled
+
+        proxyMode = UserPreferences.shared.proxyMode
+        customProxyServer = UserPreferences.shared.customProxyServer
+        customProxyPort = UserPreferences.shared.customProxyPort
+        chunkedRangeRelayEnabled = UserPreferences.shared.chunkedRangeRelayEnabled
+        webHomeEnabled = UserPreferences.shared.webHomeEnabled
+        webHomeURL = UserPreferences.shared.webHomeURL
+
+        appState.reloadSavedConfigs()
+        refreshCacheSize()
+    }
+
+    private func loadCloudCredentialState() {
+        quarkCookie = UserPreferences.shared.quarkCookie
+        ucCookie = UserPreferences.shared.ucCookie
+        baiduCookie = UserPreferences.shared.baiduCookie
+        aliRefreshToken = UserPreferences.shared.aliRefreshToken
+        aliAccessToken = UserPreferences.shared.aliAccessToken
+        aliOpenToken = UserPreferences.shared.aliOpenToken
+        aliDefaultDriveID = UserPreferences.shared.aliDefaultDriveID
+        p115Cookie = UserPreferences.shared.p115Cookie
+        p115AccessToken = UserPreferences.shared.p115AccessToken
+        pikpakAccessToken = UserPreferences.shared.pikpakAccessToken
+        pikpakRefreshToken = UserPreferences.shared.pikpakRefreshToken
+        pikpakDeviceID = UserPreferences.shared.pikpakDeviceID
+    }
+
+    private var webHomeURLStatusText: String {
+        let trimmed = webHomeURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return L10n.text("默认关闭；开启后空 URL 加载内置本地 demo。远程页面只能通过白名单 bridge 和 /webResource 访问资源，不暴露网盘凭据。")
+        }
+        do {
+            _ = try WebHomeDestination.resolve(trimmed)
+            return L10n.text("URL 校验通过；加载时仍会走白名单 bridge 和响应脱敏。")
+        } catch {
+            return UserFacingErrorPresenter.message(for: error, context: .webContent)
+        }
+    }
+
+    private var cacheDiskBreakdownText: String {
+        guard let cacheSnapshot else { return L10n.text("正在统计海报与网络缓存") }
+        return L10n.text("海报 {0} · 网络 {1}", ["\(formattedCacheBytes(cacheSnapshot.posterBytes))", "\(formattedCacheBytes(cacheSnapshot.networkBytes))"])
+    }
+
+    private var cacheMemoryBreakdownText: String {
+        guard let cacheSnapshot else { return L10n.text("正在统计分类与详情条目") }
+        return L10n.text("分类 {0} 页 / {1} 部 · 详情 {2} 项", ["\(cacheSnapshot.catalogPages)", "\(cacheSnapshot.catalogVods)", "\(cacheSnapshot.detailEntries)"])
+    }
+
+    private func formattedCacheBytes(_ size: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter.string(fromByteCount: max(0, size))
+    }
+
+    private func refreshCacheSize(debounced: Bool = false) {
+        cacheRefreshTask?.cancel()
+        cacheRefreshTask = Task { @MainActor in
+            if debounced {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+            }
+            let snapshot = await CacheCoordinator.shared.snapshot()
+            guard !Task.isCancelled else { return }
+            cacheSnapshot = snapshot
+            displayCacheSize = formattedCacheBytes(snapshot.totalDiskBytes)
+            cacheRefreshTask = nil
+        }
+    }
+
+    private func clearPerformanceCaches() {
+        isClearingCache = true
+        cacheOperationStatus = nil
+        appState.didClearPerformanceCaches()
+        Task { @MainActor in
+            let report = await CacheCoordinator.shared.clearPerformanceCaches()
+            isClearingCache = false
+            cacheOperationFailed = !report.succeeded
+            cacheOperationStatus = report.succeeded
+                ? L10n.text("性能缓存已清理，登录状态和用户数据已保留。")
+                : report.failures.joined(separator: "；")
+            refreshCacheSize()
+        }
+    }
+
+    private func clearWebSessions() {
+        isClearingCache = true
+        cacheOperationStatus = nil
+        Task { @MainActor in
+            let report = await CacheCoordinator.shared.clearWebSessions()
+            isClearingCache = false
+            cacheOperationFailed = !report.succeeded
+            cacheOperationStatus = report.succeeded
+                ? L10n.text("网页会话已清除；原生网盘账号保持不变。")
+                : report.failures.joined(separator: "；")
+            refreshCacheSize()
+        }
+    }
+
+    private func applyProxyChange() {
+        ProxyDetector.shared.clearCache()
+        HTTPClient.shared.clearProxySessions()
+
+        Task {
+            await ProxyDetector.shared.detectActiveProxy()
+        }
+    }
+
+    private func exportBackup() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "NetVplayer-Backup-\(backupDateString()).json"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try appState.exportBackup(to: url)
+            backupStatusIsError = false
+            backupStatus = L10n.text("备份已导出")
+        } catch {
+            backupStatusIsError = true
+            backupStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: L10n.text("导出备份"))
+            )
+        }
+    }
+
+    private func importBackup() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { @MainActor in
+            do {
+                let preview = try appState.inspectBackup(from: url)
+                let legacyNote = preview.isLegacy ? L10n.text("\n这是旧版备份，历史播放引用会先迁移和清洗。") : ""
+                guard await AppDialogCenter.shared.present(
+                    title: L10n.text("确认导入备份？"),
+                    message: L10n.text("将覆盖当前的 {0} 个配置、{1} 条历史、{2} 个收藏和 {3} 条轨道偏好。{4}", ["\(preview.configCount)", "\(preview.historyCount)", "\(preview.keepCount)", "\(preview.trackCount)", legacyNote]),
+                    confirmTitle: L10n.text("导入"), isDestructive: true
+                ) != nil else { return }
+
+                let backup = try appState.importBackup(from: url)
+                backupStatusIsError = false
+                backupStatus = L10n.text("已导入 {0} 个配置、{1} 条历史、{2} 个收藏", ["\(backup.configs.count)", "\(backup.history.count)", "\(backup.keeps.count)"])
+                vodConfigUrl = UserPreferences.shared.currentVodConfigUrl
+                liveConfigUrl = UserPreferences.shared.currentLiveConfigUrl
+                decodeMode = UserPreferences.shared.defaultDecodeMode
+                subtitleFontSize = UserPreferences.shared.subtitleFontSize
+                subtitlePosition = UserPreferences.shared.subtitlePosition
+                subtitleOverrideSourceStyle = UserPreferences.shared.subtitleOverrideSourceStyle
+            } catch {
+                backupStatusIsError = true
+                backupStatus = UserFacingErrorPresenter.message(
+                    for: error,
+                    context: .storage(operation: L10n.text("导入备份"))
+                )
+            }
+        }
+    }
+
+    private func exportPlaybackProgress() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "NetVplayer-Progress-\(backupDateString()).json"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try appState.exportPlaybackProgress(to: url)
+            progressSyncStatusIsError = false
+            progressSyncStatus = L10n.text("播放进度已导出")
+        } catch {
+            progressSyncStatusIsError = true
+            progressSyncStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: L10n.text("导出播放进度"))
+            )
+        }
+    }
+
+    private func importPlaybackProgress() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let progress = try appState.importPlaybackProgress(from: url)
+            progressSyncStatusIsError = false
+            progressSyncStatus = L10n.text("已导入 {0} 条播放进度", ["\(progress.records.count)"])
+        } catch {
+            progressSyncStatusIsError = true
+            progressSyncStatus = UserFacingErrorPresenter.message(
+                for: error,
+                context: .storage(operation: L10n.text("导入播放进度"))
+            )
+        }
+    }
+
+    private func backupDateString() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = L10n.locale
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
+    }
+
+    private func saveCloudCookiesFromSettings() {
+        let provider = selectedCloudProvider
+        isValidatingCloudCookie = true
+        cloudCookieSaved = false
+        cloudCookieVerified = false
+        cloudCookieStatus = nil
+
+        Task {
+            do {
+                switch provider {
+                case .quark:
+                    try await appState.validateAndSaveCloudCookie(
+                        provider: .quark,
+                        cookie: quarkCookie.trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                case .uc:
+                    try await appState.validateAndSaveCloudCookie(
+                        provider: .uc,
+                        cookie: ucCookie.trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                case .ali:
+                    UserPreferences.shared.aliRefreshToken = aliRefreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                    UserPreferences.shared.aliAccessToken = aliAccessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                    UserPreferences.shared.aliOpenToken = aliOpenToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                    UserPreferences.shared.aliDefaultDriveID = aliDefaultDriveID.trimmingCharacters(in: .whitespacesAndNewlines)
+                case .p115:
+                    UserPreferences.shared.p115Cookie = p115Cookie.trimmingCharacters(in: .whitespacesAndNewlines)
+                    UserPreferences.shared.p115AccessToken = p115AccessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                case .pikpak:
+                    UserPreferences.shared.pikpakAccessToken = pikpakAccessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                    UserPreferences.shared.pikpakRefreshToken = pikpakRefreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                    UserPreferences.shared.pikpakDeviceID = pikpakDeviceID.trimmingCharacters(in: .whitespacesAndNewlines)
+                case .baidu:
+                    try await appState.validateAndSaveCloudCookie(
+                        provider: .baidu,
+                        cookie: baiduCookie.trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                }
+
+                try UserPreferences.shared.checkCredentialPersistence()
+                await MainActor.run {
+                    cloudCookieSaved = true
+                    cloudCookieVerified = provider == .quark || provider == .uc || provider == .baidu
+                    cloudCookieStatus = cloudCookieVerified
+                        ? L10n.text("{0}凭据已验证并保存", [L10n.text(provider.rawValue)])
+                        : L10n.text("{0}凭据已保存，将在播放时校验", [L10n.text(provider.rawValue)])
+                    quarkCookie = UserPreferences.shared.quarkCookie
+                    ucCookie = UserPreferences.shared.ucCookie
+                    baiduCookie = UserPreferences.shared.baiduCookie
+                    aliRefreshToken = UserPreferences.shared.aliRefreshToken
+                    aliAccessToken = UserPreferences.shared.aliAccessToken
+                    aliOpenToken = UserPreferences.shared.aliOpenToken
+                    aliDefaultDriveID = UserPreferences.shared.aliDefaultDriveID
+                    p115Cookie = UserPreferences.shared.p115Cookie
+                    p115AccessToken = UserPreferences.shared.p115AccessToken
+                    pikpakAccessToken = UserPreferences.shared.pikpakAccessToken
+                    pikpakRefreshToken = UserPreferences.shared.pikpakRefreshToken
+                    pikpakDeviceID = UserPreferences.shared.pikpakDeviceID
+                    isValidatingCloudCookie = false
+                }
+            } catch {
+                await MainActor.run {
+                    cloudCookieSaved = false
+                    cloudCookieVerified = false
+                    cloudCookieStatus = UserFacingErrorPresenter.message(
+                        for: error,
+                        context: .authorization(providerName: provider.rawValue)
+                    )
+                    isValidatingCloudCookie = false
+                }
+            }
+        }
+    }
+
+    private func clearSelectedCloudProvider() {
+        cloudCookieVerified = false
+        switch selectedCloudProvider {
+        case .quark:
+            quarkCookie = ""
+            UserPreferences.shared.quarkCookie = ""
+            UserPreferences.shared.quarkTVDeviceID = ""
+            UserPreferences.shared.quarkTVQueryToken = ""
+            UserPreferences.shared.quarkTVRefreshToken = ""
+            UserPreferences.shared.quarkTVAccessToken = ""
+        case .uc:
+            ucCookie = ""
+            UserPreferences.shared.ucCookie = ""
+            UserPreferences.shared.ucTVDeviceID = ""
+            UserPreferences.shared.ucTVQueryToken = ""
+            UserPreferences.shared.ucTVRefreshToken = ""
+            UserPreferences.shared.ucTVAccessToken = ""
+            UserPreferences.shared.ucFongMiAccountToken = ""
+            UserPreferences.shared.ucFongMiPlaybackToken = ""
+            UserPreferences.shared.ucFongMiAccountExpiresAt = ""
+            UserPreferences.shared.ucFongMiPlaybackExpiresAt = ""
+            UserPreferences.shared.ucFongMiFixtureID = ""
+            UserPreferences.shared.ucFongMiEvidenceStatus = ""
+        case .ali:
+            aliRefreshToken = ""
+            aliAccessToken = ""
+            aliOpenToken = ""
+            aliDefaultDriveID = ""
+            UserPreferences.shared.aliRefreshToken = ""
+            UserPreferences.shared.aliAccessToken = ""
+            UserPreferences.shared.aliOpenToken = ""
+            UserPreferences.shared.aliDefaultDriveID = ""
+            UserPreferences.shared.aliAuthDomain = ""
+            UserPreferences.shared.aliUserID = ""
+        case .p115:
+            p115Cookie = ""
+            p115AccessToken = ""
+            UserPreferences.shared.p115Cookie = ""
+            UserPreferences.shared.p115AccessToken = ""
+        case .pikpak:
+            pikpakAccessToken = ""
+            pikpakRefreshToken = ""
+            pikpakDeviceID = ""
+            UserPreferences.shared.pikpakAccessToken = ""
+            UserPreferences.shared.pikpakRefreshToken = ""
+            UserPreferences.shared.pikpakDeviceID = ""
+        case .baidu:
+            baiduCookie = ""
+            UserPreferences.shared.baiduCookie = ""
+        }
+
+        do { try UserPreferences.shared.checkCredentialPersistence() }
+        catch { cloudCookieSaved = false; cloudCookieStatus = error.localizedDescription; return }
+        cloudCookieSaved = true
+        cloudCookieStatus = L10n.text("已清空{0}授权", ["\(selectedCloudProvider.rawValue)"])
+    }
+}
+
+struct SettingsPanelLabel: View {
+    @Environment(\.appThemePalette) private var palette
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let statusText: String?
+    let statusColor: Color?
+
+    init(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        statusText: String? = nil,
+        statusColor: Color? = nil
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.systemImage = systemImage
+        self.statusText = statusText
+        self.statusColor = statusColor
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(palette.muted)
+                .frame(width: 18, height: 20)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(palette.foreground)
+                Text(subtitle)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 16)
+
+            if let statusText {
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(statusColor ?? palette.muted)
+                        .frame(width: 7, height: 7)
+                    Text(statusText)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(palette.muted)
+                }
+                .padding(.top, 2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct SettingsStatusTag: View {
+    @Environment(\.appThemePalette) private var palette
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .foregroundStyle(palette.muted)
+            Text(value)
+                .fontWeight(.semibold)
+                .foregroundStyle(palette.foreground)
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 10)
+        .frame(minHeight: 30)
+        .background {
+            Capsule()
+                .fill(palette.background.opacity(0.32))
+                .overlay {
+                    Capsule()
+                        .stroke(palette.foreground.opacity(0.14), lineWidth: 1)
+                }
+        }
+    }
+}
+
+struct SettingsControlRow<Control: View>: View {
+    @Environment(\.appThemePalette) private var palette
+    let title: String
+    let caption: String
+    let labelWidth: CGFloat
+    let requirement: FormFieldRequirement?
+    let control: Control
+
+    init(
+        title: String,
+        caption: String = "",
+        labelWidth: CGFloat = 240,
+        requirement: FormFieldRequirement? = nil,
+        @ViewBuilder control: () -> Control
+    ) {
+        self.title = title
+        self.caption = caption
+        self.labelWidth = labelWidth
+        self.requirement = requirement
+        self.control = control()
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 22) {
+                label
+                    .frame(width: labelWidth, alignment: .leading)
+                control
+                    .frame(minWidth: 160)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+
+            VStack(alignment: .leading, spacing: 9) {
+                label
+                control
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 10)
+    }
+
+    private var label: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            FormFieldLabel(title: title, requirement: requirement)
+                .foregroundStyle(palette.foreground)
+            if !caption.isEmpty {
+                Text(caption)
+                    .font(.system(size: 11))
+                    .foregroundStyle(palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+private struct SettingsSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let valueText: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Slider(value: $value, in: range, step: step)
+                .frame(minWidth: 180, maxWidth: 300)
+            Text(valueText)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .frame(width: 58, alignment: .trailing)
+        }
+    }
+}

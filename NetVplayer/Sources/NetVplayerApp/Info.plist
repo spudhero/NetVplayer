@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleShortVersionString</key>
+    <string>1.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>14</string>
+    <key>SUFeedURL</key>
+    <string>https://github.com/spudhero/NetVplayer/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>vfyelqXd/3g1axK/JaG0UPl0iaahXLhKt+jAkSjkZRI=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <false/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <true/>
+    <key>SUAutomaticallyUpdate</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUSignedFeedFailureExpirationInterval</key>
+    <integer>0</integer>
+    <key>NetVplayerFeedbackRepositoryURL</key>
+    <string>https://github.com/spudhero/NetVplayer</string>
+    <key>NetVplayerSentryDSN</key>
+    <string>https://8e55a34cfb8fc393ba4a4f06cd0a78b7@o4512116468940800.ingest.us.sentry.io/4512116924809216</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>NetVplayer connects to your NAS and media servers on the local network to browse and play videos and music.</string>
+</dict>
+</plist>

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "architectures": ["arm64", "x86_64"],
+  "runtimes": {
+    "java": {
+      "version": "21.0.12+8",
+      "required_version": "21",
+      "modules": "java.base,java.logging,java.net.http,java.naming,java.security.jgss,java.xml,jdk.crypto.ec",
+      "artifacts": {
+        "arm64": {
+          "filename": "temurin-21.0.12+8-macos-arm64.tar.gz",
+          "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.12_8.tar.gz",
+          "sha256": "021d629349ebc12a409faa517b837ec80ceee8f58a5ac85c788ecad07ca6881c",
+          "root": "jdk-21.0.12+8/Contents/Home"
+        },
+        "x86_64": {
+          "filename": "temurin-21.0.12+8-macos-x86_64.tar.gz",
+          "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_mac_hotspot_21.0.12_8.tar.gz",
+          "sha256": "6b85c260eea574a995eacd0b3ee23c8042aa93b23a08e6478edafca0a0333d7f",
+          "root": "jdk-21.0.12+8/Contents/Home"
+        }
+      }
+    },
+    "js": {
+      "version": "22.20.0",
+      "required_version": "22.20.0",
+      "artifacts": {
+        "arm64": {
+          "filename": "node-v22.20.0-darwin-arm64.tar.gz",
+          "url": "https://nodejs.org/dist/v22.20.0/node-v22.20.0-darwin-arm64.tar.gz",
+          "sha256": "cc04a76a09f79290194c0646f48fec40354d88969bec467789a5d55dd097f949",
+          "root": "node-v22.20.0-darwin-arm64"
+        },
+        "x86_64": {
+          "filename": "node-v22.20.0-darwin-x64.tar.gz",
+          "url": "https://nodejs.org/dist/v22.20.0/node-v22.20.0-darwin-x64.tar.gz",
+          "sha256": "00df9c5df3e4ec6848c26b70fb47bf96492f342f4bed6b17f12d99b3a45eeecc",
+          "root": "node-v22.20.0-darwin-x64"
+        }
+      }
+    },
+    "python": {
+      "version": "3.12.12+20251217",
+      "required_version": "3.12",
+      "artifacts": {
+        "arm64": {
+          "filename": "cpython-3.12.12+20251217-macos-arm64.tar.gz",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251217/cpython-3.12.12%2B20251217-aarch64-apple-darwin-install_only_stripped.tar.gz",
+          "sha256": "341f9fa5d92a019475ac88a90b5a06746245848d3852ed8609751cd2bb8d2b3b",
+          "root": "python"
+        },
+        "x86_64": {
+          "filename": "cpython-3.12.12+20251217-macos-x86_64.tar.gz",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251217/cpython-3.12.12%2B20251217-x86_64-apple-darwin-install_only_stripped.tar.gz",
+          "sha256": "ad40de018063d74bdd77d969d780c98613694efed8f3d9e92f0ec78e1a190042",
+          "root": "python"
+        }
+      }
+    }
+  }
+}

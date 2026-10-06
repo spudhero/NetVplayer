@@ -1,0 +1,7 @@
+{
+  "name": "@netvplayer/compact-peer-address",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.cjs",
+  "license": "MIT"
+}

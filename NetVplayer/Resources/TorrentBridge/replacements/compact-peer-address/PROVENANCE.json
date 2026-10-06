@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "installed_path": "node_modules/compact2string",
+  "original": {
+    "name": "compact2string",
+    "version": "1.4.1",
+    "license": "BSD",
+    "integrity": "sha512-3D+EY5nsRhqnOwDxveBv5T8wGo4DEvYxjDtPGmdOX+gfr5gE92c2RC0w2wa+xEefm07QuVqqcF3nZJUZ92l/og==",
+    "package_json_sha256": "99dc3e689298a3663f23c8b4815af70bacc0b2a8f6781d558e2c41978d7042a3"
+  },
+  "replacement": {
+    "name": "@netvplayer/compact-peer-address",
+    "version": "1.0.0",
+    "license": "MIT",
+    "files": {
+      "LICENSE": "3e169154a8a7d953a341a64a6213535c20700b1a91e1f8fec80f6ea996ea586d",
+      "index.cjs": "6f28fe3eba4f3aba34b41ee5155e360bea8ee5b1718a1b63c09e19609be27e92",
+      "package.json": "89eb45fc6a62c78e7df26b5284b874a21c61869bb4d65dc69eb65b338a7a37dc"
+    }
+  },
+  "reason": "The locked archive declares BSD while its README declares MIT and neither location contains a complete license text."
+}

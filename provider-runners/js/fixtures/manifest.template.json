@@ -1,0 +1,41 @@
+{
+  "provider_id": "fixture.js",
+  "version": "1.0.0",
+  "protocol": 1,
+  "shell_min_version": "1.0.0",
+  "shell_max_version": null,
+  "macos_min_version": "14.0",
+  "architectures": ["arm64", "x86_64"],
+  "runtime": "js",
+  "entrypoint": "fixtures/mock_provider.mjs",
+  "runner": "provider_runner.mjs",
+  "runtime_executable": "runtimes/node/bin/node",
+  "provider_class": "Spider",
+  "capabilities": ["home", "category", "search", "detail", "player", "live", "proxy", "action"],
+  "assets": [
+    {
+      "path": "provider_runner.mjs",
+      "sha256": "",
+      "executable": true
+    },
+    {
+      "path": "runtimes/node/bin/node",
+      "sha256": "",
+      "executable": true
+    },
+    {
+      "path": "fixtures/mock_provider.mjs",
+      "sha256": "",
+      "executable": false
+    },
+    {
+      "path": "fixtures/dependency.mjs",
+      "sha256": "",
+      "executable": false
+    }
+  ],
+  "source_revision": "fixture",
+  "license": "MIT",
+  "status": "compatible",
+  "revoked": false
+}

@@ -1,0 +1,22 @@
+{
+  "danmaku": [
+    {
+      "id": "mock-dm",
+      "name": "Mock DM",
+      "apiUrl": "https://danmaku.example.test",
+      "enabled": true,
+      "headers": {
+        "User-Agent": "NetVplayerTest/1.0"
+      },
+      "queryTemplate": "https://danmaku.example.test/search?wd={keyword}",
+      "parserType": "xml"
+    },
+    {
+      "id": "disabled-dm",
+      "name": "Disabled DM",
+      "apiUrl": "https://disabled-danmaku.example.test/search",
+      "enabled": false,
+      "parserType": "json"
+    }
+  ]
+}

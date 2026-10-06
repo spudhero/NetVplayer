@@ -1,0 +1,352 @@
+import SwiftUI
+import Models
+import Diagnostics
+
+struct FeedbackPreviewSnapshot: Equatable {
+    let draft: FeedbackDraft
+    let report: FeedbackReport
+
+    func report(matching currentDraft: FeedbackDraft) -> FeedbackReport? {
+        draft == currentDraft ? report : nil
+    }
+}
+
+struct FeedbackView: View {
+    @Environment(\.appThemePalette) private var palette
+    @EnvironmentObject private var appState: AppState
+
+    @State private var draft = FeedbackDraft()
+    @State private var previewSnapshot: FeedbackPreviewSnapshot?
+    @State private var isShowingPreview = false
+    @State private var statusMessage: String?
+    @State private var statusIsError = false
+    @AppStorage(DiagnosticReportingConfiguration.preferenceKey) private var automaticDiagnostics = true
+
+    private var repositoryURL: URL? {
+        FeedbackDestination.repositoryURL()
+    }
+
+    private var previewReport: FeedbackReport? {
+        previewSnapshot?.report(matching: draft)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("自动诊断"),
+                subtitle: L10n.text("帮助定位闪退和播放错误。"),
+                systemImage: "waveform.path.ecg"
+            )) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(L10n.text("自动发送错误诊断"), isOn: $automaticDiagnostics)
+                        .disabled(!SentryDiagnostics.shared.isConfigured)
+                        .onChange(of: automaticDiagnostics) { _, enabled in
+                            SentryDiagnostics.shared.setEnabled(enabled)
+                        }
+                    Text(SentryDiagnostics.shared.isConfigured
+                         ? L10n.text("通过 Sentry 发送崩溃堆栈、版本信息、错误码和操作步骤。不发送账号凭据、视频名称、播放地址或完整日志；少量会话用于统计起播耗时。")
+                         : L10n.text("此构建尚未启用自动诊断，仍可在下方生成问题报告。"))
+                        .font(.caption)
+                        .foregroundStyle(palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 6)
+            }
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("问题说明"),
+                subtitle: L10n.text("提交可复现的现象和操作路径。"),
+                systemImage: "exclamationmark.bubble"
+            )) {
+                VStack(alignment: .leading, spacing: 14) {
+                    SettingsControlRow(title: L10n.text("问题分类"), caption: L10n.text("用于确定排障层级")) {
+                        Picker(L10n.text("问题分类"), selection: categoryBinding) {
+                            ForEach(FeedbackCategory.allCases) { category in
+                                Text(category.title).tag(category)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 180)
+                    }
+
+                    feedbackTextField(title: L10n.text("标题"), prompt: L10n.text("简要说明问题"), text: binding(\.title))
+                    feedbackTextArea(title: L10n.text("问题现象"), text: binding(\.problemDescription), height: 110)
+                    feedbackTextArea(title: L10n.text("复现步骤"), text: binding(\.reproductionSteps), height: 110)
+                    feedbackTextArea(title: L10n.text("预期结果"), text: binding(\.expectedResult), height: 82)
+                    feedbackTextArea(title: L10n.text("实际结果"), text: binding(\.actualResult), height: 82)
+                }
+                .padding(.top, 6)
+            }
+
+            GroupBox(label: SettingsPanelLabel(
+                title: L10n.text("复现资料"),
+                subtitle: L10n.text("配置只生成指纹；原始地址不会自动公开。"),
+                systemImage: "shield.lefthalf.filled",
+                statusText: reproductionStatus,
+                statusColor: reproductionStatusColor
+            )) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle(L10n.text("与配置源或播放线路有关"), isOn: binding(\.isSourceRelated))
+
+                    if draft.isSourceRelated {
+                        feedbackTextField(
+                            title: L10n.text("公开复现源"),
+                            prompt: L10n.text("https://example.com/minimal-config.json（可选）"),
+                            text: binding(\.publicSourceURL)
+                        )
+                        if !draft.publicSourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Toggle(
+                                L10n.text("我确认该地址和返回内容可以公开访问"),
+                                isOn: binding(\.confirmsPublicSource)
+                            )
+                            if let publicSourceValidationMessage {
+                                Label(publicSourceValidationMessage, systemImage: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundStyle(palette.color(for: .warning))
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Toggle(L10n.text("附带本次和上次会话的脱敏日志"), isOn: binding(\.includeLogs))
+                    Label(
+                        L10n.text("GitHub Issue 和手动附加的日志会公开可访问"),
+                        systemImage: "eye"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(palette.muted)
+                }
+                .padding(.top, 6)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    generatePreview(showPreview: true)
+                } label: {
+                    Label(L10n.text("生成预览"), systemImage: "doc.text.magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    isShowingPreview = previewReport != nil
+                } label: {
+                    Label(L10n.text("查看预览"), systemImage: "doc.plaintext")
+                }
+                .buttonStyle(.bordered)
+                .disabled(previewReport == nil)
+
+                Spacer(minLength: 12)
+
+                Button {
+                    continueToGitHub()
+                } label: {
+                    Label(L10n.text("在 GitHub 中继续"), systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(previewReport == nil || repositoryURL == nil)
+            }
+
+            if repositoryURL == nil {
+                Label(L10n.text("当前构建未配置有效的 GitHub 反馈仓库"), systemImage: "link.badge.plus")
+                    .font(.caption)
+                    .foregroundStyle(palette.color(for: .warning))
+            }
+
+            if let statusMessage {
+                Label(
+                    statusMessage,
+                    systemImage: statusIsError ? "xmark.circle" : "checkmark.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(statusIsError ? palette.color(for: .danger) : palette.color(for: .success))
+                .textSelection(.enabled)
+            }
+        }
+        .sheet(isPresented: $isShowingPreview) {
+            previewSheet.themedPresentation()
+        }
+    }
+
+    private var categoryBinding: Binding<FeedbackCategory> {
+        Binding(
+            get: { draft.category },
+            set: { category in
+                draft.category = category
+                draft.isSourceRelated = category.defaultsToSourceRelated
+                invalidatePreview()
+            }
+        )
+    }
+
+    private func binding<Value: Equatable>(_ keyPath: WritableKeyPath<FeedbackDraft, Value>) -> Binding<Value> {
+        Binding(
+            get: { draft[keyPath: keyPath] },
+            set: { value in
+                guard draft[keyPath: keyPath] != value else { return }
+                draft[keyPath: keyPath] = value
+                invalidatePreview()
+            }
+        )
+    }
+
+    private func feedbackTextField(title: String, prompt: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(palette.muted)
+            TextField(prompt, text: text)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private func feedbackTextArea(title: String, text: Binding<String>, height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(palette.muted)
+            TextEditor(text: text)
+                .font(.system(size: 13))
+                .scrollContentBackground(.hidden)
+                .padding(7)
+                .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(palette.background.opacity(0.55))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(palette.foreground.opacity(0.12), lineWidth: 1)
+                        }
+                }
+        }
+    }
+
+    @ViewBuilder
+    private var previewSheet: some View {
+        if let previewReport {
+            VStack(spacing: 0) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.text("反馈报告预览"))
+                            .font(.title2.bold())
+                        Text(previewReport.reproductionLevel.title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button(L10n.text("完成")) {
+                        isShowingPreview = false
+                    }
+                }
+                .padding(18)
+
+                Divider()
+
+                ScrollView {
+                    Text(previewReport.attachmentText)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(18)
+                }
+            }
+            .frame(minWidth: 720, minHeight: 560)
+        }
+    }
+
+    private var reproductionStatus: String {
+        if !draft.isSourceRelated { return FeedbackReproductionLevel.generic.title }
+        if publicSourceValidationMessage == nil,
+           !draft.publicSourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return FeedbackReproductionLevel.publicSource.title
+        }
+        return FeedbackReproductionLevel.diagnosticOnly.title
+    }
+
+    private var reproductionStatusColor: Color {
+        if !draft.isSourceRelated { return palette.color(for: .success) }
+        return publicSourceValidationMessage == nil &&
+            !draft.publicSourceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? palette.color(for: .success)
+            : palette.color(for: .warning)
+    }
+
+    private var publicSourceValidationMessage: String? {
+        let value = draft.publicSourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        do {
+            _ = try PublicReproductionSourceValidator.validate(
+                value,
+                confirmed: draft.confirmsPublicSource
+            )
+            return nil
+        } catch {
+            return UserFacingErrorPresenter.message(
+                for: error,
+                context: .feedback(operation: L10n.text("校验公开复现地址"))
+            )
+        }
+    }
+
+    private func generatePreview(showPreview: Bool) {
+        let requestedDraft = draft
+        Task { @MainActor in
+            do {
+                let sourceContext = await appState.feedbackSourceContext(for: requestedDraft.category)
+                let report = try FeedbackReportBuilder.build(
+                    draft: requestedDraft,
+                    sourceContext: sourceContext,
+                    environment: .current(),
+                    diagnosticLogs: requestedDraft.includeLogs ? DiagnosticLog.reportText() : ""
+                )
+                guard requestedDraft == draft else { return }
+                previewSnapshot = FeedbackPreviewSnapshot(draft: requestedDraft, report: report)
+                statusMessage = L10n.text("预览已生成；字段变化后需要重新生成")
+                statusIsError = false
+                isShowingPreview = showPreview
+            } catch {
+                previewSnapshot = nil
+                statusMessage = UserFacingErrorPresenter.message(
+                    for: error,
+                    context: .feedback(operation: L10n.text("生成反馈预览"))
+                )
+                statusIsError = true
+                isShowingPreview = false
+            }
+        }
+    }
+
+    private func continueToGitHub() {
+        guard let previewReport, let repositoryURL else { return }
+        do {
+            let result = try FeedbackSubmissionCoordinator.handoff(
+                draft: draft,
+                report: previewReport,
+                repositoryURL: repositoryURL
+            )
+            if let attachmentURL = result.attachmentURL {
+                statusMessage = result.copiedToClipboard
+                    ? L10n.text("GitHub 空白 Issue 已打开；请粘贴正文并拖入日志：{0}", ["\(attachmentURL.path)"])
+                    : L10n.text("GitHub 已打开；请从 Finder 拖入日志：{0}", ["\(attachmentURL.path)"])
+            } else {
+                statusMessage = result.copiedToClipboard
+                    ? L10n.text("GitHub 空白 Issue 已打开，完整正文已复制到剪贴板")
+                    : L10n.text("GitHub 已打开，请检查后提交")
+            }
+            statusIsError = false
+        } catch {
+            statusMessage = UserFacingErrorPresenter.message(
+                for: error,
+                context: .feedback(operation: L10n.text("打开反馈页面"))
+            )
+            statusIsError = true
+        }
+    }
+
+    private func invalidatePreview() {
+        previewSnapshot = nil
+        isShowingPreview = false
+        statusMessage = nil
+        statusIsError = false
+    }
+}

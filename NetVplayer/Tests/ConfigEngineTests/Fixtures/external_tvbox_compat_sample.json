@@ -1,0 +1,14 @@
+{
+  "sites": [
+    { "key": "wobg", "name": "WoGG Alias", "type": 3, "api": "csp_Wobg", "searchable": 1 },
+    { "key": "alist", "name": "AList", "type": 3, "api": "csp_AList", "ext": "./json/alist.json" },
+    { "key": "webdav", "name": "WebDAV", "type": 3, "api": "csp_WebDAV", "ext": "./json/webdav.json" },
+    { "key": "bili", "name": "Bili", "type": 3, "api": "csp_Bilibili", "ext": "./json/bili.json" },
+    { "key": "push", "name": "Push", "type": 3, "api": "csp_Push" },
+    { "key": "drpy", "name": "drpy", "type": 3, "api": "./lib/drpy2.min.js", "ext": "./js/demo.js" },
+    { "key": "cms", "name": "CMS", "type": 1, "api": "https://cms.example.test/api.php/provide/vod/" },
+    { "key": "ali", "name": "AliShare", "type": 3, "api": "csp_AliShare" },
+    { "key": "samba", "name": "Samba", "type": 3, "api": "csp_SambaShare" },
+    { "key": "xbpq", "name": "XBPQ", "type": 3, "api": "csp_XBPQ" }
+  ]
+}

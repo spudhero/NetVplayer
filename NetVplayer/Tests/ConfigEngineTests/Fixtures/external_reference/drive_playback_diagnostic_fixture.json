@@ -1,0 +1,230 @@
+[
+  {
+    "id": "uc-high-quality-candidates",
+    "provider": "uc",
+    "scenario": "high-bitrate-selection",
+    "route": "uc-smart-play",
+    "qualityRank": 4000,
+    "selectedReason": "resolution:4k",
+    "sampleStatus": "captured",
+    "candidateSummary": "route=uc-smart-play res=4k url=https://video-play.drive.uc.cn/file.mp4?auth_key=abc&safe=1",
+    "requestShape": {
+      "fid": "file-id",
+      "Authorization": "Bearer secret"
+    },
+    "responseFields": {
+      "candidates": "4k/2k/super/high",
+      "selected": "4k"
+    },
+    "errorCategory": "Source"
+  },
+  {
+    "id": "fongmi-uuss-uc-login-playback-capture",
+    "provider": "uc",
+    "scenario": "fongmi-uuss-scan-login-playback",
+    "route": "uc-fongmi-two-step-openapi",
+    "qualityRank": 0,
+    "selectedReason": "qr-auth-two-step",
+    "sampleStatus": "captured",
+    "candidateSummary": "source=FongMi 5.5.6 debuggable site=csp_UuSsGuard vod=仙逆 scans=2 smartLine=优汐智1 observedCDN=video-play-p-zb.cdn.yun.cn cdnQueryKeys=auth_key|sp|token|ork|ud|dfi playbackHeaders=empty resultParse=0 resultJx=0 originalLine=优汐原1 fongmiLocalProxy=127.0.0.1:9978/proxy/play flag=优汐盘 localAuth=files/uc_user|files/uc_ut|files/uc_fid|shared_prefs/spUtils.xml openAPIUserInfo=ok personalListMatch=3.51GB openAPIDownloadProbe=15MB-intercept openAPIStreaming=video_info-4k-cdn nativeStreaming=implemented qrReadiness=gated guardNativeBoundary=DexNative.proxyInvoke",
+    "requestShape": {
+      "sourceKey": "csp_UuSsGuard",
+      "loginPrompt": "使用UC浏览器APP扫码登录",
+      "secondPrompt": "使用UC浏览器再扫一次起飞",
+      "qrScanCount": "2",
+      "scanConfirmPath": "https://broccoli.uc.cn/apps/ZY5qIZiK/routes/scan_confirm",
+      "scanConfirmQuery": "token=<redacted>&client_id=381&uc_biz_str=S%3Acustom%7CC%3Atitlebar_fix",
+      "accountGenerateEndpoint": "POST https://api.open.uc.cn/cas/ajax/getTokenForQrcodeLogin",
+      "accountGenerateQueryKeys": "__dt,__t",
+      "accountGenerateBodyKeys": "client_id,request_id,v",
+      "accountPollEndpoint": "POST https://api.open.uc.cn/cas/ajax/getServiceTicketByQrcodeToken",
+      "accountPollQueryKeys": "dt,t",
+      "accountPollBodyKeys": "client_id,request_id,token,v",
+      "accountMobileInfoEndpoint": "GET https://drive.uc.cn/account/mobileinfo",
+      "accountMobileInfoQueryKeys": "pr,fr,st",
+      "playbackAuthorizeEndpoint": "GET https://open-api-drive.uc.cn/oauth/code",
+      "playbackAuthorizeQueryKeys": "req_id,access_token,app_ver,device_id,device_brand,platform,device_name,device_model,build_device,build_product,device_gpu,activity_rect,channel,client_id,scope,query_token",
+      "shareSaveEndpoint": "POST https://pc-api.uc.cn/1/clouddrive/share/sharepage/save",
+      "shareSaveBodyKeys": "pwd_id,stoken,pdir_fid,to_pdir_fid,fid_list,fid_token_list",
+      "fileMoveEndpoint": "POST https://pc-api.uc.cn/1/clouddrive/file/move",
+      "fileMoveBodyKeys": "action_type,exclude_fids,filelist,to_pdir_fid",
+      "openAPIFileEndpoint": "GET https://open-api-drive.uc.cn/file",
+      "openAPIFileQueryKeys": "req_id,access_token,app_ver,device_id,device_brand,platform,device_name,device_model,build_device,build_product,device_gpu,activity_rect,channel,method={list|download|streaming},group_by,parent_fid,fid,resolution,support",
+      "openAPIUserEndpoint": "GET https://open-api-drive.uc.cn/user",
+      "openAPIUserQueryKeys": "req_id,access_token,app_ver,device_id,channel,client_id,method=user_info",
+      "playerInputShape": "key=UC,flag={优汐智1|优汐原1},id={sId,sToken,shareUser,share_fid_token,fid,pdir_fid,size,flag,file_name}",
+      "smartLineResultShape": "FongMi Result flag=优汐智1 parse=0 jx=0 playUrl=null urlLength=447 headerKeys=[]",
+      "videoActivity": "com.fongmi.android.tv.ui.activity.VideoActivity",
+      "debuggablePackage": "com.fongmi.android.tv versionName=5.5.6 flags=DEBUGGABLE",
+      "localAuthFiles": "files/uc_user,files/uc_ut,files/uc_fid,files/quark_ut,shared_prefs/spUtils.xml",
+      "ucUserKeys": "N,refresh_token,access_token,i,tF,zH",
+      "ucFidKeys": "share",
+      "spUtilsKeys": "lastUcDownUrl,uc_ck,ucSt,wogg_site",
+      "historyEpisodeKeys": "pg,parent,sId,sToken,shareUser,share_fid_token,fid,vodName,pdir_fid,sub,size,flag,file_name",
+      "dynamicJarShape": "cache/jar/{md5}.jar contains classes.dex,assets/ftyguard_v7.so,assets/ftyguard_v8.so,assets/ftyshinidie.guard",
+      "guardProxyEntry": "FongMi /proxy delegates to BaseLoader.get().proxy(params); UuSsGuard is BaseSpiderGuard shell; proxy delegates to DexNative.proxyInvoke"
+    },
+    "responseFields": {
+      "sId": "share id",
+      "sToken": "<redacted>",
+      "shareUser": "share user id",
+      "share_fid_token": "<redacted>",
+      "fid": "file id",
+      "pdir_fid": "parent folder id",
+      "flag": "优汐盘",
+      "file_name": "Renegade Immortal episode mp4",
+      "accountGenerateResponse": "status,message,data.members.token",
+      "accountPollPending": "status,message=Query result is empty",
+      "accountPollSuccess": "status,message=ok,data.members.service_ticket",
+      "accountMobileInfoResponse": "success,data.uid,data.kps,data.__pus,data.newToken,data.serviceTicket",
+      "playbackAuthorizeInitialError": "400 query_token不允许为空",
+      "playbackAuthorizePending": "400 用户未确认授权",
+      "playbackAuthorizeSuccess": "200 code,req_id,status",
+      "shareSaveResponse": "task_id,task_resp,status,message",
+      "fileMoveResponse": "finish,task_id,status,message",
+      "openAPIUserInfoResponse": "status=0,data.avatar_url,nickname,uhx6,user_id",
+      "openAPIFileListResponse": "root list contains matching personal file with size=3.51GB",
+      "openAPIDownloadProbe": "method=download returns 15MB video/mp4 intercept/limit clip for matched personal fid; rejected by Range total-size check",
+      "openAPIStreamingVideoInfo": "method=streaming with saved personal fid returns data.video_info[] candidates including resolution=4k,trans_status=success,url=https://video-play-p-zb.cdn.yun.cn/{shape},size,width,height,accessable",
+      "nativePlaybackRoute": "NetVplayer uses uc-openapi-streaming after Cookie transfer and UC TV token validation; method=download remains only a fallback/rejection probe",
+      "lineMapping": "优汐智1=cdn-direct observed in FongMi; 优汐原1=local-proxy observed in FongMi",
+      "sameFileMetadata": "sId/fid/share_fid_token/pdir_fid/size reused across both lines",
+      "cdnPlaybackURL": "FongMi-observed https://video-play-p-zb.cdn.yun.cn/{app}/{share}/{hash}/{media}?auth_key=<redacted>&sp={int}&token=<redacted>&ork={opaque}&ud={shape}&dfi={int}",
+      "cdnPlaybackPathShape": "{opaque-app}/{numeric-share}/{sha-like}/{sha-like}",
+      "cdnPlaybackQueryKeys": "auth_key,sp,token,ork,ud,dfi",
+      "cdnPlaybackHeaderKeys": "[]",
+      "localProxyPlaybackURL": "FongMi-only http://127.0.0.1:{6885-6999,9978-9999}/proxy/play/{flag}/{vodName}/{fileName}",
+      "localProxyHealth": "adb forward tcp:19978 tcp:9978; /proxy?do=ck and /proxy/play?do=ck return ok; /proxy/play without Guard params returns 500 Invalid proxy response",
+      "localAuthStorage": "uc_user is JSON token shape; uc_ut and uc_ck are base64 encrypted-looking blobs; spUtils lastUcDownUrl host=dl-pc-zb.drive.uc.cn",
+      "dynamicJarBoundary": "jadx shows UuSsGuard empty shell and DexNative.proxyInvoke JNI boundary; UC playback algorithm not visible in Java bytecode",
+      "playbackHeaders": "FongMi Result.header=[] and player header map=[]; CDN playback relies on signed query",
+      "playbackCDNHost": "video-play-p-zb.cdn.yun.cn"
+    },
+    "httpTraceShape": {
+      "firstScanFollowupHost": "drive.uc.cn",
+      "accountProbeHost": "pc-api.uc.cn",
+      "scanStatusHost": "api.open.uc.cn",
+      "accountGeneratePath": "/cas/ajax/getTokenForQrcodeLogin",
+      "accountPollPath": "/cas/ajax/getServiceTicketByQrcodeToken",
+      "playbackHost": "open-api-drive.uc.cn",
+      "playbackAuthorizePath": "open-api-drive.uc.cn/oauth/code",
+      "openAPIFilePath": "open-api-drive.uc.cn/file",
+      "openAPIUserPath": "open-api-drive.uc.cn/user?method=user_info",
+      "cdnHost": "video-play-p-zb.cdn.yun.cn",
+      "cdnPathShape": "{opaque-app}/{numeric-share}/{sha-like}/{sha-like}",
+      "cdnQueryKeys": "auth_key,sp,token,ork,ud,dfi",
+      "playerHeaderKeys": "[]",
+      "jdbPlaybackEvidence": "Result.getRealUrl flag=优汐智1 then xe2.o receives same video-play-p-zb.cdn.yun.cn URL",
+      "smartLine": "优汐智1 -> CDN direct",
+      "originalLine": "优汐原1 -> local proxy stream",
+      "localProxyHost": "127.0.0.1:9978",
+      "diagnosticProxyHost": "127.0.0.1:9978",
+      "localProbe": "FongMi-only diagnostic; Android system proxy must bypass localhost",
+      "localProxyProbe": "GET /proxy?do=ck -> ok; GET /proxy/play?do=ck -> ok; GET /proxy/play without params -> 500",
+      "proxyInterference": "Android global proxy sends localhost probe to mitm and causes connection refused",
+      "nativeRewriteStatus": "qr-login captured-only; reusable method=streaming video_info playback route implemented; FongMi private QR begin/poll remains gated",
+      "status": "FongMi playback succeeds inside Android after clearing proxy; macOS now reproduces the saved-fid OpenAPI streaming route without simulating localhost proxy"
+    },
+    "redactedURL": "https://broccoli.uc.cn/apps/ZY5qIZiK/routes/scan_confirm?token=<redacted>&client_id=381",
+    "errorCategory": "Source"
+  },
+  {
+    "id": "pikpak-public-share-pending",
+    "provider": "pikpak",
+    "scenario": "public-share",
+    "route": "pending-capture",
+    "sampleStatus": "pending-capture",
+    "requestShape": {
+      "share_id": "share",
+      "passcode": "pwd"
+    },
+    "responseFields": {
+      "boundary": "公开分享读取/转存接口待验证"
+    },
+    "errorCategory": "Source"
+  },
+  {
+    "id": "baidu-public-share-pending",
+    "provider": "baidu",
+    "scenario": "public-share",
+    "route": "pending-capture",
+    "sampleStatus": "pending-capture",
+    "requestShape": {
+      "url": "https://pan.baidu.com/s/abc?pwd=1234"
+    },
+    "responseFields": {
+      "boundary": "待授权/播放接口验证"
+    },
+    "errorCategory": "Source"
+  },
+  {
+    "id": "cloud123-public-share-pending",
+    "provider": "cloud123",
+    "scenario": "public-share",
+    "route": "pending-capture",
+    "sampleStatus": "pending-capture",
+    "requestShape": {
+      "url": "https://www.123pan.com/s/abc?token=secret"
+    },
+    "responseFields": {
+      "boundary": "待授权/播放接口验证"
+    },
+    "errorCategory": "Source"
+  },
+  {
+    "id": "thunder-public-share-pending",
+    "provider": "thunder",
+    "scenario": "public-share",
+    "route": "pending-capture",
+    "sampleStatus": "pending-capture",
+    "requestShape": {
+      "url": "https://pan.xunlei.com/s/abc?signature=secret"
+    },
+    "responseFields": {
+      "boundary": "待授权/播放接口验证"
+    },
+    "errorCategory": "Source"
+  },
+  {
+    "id": "xunlei-public-share-pending",
+    "provider": "xunlei",
+    "scenario": "public-share",
+    "route": "pending-capture",
+    "sampleStatus": "pending-capture",
+    "requestShape": {
+      "url": "https://pan.xunlei.com/s/share-id?pwd=abcd"
+    },
+    "responseFields": {
+      "boundary": "待账号授权、验证码/文件恢复与播放接口验证"
+    },
+    "errorCategory": "Source"
+  },
+  {
+    "id": "mobile139-public-share-pending",
+    "provider": "mobile",
+    "scenario": "public-share",
+    "route": "pending-capture",
+    "sampleStatus": "pending-capture",
+    "requestShape": {
+      "url": "https://yun.139.com/shareweb/#/w/i/share-id"
+    },
+    "responseFields": {
+      "boundary": "中国移动云盘待账号授权与播放接口验证"
+    },
+    "errorCategory": "Source"
+  },
+  {
+    "id": "tianyi189-public-share-pending",
+    "provider": "tianyi",
+    "scenario": "public-share",
+    "route": "pending-capture",
+    "sampleStatus": "pending-capture",
+    "requestShape": {
+      "url": "https://cloud.189.cn/web/share?code=share-id"
+    },
+    "responseFields": {
+      "boundary": "天翼云盘待账号授权与播放接口验证"
+    },
+    "errorCategory": "Source"
+  }
+]

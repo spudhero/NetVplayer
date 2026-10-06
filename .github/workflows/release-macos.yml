@@ -1,0 +1,334 @@
+name: Release macOS app
+
+on:
+  push:
+    tags:
+      - "[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  libmpv-runtime:
+    runs-on: macos-14
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install libmpv development files
+        run: brew install mpv
+
+      - name: Prepare macOS 14 compatible libmpv runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_root="$RUNNER_TEMP/libmpv-runtime"
+          runtime_bundle="$runtime_root/NetVplayer.app"
+          runtime_host="$runtime_bundle/Contents/MacOS/RuntimeHost"
+          mkdir -p "$(dirname "$runtime_host")" "$runtime_bundle/Contents/Resources"
+          xcrun clang -target arm64-apple-macos14.0 -x c -o "$runtime_host" - <<'EOF'
+          int main(void) { return 0; }
+          EOF
+          bash script/vendor_libmpv.sh "$runtime_bundle" "$runtime_host"
+          python3 script/validate_macos_compatibility.py \
+            --root "$runtime_bundle/Contents/Frameworks" \
+            --maximum-version 14.0 \
+            --require-mach-o
+          python3 script/package_libmpv_runtime_licenses.py \
+            --app-bundle "$runtime_bundle" \
+            --audit-only
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
+            "$runtime_bundle" "$RUNNER_TEMP/libmpv-runtime-macos14-arm64.zip"
+
+      - name: Upload compatible libmpv runtime
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: libmpv-runtime-macos14-arm64
+          path: ${{ runner.temp }}/libmpv-runtime-macos14-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: libmpv-runtime
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate TMDB application credential and online metadata
+        shell: bash
+        env:
+          NETVPLAYER_TMDB_READ_ACCESS_TOKEN: ${{ secrets.NETVPLAYER_TMDB_READ_ACCESS_TOKEN }}
+          NETVPLAYER_TMDB_API_KEY: ${{ secrets.NETVPLAYER_TMDB_API_KEY }}
+        run: python3 script/package_tmdb_credentials.py --validate-only --require --verify-online
+
+      - name: Install libmpv development files
+        run: brew install mpv
+
+      - name: Validate release tag and public boundary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_version="$GITHUB_REF_NAME"
+          if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: release tag must use MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          app_version="$(plutil -extract CFBundleShortVersionString raw NetVplayer/Sources/NetVplayerApp/Info.plist)"
+          if [[ "$app_version" != "$release_version" ]]; then
+            echo "error: tag $release_version does not match app version $app_version" >&2
+            exit 1
+          fi
+          git fetch --tags origin
+          python3 script/validate_macos_release_version.py \
+            --repo . --tag "$release_version" \
+            --info-plist NetVplayer/Sources/NetVplayerApp/Info.plist
+          git fetch origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "error: release tag must point to a commit on main" >&2
+            exit 1
+          fi
+          public_gate_conclusion="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow provider-public-shell.yml \
+            --commit "$GITHUB_SHA" \
+            --limit 1 \
+            --json conclusion \
+            --jq '.[0].conclusion // ""')"
+          if [[ "$public_gate_conclusion" != "success" ]]; then
+            echo "error: Provider public shell must pass for $GITHUB_SHA before release" >&2
+            exit 1
+          fi
+          python3 script/audit_provider_public_release.py --repo .
+          python3 -m unittest -v script/test_macos_release_workflow.py
+
+      - name: Download pinned Sparkle signing tools
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download 2.10.0 --repo sparkle-project/Sparkle \
+            --pattern Sparkle-2.10.0.tar.xz --dir "$RUNNER_TEMP"
+          echo 'c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c  Sparkle-2.10.0.tar.xz' \
+            | (cd "$RUNNER_TEMP" && shasum -a 256 --check)
+          mkdir -p "$RUNNER_TEMP/sparkle-tools"
+          tar -xJf "$RUNNER_TEMP/Sparkle-2.10.0.tar.xz" -C "$RUNNER_TEMP/sparkle-tools"
+
+      - name: Download macOS 14 compatible libmpv runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: libmpv-runtime-macos14-arm64
+          path: ${{ runner.temp }}/libmpv-runtime-download
+
+      - name: Verify prepared libmpv runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_root="$RUNNER_TEMP/libmpv-runtime-prepared"
+          mkdir -p "$runtime_root"
+          /usr/bin/ditto -x -k \
+            "$RUNNER_TEMP/libmpv-runtime-download/libmpv-runtime-macos14-arm64.zip" \
+            "$runtime_root"
+          runtime_bundle="$runtime_root/NetVplayer.app"
+          python3 script/validate_macos_compatibility.py \
+            --root "$runtime_bundle/Contents/Frameworks" \
+            --maximum-version 14.0 \
+            --require-mach-o
+          python3 script/package_libmpv_runtime_licenses.py \
+            --app-bundle "$runtime_bundle" \
+            --audit-only
+          echo "NETVPLAYER_LIBMPV_RUNTIME_BUNDLE=$runtime_bundle" >> "$GITHUB_ENV"
+
+      - name: Build and verify release assets
+        id: package
+        shell: bash
+        env:
+          NETVPLAYER_TMDB_READ_ACCESS_TOKEN: ${{ secrets.NETVPLAYER_TMDB_READ_ACCESS_TOKEN }}
+          NETVPLAYER_TMDB_API_KEY: ${{ secrets.NETVPLAYER_TMDB_API_KEY }}
+          NETVPLAYER_NODE_RUNTIME_CACHE: ${{ runner.temp }}/netvplayer-node-runtime-cache
+          NETVPLAYER_NPM_CACHE: ${{ runner.temp }}/netvplayer-npm-cache
+          NETVPLAYER_QUICKJS_RUNTIME_CACHE: ${{ runner.temp }}/netvplayer-quickjs-runtime-cache
+        run: |
+          set -euo pipefail
+          release_root="$RUNNER_TEMP/netvplayer-release"
+          app_output="$release_root/app"
+          asset_output="$release_root/assets"
+          extracted_output="$release_root/extracted"
+          mkdir -p "$app_output" "$asset_output" "$extracted_output"
+
+          bash NetVplayer/script/build_and_run.sh --package-public "$app_output"
+
+          app_bundle="$app_output/NetVplayer.app"
+          archive="$asset_output/NetVplayer-${GITHUB_REF_NAME}-macos-arm64.zip"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$archive"
+          unzip -t "$archive"
+          /usr/bin/ditto -x -k "$archive" "$extracted_output"
+
+          extracted_app="$extracted_output/NetVplayer.app"
+          python3 script/package_tmdb_credentials.py --app-bundle "$extracted_app" --audit-only --require
+          codesign --verify --deep --strict --verbose=2 "$extracted_app"
+          archive_version="$(plutil -extract CFBundleShortVersionString raw "$extracted_app/Contents/Info.plist")"
+          if [[ "$archive_version" != "$GITHUB_REF_NAME" ]]; then
+            echo "error: archive version $archive_version does not match tag $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          archive_architectures="$(/usr/bin/lipo -archs "$extracted_app/Contents/MacOS/NetVplayerApp")"
+          if [[ "$archive_architectures" != "arm64" ]]; then
+            echo "error: expected arm64 release, found $archive_architectures" >&2
+            exit 1
+          fi
+          python3 script/validate_macos_compatibility.py \
+            --root "$extracted_app" \
+            --maximum-version 14.0 \
+            --require-mach-o
+          python3 script/audit_source_free_app.py --repo . --app-bundle "$extracted_app"
+
+          cp dist/sbom/NetVplayer.build-artifacts.json "$asset_output/"
+          cp dist/sbom/NetVplayer.cdx.json "$asset_output/"
+          cp dist/sbom/NetVplayer.spdx.json "$asset_output/"
+          echo "asset-output=$asset_output" >> "$GITHUB_OUTPUT"
+
+      - name: Generate matching Sentry debug symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/netvplayer-release/app/NetVplayer.app/Contents/MacOS/NetVplayerApp"
+          symbols="$RUNNER_TEMP/netvplayer-release/symbols/NetVplayerApp.dSYM"
+          mkdir -p "$(dirname "$symbols")"
+          xcrun dsymutil "$binary" -o "$symbols"
+          binary_uuid="$(xcrun dwarfdump --uuid "$binary" | awk '{print $2, $3}')"
+          symbols_uuid="$(xcrun dwarfdump --uuid "$symbols" | awk '{print $2, $3}')"
+          [[ -n "$binary_uuid" && "$binary_uuid" == "$symbols_uuid" ]]
+
+      - name: Retain Sentry debug symbols
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NetVplayer-${{ github.ref_name }}-debug-symbols
+          path: ${{ runner.temp }}/netvplayer-release/symbols
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Sentry symbols when a token is configured
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SENTRY_AUTH_TOKEN" ]]; then
+            echo "Sentry upload token is not configured; matching symbols are retained in the workflow artifact."
+            exit 0
+          fi
+          cli="$RUNNER_TEMP/sentry-cli"
+          curl --fail --location --silent --show-error \
+            https://github.com/getsentry/sentry-cli/releases/download/3.8.0/sentry-cli-Darwin-universal \
+            --output "$cli"
+          printf '%s  %s\n' \
+            2c26914636c47ab9bf9e710484ad7b44d371cbec8bd29cafb36b3cf877bf4285 "$cli" \
+            | shasum -a 256 --check
+          chmod +x "$cli"
+          "$cli" debug-files upload --org spudhero --project apple-macos-e7 \
+            --no-sources --wait "$RUNNER_TEMP/netvplayer-release/symbols"
+
+      - name: Sign and validate the update feed
+        shell: bash
+        working-directory: ${{ steps.package.outputs.asset-output }}
+        env:
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SPARKLE_ED25519_PRIVATE_KEY" ]]; then
+            echo "error: Sparkle signing secret is missing" >&2
+            exit 1
+          fi
+          archive="NetVplayer-${GITHUB_REF_NAME}-macos-arm64.zip"
+          tools="$RUNNER_TEMP/sparkle-tools/bin"
+          public_key="$(plutil -extract SUPublicEDKey raw \
+            "$RUNNER_TEMP/netvplayer-release/app/NetVplayer.app/Contents/Info.plist")"
+          printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" \
+            | swift "$GITHUB_WORKSPACE/script/validate_app_update_key.swift" "$public_key"
+          printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" \
+            | "$tools/generate_appcast" --ed-key-file - \
+                --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
+                --link "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" \
+                --maximum-deltas 0 --maximum-versions 1 \
+                -o appcast.xml .
+          printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" \
+            | "$tools/sign_update" --verify --ed-key-file - appcast.xml
+          signature="$(python3 "$GITHUB_WORKSPACE/script/validate_app_update_feed.py" \
+            --feed appcast.xml --archive "$archive" \
+            --version "$GITHUB_REF_NAME" --repository "$GITHUB_REPOSITORY")"
+          printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" \
+            | "$tools/sign_update" --verify --ed-key-file - "$archive" "$signature"
+          (
+            shasum -a 256 \
+              "$archive" \
+              appcast.xml \
+              NetVplayer.build-artifacts.json \
+              NetVplayer.cdx.json \
+              NetVplayer.spdx.json > SHA256SUMS.txt
+            shasum -a 256 --check SHA256SUMS.txt
+          )
+
+      - name: Upload verified workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NetVplayer-${{ github.ref_name }}-release-assets
+          path: ${{ steps.package.outputs.asset-output }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        shell: bash
+        working-directory: ${{ steps.package.outputs.asset-output }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_version="$GITHUB_REF_NAME"
+          release_assets=(
+            "NetVplayer-${release_version}-macos-arm64.zip"
+            appcast.xml
+            NetVplayer.build-artifacts.json
+            NetVplayer.cdx.json
+            NetVplayer.spdx.json
+            SHA256SUMS.txt
+          )
+          if gh release view "$release_version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing_assets="$RUNNER_TEMP/existing-release"
+            mkdir -p "$existing_assets"
+            gh release download "$release_version" --repo "$GITHUB_REPOSITORY" \
+              --dir "$existing_assets"
+            (
+              cd "$existing_assets"
+              shasum -a 256 --check SHA256SUMS.txt
+            )
+            cmp SHA256SUMS.txt "$existing_assets/SHA256SUMS.txt"
+            gh release edit "$release_version" --repo "$GITHUB_REPOSITORY" \
+              --title "NetVplayer $release_version" --latest
+          else
+            gh release create "$release_version" "${release_assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --fail-on-no-commits \
+              --title "NetVplayer $release_version" \
+              --notes "This release contains the verified source-free Apple Silicon macOS app. It requires macOS 14 or later and uses community ad-hoc signing, so first launch may require Finder's Open command or approval in Privacy & Security." \
+              --generate-notes \
+              --latest
+          fi

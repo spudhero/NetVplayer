@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "runtime": "quickjs",
+  "version": "2026-06-04",
+  "required_version": "2026-06-04",
+  "artifacts": {
+    "arm64": {
+      "filename": "quickjs-cosmo-2026-06-04.zip",
+      "url": "https://bellard.org/quickjs/binary_releases/quickjs-cosmo-2026-06-04.zip",
+      "sha256": "3335cdf35e3601e3b803b53cfee4dad53ac53d7f817d951ea4eeced6e9b26927",
+      "root": "."
+    },
+    "x86_64": {
+      "filename": "quickjs-cosmo-2026-06-04.zip",
+      "url": "https://bellard.org/quickjs/binary_releases/quickjs-cosmo-2026-06-04.zip",
+      "sha256": "3335cdf35e3601e3b803b53cfee4dad53ac53d7f817d951ea4eeced6e9b26927",
+      "root": "."
+    }
+  }
+}

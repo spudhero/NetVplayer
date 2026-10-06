@@ -1,0 +1,42 @@
+[
+  {
+    "id": "bilibili-xml-real-shape",
+    "sourceID": "fixture-bilibili",
+    "sourceName": "Bilibili XML Fixture",
+    "request": {
+      "title": "Fixture Animation",
+      "season": 1,
+      "episode": 1,
+      "siteKey": "fixture",
+      "manualKeyword": "Fixture Animation S01E01"
+    },
+    "format": "xml",
+    "payload": "<i><chatserver>chat.example.test</chatserver><chatid>10001</chatid><d p=\"1.25,1,25,16777215,0,0,0,0\">opening comment</d><d p=\"3.5,5,25,16711680,0,0,0,0\">top comment</d></i>"
+  },
+  {
+    "id": "json-real-shape",
+    "sourceID": "fixture-json",
+    "sourceName": "JSON Fixture",
+    "request": {
+      "title": "Fixture Drama",
+      "season": 1,
+      "episode": 2,
+      "siteKey": "fixture",
+      "manualKeyword": "Fixture Drama Episode 2"
+    },
+    "format": "json",
+    "payload": "{\"comments\":[{\"time\":2.25,\"text\":\"json scroll comment\",\"mode\":\"scroll\",\"color\":\"#66CCFF\"},{\"timeMs\":4100,\"content\":\"json bottom comment\",\"mode\":\"bottom\",\"color\":\"16776960\"}]}"
+  },
+  {
+    "id": "text-real-shape",
+    "sourceID": "fixture-text",
+    "sourceName": "Text Fixture",
+    "request": {
+      "title": "Fixture Movie",
+      "siteKey": "fixture",
+      "manualKeyword": "Fixture Movie"
+    },
+    "format": "text",
+    "payload": "00:00:01.500|text comment one\n00:00:03.250,text comment two\nplain comment without timestamp"
+  }
+]
