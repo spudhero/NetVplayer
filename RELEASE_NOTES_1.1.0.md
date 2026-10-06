@@ -1,10 +1,10 @@
 # NetVplayer 1.1.0
 
-主程序壳源码与扩展更新 / Application shell source and Provider update. Version: `1.1.0 (14)`.
+正式发布 / Stable release. Version: `1.1.0 (14)`.
 
-2026-10-07：最新主程序壳源码已公开，五种 Provider 1.1.0 已[正式分发](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases)。Python 目录包要求主程序至少 1.1.0，其余四包最低 1.0.0。当前稳定应用安装包为[1.0.12](https://github.com/spudhero/NetVplayer/releases/latest)，1.1.0 应用安装包继续保留候选验收状态。
+2026-10-07：[NetVplayer 1.1.0 主程序安装包](https://github.com/spudhero/NetVplayer/releases/tag/1.1.0)、公开主程序壳源码及五种 [Provider 1.1.0](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases)均已发布。附带签名自动更新清单、构建清单、SBOM 和 SHA-256 校验和。Python 目录包要求主程序至少 1.1.0，其余四包最低 1.0.0。
 
-2026-10-07: The latest application shell source is public and all five Provider 1.1.0 bundles are [published](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases). Python catalog requires application 1.1.0; the other four packages require 1.0.0 or later. The stable application download is [1.0.12](https://github.com/spudhero/NetVplayer/releases/latest); the 1.1.0 application bundle remains a release candidate.
+2026-10-07: [NetVplayer application 1.1.0](https://github.com/spudhero/NetVplayer/releases/tag/1.1.0), the public shell source, and all five [Provider 1.1.0](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) bundles are released with a signed update feed, build inventory, SBOMs, and SHA-256 checksums. Python catalog requires application 1.1.0; the other four packages require 1.0.0 or later.
 
 ## 中文
 
@@ -30,8 +30,12 @@ The public application has no built-in content sources. It requires Apple Silico
 
 完整变更 / Full change history: [CHANGELOG.md](CHANGELOG.md).
 
-## 候选验收状态 / Candidate validation
+## 验证与已知限制 / Validation and known limitations
 
-主干和公开源码完整回归、公开发行门禁、签名、许可证、SBOM 与归档校验已通过。本轮实播仍有待处理项，当前不建议直接正式发布：阿里原画样本跳转超时；夸克视频初测卡顿、独立复验通过，尚需长播确认；晚到直播错误场景的恢复时序断言未全部通过；TMDB 官方 API 连接超时；115/PikPak 没有已授权样本。
+主干和公开源码完整回归、公开发行门禁、签名、许可证、SBOM 与归档校验已通过。正式发布复查确认 TMDB 中文电影/剧集搜索、详情、评分和海报资料通过，归档与更新清单签名可用应用内固定公钥验证。
 
-Main and public-source regression suites, public distribution gates, signing, licenses, SBOMs, and archive integrity passed. This candidate is not ready for a formal release: an Ali original-video sample times out during seeking; a Quark video stalled initially and passed an independent repeat, so longer playback remains unverified; late live-error timing assertions did not all pass; the official TMDB API connection timed out; and no authorized 115/PikPak samples were available.
+已知限制保留：阿里原画样本曾跳转超时；夸克视频初测卡顿后独立复验通过，长期播放稳定性尚需更多样本；晚到直播错误的恢复时序仍需核对；115/PikPak 没有已授权实播样本。以上场景不计为验证通过。
+
+Main and public-source regression suites, public distribution gates, signing, licenses, SBOMs, and archive integrity passed. Release verification confirmed Chinese TMDB movie/TV search, details, ratings, and poster metadata. The archive and update feed can be verified with the public key pinned in the application.
+
+Known limitations remain: an Ali original-video sample timed out during seeking; a Quark video stalled initially and passed an independent repeat, while long playback requires more samples; late live-error recovery timing still needs review; and no authorized 115/PikPak playback samples were available. These scenarios are not counted as passed.

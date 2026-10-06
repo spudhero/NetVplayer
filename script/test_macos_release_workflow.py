@@ -127,7 +127,8 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(info["CFBundleShortVersionString"], "1.1.0")
         self.assertEqual(info["CFBundleVersion"], "14")
         self.assertIn("NetVplayer 1.1.0", readme)
-        self.assertIn("1.1.0 release candidate", readme)
+        self.assertIn("**NetVplayer 1.1.0 (build 14)**", readme)
+        self.assertIn("| Stable application | 1.1.0 |", readme)
 
 
 if __name__ == "__main__":
