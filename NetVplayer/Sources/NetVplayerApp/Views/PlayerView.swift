@@ -862,105 +862,37 @@ struct PlayerView: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            let usesCompactControls = CompactPlayerLayoutPolicy.isCompact(
-                contentSize: windowContext.contentSize == .zero
-                    ? proxy.size
-                    : windowContext.contentSize
-            )
-
-            ZStack {
-                videoLayer
-
-                videoInteractionLayer
-                    .zIndex(0.5)
-
-                if isChapterPanelPresented, !usesCompactControls {
-                    Color.black.opacity(0.001).contentShape(Rectangle())
-                        .onTapGesture { isChapterPanelPresented = false }
-                        .zIndex(2.9)
-                }
-
-                if usesCompactControls {
-                    CompactPlayerStatusOverlay(
-                        isLoading: isPlaybackActivityActive,
-                        errorMessage: playerState.errorMessage ?? appState.playbackWarningMessage
-                    )
-                    .zIndex(2)
-
-                    compactControlsLayer
-                    .zIndex(3)
-                } else {
-                    PlayerReferenceCanvas(availableSize: proxy.size) {
-                        playerOverlayCanvas
-                    }
-                    .zIndex(PlayerOverlayLayerPolicy.referenceCanvas)
-
-                    PlayerPlaybackActivityView(
-                        phase: playbackActivityPhase,
-                        progress: appState.isPreparingVodPlayback || playerState.isMediaLoading ? nil : playerState.cacheBufferingProgress,
-                        speedBytesPerSecond: playbackActivitySpeedBytesPerSecond,
-                        bufferedAheadDuration: playbackActivityBufferedAheadDuration,
-                        transferredBytes: !appState.isPreparingVodPlayback && playerState.isMediaLoading ? playerState.seekReceivedBytes : nil,
-                        showsImmediately: visualRegressionConfiguration?.state == .loading
-                            || visualRegressionConfiguration?.state == .buffering
-                    )
-                    .zIndex(PlayerOverlayLayerPolicy.playbackActivity)
-
-                    if isPrimaryHUDVisible {
-                        topHUDBackdrop(availableSize: proxy.size)
-                            .transition(.opacity)
-                            .zIndex(2)
-
-                        PlayerReferenceCanvas(availableSize: proxy.size, verticalAnchor: .bottom) {
-                            bottomHUDLayer
-                        }
-                        .transition(.opacity)
-                        .zIndex(3)
-
-                        PlayerReferenceCanvas(availableSize: proxy.size, verticalAnchor: .top) {
-                            topHUDLayer
-                        }
-                        .transition(.opacity)
-                        .zIndex(4)
-                    }
-                }
-                if appState.shouldShowPlaybackEndedPanel, overlayPanel == .none {
-                    PlaybackEndedPanel(
-                        compact: usesCompactControls,
-                        interrupted: playerState.endDisposition == .premature,
-                        listState: appState.episodeListState,
-                        hasNext: appState.playbackEpisodeContext().hasNext,
-                        onReplay: { Task { await appState.replayCurrentEpisode() } },
-                        onNext: { Task { await appState.playRelativeEpisode(offset: 1) } },
-                        onRetryList: { Task { await appState.retryEpisodeList() } }
-                    )
-                    .frame(width: min(420, max(0, proxy.size.width - 32)))
-                    .padding(16)
-                    .offset(y: usesCompactControls ? -12 : 0)
-                    .zIndex(5)
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .background(Color.black)
-            .onContinuousHover { phase in
-                guard visualRegressionConfiguration == nil else { return }
-                switch phase {
-                case .active:
-                    isPointerInsidePlayer = true
-                    showHUDTemporarily()
-                case .ended:
+        popoverLifecycleContent
+        .onChange(of: timelineMediaID) { _, _ in
+            isChapterPanelPresented = false
+            hoveredChapterID = nil
+            chapterPreviewStore.reset(mediaID: timelineMediaID)
+        }
+        .onChange(of: playerState.chapters) { _, chapters in
+            if chapters.isEmpty { isChapterPanelPresented = false }
+        }
+        .task(id: chapterPreviewWarmupIdentity) {
+            guard visualRegressionConfiguration == nil, chapterPreviewWarmupReady else { return }
+            await chapterPreviewStore.prefetch(spec: playerState.currentSpec, mediaID: timelineMediaID,
+                targets: PlayerChapterPreviewPolicy.targets(chapters: playerState.chapters, duration: playerState.duration),
+                position: playerState.position)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                resetHUDTimer()
+            } else {
+                if !windowContext.isCompact {
                     isPointerInsidePlayer = false
-                    restorePlayerCursor()
-                    resetHUDTimer()
                 }
+                hideHUDTimer?.invalidate()
+                restorePlayerCursor()
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: showHUD)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: overlayPanel)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isSkipEditorPresented)
-            .onChange(of: usesCompactControls) { _, isCompact in
-                handleCompactModeChange(isCompact)
-            }
+        }
+    }
+
+    private var playbackContent: some View {
+        GeometryReader { proxy in
+            playerCanvas(availableSize: proxy.size)
         }
         .ignoresSafeArea()
         .sheet(isPresented: $isOnlineSubtitlePresented) {
@@ -985,6 +917,119 @@ struct PlayerView: View {
             }
             .frame(width: 0, height: 0)
         }
+    }
+
+    @ViewBuilder
+    private func playerCanvas(availableSize: CGSize) -> some View {
+        let usesCompactControls = CompactPlayerLayoutPolicy.isCompact(
+            contentSize: windowContext.contentSize == .zero ? availableSize : windowContext.contentSize
+        )
+        ZStack {
+            videoLayer
+
+            videoInteractionLayer
+                .zIndex(0.5)
+
+            if isChapterPanelPresented, !usesCompactControls {
+                Color.black.opacity(0.001).contentShape(Rectangle())
+                    .onTapGesture { isChapterPanelPresented = false }
+                    .zIndex(2.9)
+            }
+
+            if usesCompactControls {
+                CompactPlayerStatusOverlay(
+                    isLoading: isPlaybackActivityActive,
+                    errorMessage: playerState.errorMessage ?? appState.playbackWarningMessage
+                )
+                .zIndex(2)
+
+                compactControlsLayer
+                .zIndex(3)
+            } else {
+                regularPlayerLayers(availableSize: availableSize)
+            }
+            playbackEndedLayer(availableSize: availableSize, usesCompactControls: usesCompactControls)
+        }
+        .frame(width: availableSize.width, height: availableSize.height)
+        .background(Color.black)
+        .onContinuousHover { phase in
+            guard visualRegressionConfiguration == nil else { return }
+            switch phase {
+            case .active:
+                isPointerInsidePlayer = true
+                showHUDTemporarily()
+            case .ended:
+                isPointerInsidePlayer = false
+                restorePlayerCursor()
+                resetHUDTimer()
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: showHUD)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: overlayPanel)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isSkipEditorPresented)
+        .onChange(of: usesCompactControls) { _, isCompact in
+            handleCompactModeChange(isCompact)
+        }
+    }
+
+    @ViewBuilder
+    private func regularPlayerLayers(availableSize: CGSize) -> some View {
+        PlayerReferenceCanvas(availableSize: availableSize) {
+            playerOverlayCanvas
+        }
+        .zIndex(PlayerOverlayLayerPolicy.referenceCanvas)
+
+        PlayerPlaybackActivityView(
+            phase: playbackActivityPhase,
+            progress: appState.isPreparingVodPlayback || playerState.isMediaLoading ? nil : playerState.cacheBufferingProgress,
+            speedBytesPerSecond: playbackActivitySpeedBytesPerSecond,
+            bufferedAheadDuration: playbackActivityBufferedAheadDuration,
+            transferredBytes: !appState.isPreparingVodPlayback && playerState.isMediaLoading ? playerState.seekReceivedBytes : nil,
+            showsImmediately: visualRegressionConfiguration?.state == .loading
+                || visualRegressionConfiguration?.state == .buffering
+        )
+        .zIndex(PlayerOverlayLayerPolicy.playbackActivity)
+
+        if isPrimaryHUDVisible {
+            topHUDBackdrop(availableSize: availableSize)
+                .transition(.opacity)
+                .zIndex(2)
+
+            PlayerReferenceCanvas(availableSize: availableSize, verticalAnchor: .bottom) {
+                bottomHUDLayer
+            }
+            .transition(.opacity)
+            .zIndex(3)
+
+            PlayerReferenceCanvas(availableSize: availableSize, verticalAnchor: .top) {
+                topHUDLayer
+            }
+            .transition(.opacity)
+            .zIndex(4)
+        }
+    }
+
+    @ViewBuilder
+    private func playbackEndedLayer(availableSize: CGSize, usesCompactControls: Bool) -> some View {
+        if appState.shouldShowPlaybackEndedPanel, overlayPanel == .none {
+            PlaybackEndedPanel(
+                compact: usesCompactControls,
+                interrupted: playerState.endDisposition == .premature,
+                listState: appState.episodeListState,
+                hasNext: appState.playbackEpisodeContext().hasNext,
+                onReplay: { Task { await appState.replayCurrentEpisode() } },
+                onNext: { Task { await appState.playRelativeEpisode(offset: 1) } },
+                onRetryList: { Task { await appState.retryEpisodeList() } }
+            )
+            .frame(width: min(420, max(0, availableSize.width - 32)))
+            .padding(16)
+            .offset(y: usesCompactControls ? -12 : 0)
+            .zIndex(5)
+        }
+    }
+
+    private var playbackLifecycleContent: some View {
+        playbackContent
         .onAppear {
             if visualRegressionConfiguration == nil {
                 syncSettingsState()
@@ -1040,6 +1085,10 @@ struct PlayerView: View {
                 resetHUDTimer()
             }
         }
+    }
+
+    private var popoverLifecycleContent: some View {
+        playbackLifecycleContent
         .onChange(of: isSubtitlePopoverPresented) { _, isPresented in
             updateTrackPopoverTimer(isPresented: isPresented)
         }
@@ -1060,31 +1109,6 @@ struct PlayerView: View {
                 isAudioPopoverPresented = false
                 isSpeedPopoverPresented = false
                 isAspectPopoverPresented = false
-            }
-        }
-        .onChange(of: timelineMediaID) { _, _ in
-            isChapterPanelPresented = false
-            hoveredChapterID = nil
-            chapterPreviewStore.reset(mediaID: timelineMediaID)
-        }
-        .onChange(of: playerState.chapters) { _, chapters in
-            if chapters.isEmpty { isChapterPanelPresented = false }
-        }
-        .task(id: chapterPreviewWarmupIdentity) {
-            guard visualRegressionConfiguration == nil, chapterPreviewWarmupReady else { return }
-            await chapterPreviewStore.prefetch(spec: playerState.currentSpec, mediaID: timelineMediaID,
-                targets: PlayerChapterPreviewPolicy.targets(chapters: playerState.chapters, duration: playerState.duration),
-                position: playerState.position)
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                resetHUDTimer()
-            } else {
-                if !windowContext.isCompact {
-                    isPointerInsidePlayer = false
-                }
-                hideHUDTimer?.invalidate()
-                restorePlayerCursor()
             }
         }
     }
