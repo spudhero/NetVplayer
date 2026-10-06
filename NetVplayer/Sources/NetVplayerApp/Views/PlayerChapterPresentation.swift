@@ -87,10 +87,16 @@ enum PlayerChapterPreviewPolicy {
 @MainActor
 final class PlayerChapterPreviewStore: ObservableObject {
     typealias Decode = @MainActor (PlaySpec, Double) async -> Data?
+    // Older AppKit SDKs forbid sending NSImage across task boundaries.
+    // Keep the image on the main actor while sharing the task's result.
+    @MainActor private final class Frame {
+        let image: NSImage
+        init(image: NSImage) { self.image = image }
+    }
     private var mediaID = ""
     private var images: [Double: NSImage] = [:]
     private var access: [Double: ContinuousClock.Instant] = [:]
-    private var pending: [Double: Task<NSImage?, Never>] = [:]
+    private var pending: [Double: Task<Frame?, Never>] = [:]
     private var unavailable: [Double: ContinuousClock.Instant] = [:]
     private var generation = 0
     private let decode: Decode
@@ -124,10 +130,10 @@ final class PlayerChapterPreviewStore: ObservableObject {
             if let image = cachedImage(mediaID: mediaID, seconds: seconds) { return image }
         }
         if let task = pending[seconds] {
-            let image = await task.value
-            return Task.isCancelled ? nil : image
+            let frame = await task.value
+            return Task.isCancelled ? nil : frame?.image
         }
-        let task = Task { @MainActor [weak self, decode] () -> NSImage? in
+        let task = Task { @MainActor [weak self, decode] () -> Frame? in
             let data = await decode(spec, seconds)
             guard let self, !Task.isCancelled, generation == self.generation, mediaID == self.mediaID else { return nil }
             self.pending[seconds] = nil
@@ -144,11 +150,11 @@ final class PlayerChapterPreviewStore: ObservableObject {
             self.images[seconds] = image
             self.access[seconds] = .now
             self.revision += 1
-            return image
+            return Frame(image: image)
         }
         pending[seconds] = task
         let result = await task.value
-        return Task.isCancelled ? nil : result
+        return Task.isCancelled ? nil : result?.image
     }
 
     func prefetch(spec: PlaySpec?, mediaID: String, targets: [Double], position: Double) async {

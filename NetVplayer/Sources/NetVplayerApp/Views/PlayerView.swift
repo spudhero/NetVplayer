@@ -829,6 +829,38 @@ struct PlayerView: View {
         _isChapterPanelPresented = State(initialValue: state == .chapterNavigation)
     }
 
+    private var compactControlsLayer: some View {
+        CompactPlayerControls(
+            kind: .vod,
+            isPlaying: playerState.isPlaying,
+            isPlaybackEnabled: playerState.currentSpec != nil && !appState.isPreparingVodPlayback,
+            position: displayedPosition,
+            duration: displayedDuration,
+            isAlwaysOnTop: windowContext.isAlwaysOnTop,
+            isVisible: compactControlsAreVisible,
+            mediaID: timelineMediaID,
+            visualRegressionProgress: visualRegressionConfiguration?.state == .timePreview ? 0.98 :
+                (visualRegressionConfiguration?.state == .chapterPreview ? 0.35 : nil),
+            chapters: playerState.chapters,
+            onSelectChapter: chapterAction,
+            chapterSpec: playerState.currentSpec,
+            chapterPreviewStore: chapterPreviewStore,
+            chapterFixtureURL: visualRegressionConfiguration?.fixtureURL,
+            onChapterPresentationChange: { isChapterPanelPresented = $0 },
+            onTogglePlayback: togglePlayPause,
+            onSeek: { target in
+                MPVPlayerEngine.vod.seek(to: Int64(target * 1_000))
+            },
+            onToggleAlwaysOnTop: {
+                _ = windowContext.toggleAlwaysOnTop()
+            },
+            onRestoreWindow: {
+                _ = windowContext.restoreRegularWindow()
+            },
+            onClose: exitPlayer
+        )
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let usesCompactControls = CompactPlayerLayoutPolicy.isCompact(
@@ -856,35 +888,7 @@ struct PlayerView: View {
                     )
                     .zIndex(2)
 
-                    CompactPlayerControls(
-                        kind: .vod,
-                        isPlaying: playerState.isPlaying,
-                        isPlaybackEnabled: playerState.currentSpec != nil && !appState.isPreparingVodPlayback,
-                        position: displayedPosition,
-                        duration: displayedDuration,
-                        isAlwaysOnTop: windowContext.isAlwaysOnTop,
-                        isVisible: compactControlsAreVisible,
-                        mediaID: timelineMediaID,
-                        visualRegressionProgress: visualRegressionConfiguration?.state == .timePreview ? 0.98 :
-                            (visualRegressionConfiguration?.state == .chapterPreview ? 0.35 : nil),
-                        chapters: playerState.chapters,
-                        onSelectChapter: chapterAction,
-                        chapterSpec: playerState.currentSpec,
-                        chapterPreviewStore: chapterPreviewStore,
-                        chapterFixtureURL: visualRegressionConfiguration?.fixtureURL,
-                        onChapterPresentationChange: { isChapterPanelPresented = $0 },
-                        onTogglePlayback: togglePlayPause,
-                        onSeek: { target in
-                            MPVPlayerEngine.vod.seek(to: Int64(target * 1_000))
-                        },
-                        onToggleAlwaysOnTop: {
-                            _ = windowContext.toggleAlwaysOnTop()
-                        },
-                        onRestoreWindow: {
-                            _ = windowContext.restoreRegularWindow()
-                        },
-                        onClose: exitPlayer
-                    )
+                    compactControlsLayer
                     .zIndex(3)
                 } else {
                     PlayerReferenceCanvas(availableSize: proxy.size) {

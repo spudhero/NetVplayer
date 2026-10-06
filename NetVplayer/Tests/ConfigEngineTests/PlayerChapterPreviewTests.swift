@@ -39,14 +39,14 @@ struct PlayerChapterPreviewTests {
         let probe = ChapterPreviewDecodeProbe()
         let store = PlayerChapterPreviewStore(decode: probe.decode)
         let spec = PlaySpec(url: "file:///preview-fixture.mp4")
-        let first = Task { await store.image(spec: spec, mediaID: "A", seconds: 4) }
+        let first = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 4)) }
         try #require(await previewWait { probe.calls == [4] })
-        let second = Task { await store.image(spec: spec, mediaID: "A", seconds: 4) }
+        let second = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 4)) }
         first.cancel()
         try await Task.sleep(for: .milliseconds(20))
         probe.finish(seconds: 4)
-        let image = try #require(await second.value)
-        #expect(await first.value == nil)
+        let image = try #require(await second.value.image)
+        #expect(await first.value.image == nil)
         #expect(probe.calls == [4])
         #expect(store.cachedImage(mediaID: "A", seconds: 4) === image)
         #expect(await store.image(spec: spec, mediaID: "A", seconds: 4) === image)
@@ -58,18 +58,18 @@ struct PlayerChapterPreviewTests {
         let probe = ChapterPreviewDecodeProbe()
         let store = PlayerChapterPreviewStore(decode: probe.decode)
         let spec = PlaySpec(url: "file:///preview-fixture.mp4")
-        let first = Task { await store.image(spec: spec, mediaID: "A", seconds: 4) }
-        let second = Task { await store.image(spec: spec, mediaID: "A", seconds: 8) }
+        let first = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 4)) }
+        let second = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 8)) }
         try #require(await previewWait { probe.calls.count == 2 })
-        let waiting = Task { await store.image(spec: spec, mediaID: "A", seconds: 12) }
+        let waiting = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 12)) }
         try await Task.sleep(for: .milliseconds(20))
         #expect(probe.calls.count == 2)
         waiting.cancel()
-        #expect(await waiting.value == nil)
+        #expect(await waiting.value.image == nil)
         store.reset(mediaID: "B")
         probe.finish(seconds: 4); probe.finish(seconds: 8)
-        #expect(await first.value == nil)
-        #expect(await second.value == nil)
+        #expect(await first.value.image == nil)
+        #expect(await second.value.image == nil)
         #expect(store.cachedImage(mediaID: "B", seconds: 4) == nil)
         #expect(store.cachedImage(mediaID: "A", seconds: 4) == nil)
     }
@@ -79,19 +79,19 @@ struct PlayerChapterPreviewTests {
         let probe = ChapterPreviewDecodeProbe()
         let store = PlayerChapterPreviewStore(decode: probe.decode)
         let spec = PlaySpec(url: "file:///preview-fixture.mp4")
-        let first = Task { await store.image(spec: spec, mediaID: "A", seconds: 4) }
-        let second = Task { await store.image(spec: spec, mediaID: "A", seconds: 8) }
+        let first = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 4)) }
+        let second = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 8)) }
         try #require(await previewWait { probe.calls.count == 2 })
-        let row = Task { await store.image(spec: spec, mediaID: "A", seconds: 12) }
-        let hover = Task { await store.image(spec: spec, mediaID: "A", seconds: 12) }
+        let row = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 12)) }
+        let hover = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 12)) }
         try await Task.sleep(for: .milliseconds(20))
         #expect(probe.calls.count == 2)
         probe.finish(seconds: 4)
         try #require(await previewWait { probe.calls.contains(12) })
         probe.finish(seconds: 8); probe.finish(seconds: 12)
         _ = await first.value; _ = await second.value
-        let image = try #require(await row.value)
-        #expect(await hover.value === image)
+        let image = try #require(await row.value.image)
+        #expect(await hover.value.image === image)
         #expect(probe.calls == [4, 8, 12])
     }
 
@@ -192,6 +192,12 @@ struct PlayerChapterPreviewTests {
         #expect(color.blueComponent > 0.8)
         #expect(color.redComponent < 0.2)
     }
+}
+
+@MainActor
+private final class ChapterPreviewImageResult {
+    let image: NSImage?
+    init(_ image: NSImage?) { self.image = image }
 }
 
 @MainActor
