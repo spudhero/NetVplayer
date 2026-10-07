@@ -74,7 +74,7 @@ NetVplayer 的目标不是照搬手机或电视端界面，而是把内容浏览
 | <img src="website/assets/screen-search.webp" alt="跨来源搜索界面" width="720"> | <img src="website/assets/screen-live.webp" alt="直播播放器已经显示真实视频画面的运行界面" width="720"> |
 | **高密度搜索工作台**<br>只搜索用户已经连接并选择的内容入口。 | **独立直播窗口**<br>提供频道分组、同名线路合并和按需显示的频道指南。 |
 
-开发版的直播配置可在“设置 → 内容来源 → 在线内容 → 影视与直播链接 → 直播频道列表”中加载 JSON、M3U 或 TXT 地址。“支持格式与填写示例”提供格式说明。JSON 包含多个直播源时，使用下方“直播源”菜单选择具体来源；直播窗口顶部也可切换，应用会记住选择。某个源加载失败时可直接选择其他源或重试。
+1.1.0 的直播配置可在“设置 → 内容来源 → 在线内容 → 影视与直播链接 → 直播频道列表”中加载 JSON、M3U 或 TXT 地址。“支持格式与填写示例”提供格式说明。JSON 包含多个直播源时，使用下方“直播源”菜单选择具体来源；直播窗口顶部也可切换，应用会记住选择。某个源加载失败时可直接选择其他源或重试。
 
 ### 用户自有内容
 
@@ -84,7 +84,7 @@ NetVplayer 提供播放、连接和兼容能力，不运营内容服务，也不
 - 配置地址、站点列表、账号和凭据由用户自行提供并保存在本地边界内。
 - 用户应只访问自己有权使用的内容，并遵守所在地法律及相关服务条款。
 - Provider 扩展只能在用户配置精确匹配后参与处理，不能静默增加内容入口。
-- 开发版的网盘与 Xtream 账号在本机加密保存；历史、收藏和应用导出备份只保存无凭据的资源身份。公开 1.0.12 的明文登录在升级时自动迁移，校验成功后清理旧副本。
+- 1.1.0 的网盘与 Xtream 账号在本机加密保存；历史、收藏和应用导出备份只保存无凭据的资源身份。公开 1.0.12 的明文登录在升级时自动迁移，校验成功后清理旧副本。
 - 可直接添加自有 Xtream-compatible 服务，使用 Movies、Series、搜索与基础直播；服务器差异仍适用。
 - 应用自有界面支持简体中文与 English，Provider 返回的内容名称保持原文。
 
@@ -166,9 +166,13 @@ flowchart TB
 6. 启动后等待“扩展支持”显示就绪。首次准备和后续更新扩展时，网络需要能够正常连接 GitHub；下载并验证完成后，离线时仍可继续使用本机已经安装且有效的组件。
 7. 进入“设置 → 内容来源 → 在线内容”，填写你自己有权使用的兼容配置。看到加载成功后返回首页即可开始浏览和播放。
 
-![NetVplayer 设置中的扩展支持页面，显示扩展能力已就绪与重新检查按钮](website/assets/screen-extension-support.webp)
+![NetVplayer 设置中的扩展支持页面，显示扩展能力已就绪与重新检查按钮](website/assets/screen-extension-support-1.1.0.webp)
 
 在“设置 → 扩展支持”看到“扩展能力已就绪”后，即可继续配置自己的内容入口。遇到异常时选择“重新检查”。
+
+![NetVplayer 1.1.0 内容来源实际运行截图：在线内容、影视配置链接与直播频道列表](website/assets/screen-content-sources-1.1.0.webp)
+
+进入“设置 → 内容来源 → 在线内容”，在“影视配置链接”中粘贴自己的配置并点击“加载影视”；直播列表填写在“直播频道列表”，点击“加载直播”。截图中的私人配置已遮挡，实际加载结果以应用显示为准。
 
 从源码构建需要 Xcode 和 Homebrew 提供的 libmpv 依赖：
 
@@ -267,7 +271,7 @@ Catalogs, details, and posters use clearable performance caches to make repeat n
 
 The screenshots above come from the running application and are also used by the [project website](https://spudhero.github.io/NetVplayer/).
 
-In the development build, load a JSON, M3U or TXT address in Settings → Content Sources → Online Content → Video & Live TV Links → Live Channel List. Supported Formats & Examples explains the input formats. When a JSON configuration contains several live sources, choose one from the Live Source menu below the address or at the top of the live player. The app remembers your choice; a failed source can be retried or replaced by selecting another.
+In 1.1.0, load a JSON, M3U or TXT address in Settings → Content Sources → Online Content → Video & Live TV Links → Live Channel List. Supported Formats & Examples explains the input formats. When a JSON configuration contains several live sources, choose one from the Live Source menu below the address or at the top of the live player. The app remembers your choice; a failed source can be retried or replaced by selecting another.
 
 ### User-owned content
 
@@ -319,7 +323,7 @@ Start with the [Provider SDK development guide](provider-sdk/README.md), which r
 
 ### Download and build
 
-The current 1.0.12 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The current 1.1.0 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
 
 The app checks for application updates and marks the version in the sidebar and Settings when a new release is available. Open the version, review the update, and select Update to download and verify it in the background. Installation happens when the app normally quits. Version 1.0.8 and earlier need one manual installation of 1.0.9 or later to gain in-app updates. The current ad-hoc signature may still require macOS first-open or installation approval.
 
@@ -333,9 +337,13 @@ The app checks for application updates and marks the version in the sidebar and 
 6. Wait for Verified Extensions to become ready. The first preparation and later updates require a network connection that can reach GitHub. After the components are downloaded and verified, installed components that remain valid can continue to work offline.
 7. Open Settings → Content Sources → Online Content and load a compatible configuration that you are authorized to use.
 
-![NetVplayer Verified Extensions screen showing that extension support is ready and the Check Again button](website/assets/screen-extension-support.webp)
+![NetVplayer Verified Extensions screen showing that extension support is ready and the Check Again button](website/assets/screen-extension-support-1.1.0.webp)
 
 Continue to your content configuration after this screen reports that extension support is ready. Use Check Again if the status reports a problem.
+
+![Screenshot of NetVplayer 1.1.0 showing Content Sources, Online Content, video configuration links, and channel lists](website/assets/screen-content-sources-1.1.0.webp)
+
+Open Settings → Content Sources → Online Content. Enter your authorized configuration in Video Configuration Link and select Load Video; use Live Channel List and Load live channels for channels. Private configurations in the screenshot are redacted; the application shows the actual result after loading.
 
 Building from source requires Xcode and the Homebrew libmpv dependencies:
 
