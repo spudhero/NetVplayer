@@ -1,0 +1,24 @@
+name: Publication identity
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    if: github.repository_owner == 'spudhero' || github.repository_owner == 'chang-chaunce'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check published authors, committers, coauthors and taggers
+        env:
+          PUBLICATION_OWNER: ${{ github.repository_owner }}
+        run: python3 script/validate_publication_identity.py --history-only --owner "$PUBLICATION_OWNER"
+      - name: Verify that incorrect identities are blocked
+        run: python3 -m unittest -v script/test_publication_identity.py

@@ -96,6 +96,7 @@ jobs:
             exit 1
           fi
           git fetch --tags origin
+          python3 script/validate_publication_identity.py --history-only --owner spudhero
           python3 script/validate_macos_release_version.py \
             --repo . --tag "$release_version" \
             --info-plist NetVplayer/Sources/NetVplayerApp/Info.plist

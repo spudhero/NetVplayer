@@ -15,6 +15,7 @@ import tempfile
 from typing import Any
 
 from audit_provider_public_boundary import build_report, is_private_provider_source, serialized
+from validate_publication_identity import audit_history, install_hooks
 
 
 FORBIDDEN_PREFIXES = ("FongMi/", "private-providers/")
@@ -334,6 +335,7 @@ def export_commit_environment() -> dict[str, str]:
 
 def initialize_clean_history(destination: Path) -> str:
     run(["git", "init", "--initial-branch=main"], cwd=destination)
+    install_hooks(destination, "spudhero")
     run(["git", "add", "-f", "--", "."], cwd=destination)
     environment = export_commit_environment()
     run(["git", "commit", "-m", "Initial public shell export"], cwd=destination, environment=environment)
@@ -357,6 +359,7 @@ def initialize_clean_history(destination: Path) -> str:
 
 
 def verify_export(destination: Path, *, run_swift_tests: bool) -> dict[str, Any]:
+    audit_history(destination, "spudhero")
     report = build_report(destination)
     if not report["summary"]["release_ready"]:
         raise PublicExportError(f"public boundary failed: {report['blocking_reasons']}")
