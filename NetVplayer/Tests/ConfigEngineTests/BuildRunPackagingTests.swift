@@ -17,8 +17,8 @@ struct BuildRunPackagingTests {
             contentsOf: packageRoot.appendingPathComponent("script/build_and_run.sh"), encoding: .utf8
         )
 
-        #expect(info["CFBundleShortVersionString"] as? String == "1.1.0")
-        #expect(info["CFBundleVersion"] as? String == "14")
+        #expect(info["CFBundleShortVersionString"] as? String == "1.1.1")
+        #expect(info["CFBundleVersion"] as? String == "15")
         #expect(info["SUFeedURL"] as? String == "https://github.com/spudhero/NetVplayer/releases/latest/download/appcast.xml")
         #expect(info["SURequireSignedFeed"] as? Bool == true)
         #expect(info["SUVerifyUpdateBeforeExtraction"] as? Bool == true)
