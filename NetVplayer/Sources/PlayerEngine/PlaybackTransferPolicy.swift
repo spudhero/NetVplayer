@@ -83,6 +83,9 @@ public enum PlaybackTransferPolicy {
             profile.prefetchWindowBytes = 16 * 1024 * 1024; profile.maximumCachedBytes = 32 * 1024 * 1024
             profile.usesParallelUpstream = true; profile.parallelSegmentBytes = 256 * 1024
             profile.parallelConcurrency = 8
+            // This CDN delivers valid 256 KiB ranges in roughly nine seconds.
+            // An eight-second deadline repeatedly discards useful responses.
+            profile.upstreamRequestTimeout = 15
         case .p115:
             profile.initialReadBytes = 512 * 1024; profile.steadyReadBytes = 512 * 1024
             profile.prefetchWindowBytes = 8 * 1024 * 1024; profile.maximumCachedBytes = 32 * 1024 * 1024

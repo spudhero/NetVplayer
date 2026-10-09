@@ -22,17 +22,23 @@ public enum ProviderManagerError: LocalizedError, Sendable {
     }
 }
 
-private actor ProviderOperationGate {
+actor ProviderOperationGate {
     private var tail: Task<Void, Never>?
 
     func run<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try Task.checkCancellation()
         let previous = tail
         let task = Task<T, Error> {
             await previous?.value
+            try Task.checkCancellation()
             return try await operation()
         }
         tail = Task { _ = try? await task.value }
-        return try await task.value
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 }
 
@@ -208,12 +214,40 @@ public actor ProviderManager {
         initializing site: Site,
         timeout: Duration = .seconds(15)
     ) async throws -> ProviderResponse {
+        let clock = ContinuousClock()
+        let queuedAt = clock.now
         let gate = operationGates[request.providerID] ?? ProviderOperationGate()
         operationGates[request.providerID] = gate
         return try await gate.run { [self] in
-            try await initialize(providerID: request.providerID, site: site, timeout: timeout)
-            return try await self.request(request, timeout: timeout)
+            let startedAt = clock.now
+            var initializedAt = startedAt
+            var stage = "initialize"
+            var status = "failed"
+            defer {
+                let finishedAt = clock.now
+                DiagnosticLog.write(
+                    "[PROVIDER_REQUEST_TIMING] provider=\(request.providerID) operation=\(request.operation.rawValue) request=\(request.requestID) status=\(status) stage=\(stage) queueMs=\(Self.milliseconds(queuedAt.duration(to: startedAt))) initMs=\(Self.milliseconds(startedAt.duration(to: initializedAt))) operationMs=\(Self.milliseconds(initializedAt.duration(to: finishedAt))) totalMs=\(Self.milliseconds(queuedAt.duration(to: finishedAt)))"
+                )
+            }
+            do {
+                do {
+                    defer { initializedAt = clock.now }
+                    try await initialize(providerID: request.providerID, site: site, timeout: timeout)
+                }
+                stage = "operation"
+                let response = try await self.request(request, timeout: timeout)
+                status = response.ok ? "ok" : "failed"
+                return response
+            } catch {
+                if error is CancellationError || Task.isCancelled { status = "cancelled" }
+                throw error
+            }
         }
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Int {
+        let components = duration.components
+        return max(0, Int(Double(components.seconds) * 1_000 + Double(components.attoseconds) / 1e15))
     }
 
     public func initialize(providerID: String, site: Site, timeout: Duration? = nil) async throws {

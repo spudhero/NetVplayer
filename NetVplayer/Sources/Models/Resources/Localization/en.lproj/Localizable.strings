@@ -834,6 +834,7 @@
 "本地视频流启动失败" = "Local video stream failed to start";
 "本地视频流启动失败，原片尾部定位请求未能完成。" = "Local video stream failed because the tail-position request did not complete.";
 "本地视频流启动超时，原片在 {0} 秒内未返回可播放数据。" = "Local video stream timed out. The original file returned no playable data within {0} seconds.";
+"原片启动超时，{0} 秒内未开始播放。" = "Original stream timed out. Playback did not start within {0} seconds.";
 "本机保存" = "Saved locally";
 "来源" = "Source";
 "来源 / 类型" = "Source / Type";
@@ -1859,3 +1860,8 @@
 "暂无预览" = "No preview";
 "悬停节点预览，点击跳转" = "Hover to preview, click to jump";
 "点击跳转" = "Click to jump";
+
+"已切换播放线路" = "Playback route switched";
+"已自动切换备用线路" = "Switched to a backup playback route";
+"播放已恢复" = "Playback restored";
+"已自动切换到“{0}”线路{1}，以恢复播放。" = "Switched to “{0}”{1} to restore playback.";

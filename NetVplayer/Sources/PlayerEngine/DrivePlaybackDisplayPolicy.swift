@@ -2,6 +2,34 @@ import Foundation
 import Models
 import DriveEngine
 
+public struct DrivePlaybackRouteNotice: Equatable, Sendable {
+    public enum Kind: Sendable {
+        case manualSelection
+        case automaticFallback
+        case routeRecovery
+    }
+
+    public let kind: Kind
+    public let message: String
+
+    public init(kind: Kind, message: String) {
+        self.kind = kind
+        self.message = message
+    }
+
+    public var title: String {
+        switch kind {
+        case .manualSelection: return L10n.text("已切换播放线路")
+        case .automaticFallback: return L10n.text("已自动切换备用线路")
+        case .routeRecovery: return L10n.text("播放已恢复")
+        }
+    }
+
+    public var symbolName: String {
+        kind == .manualSelection ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath.circle.fill"
+    }
+}
+
 public enum DrivePlaybackDisplayPolicy {
     public static func statusText(for spec: PlaySpec) -> String? {
         guard spec.metadata[DrivePlaybackMetadataKey.provider]?.isEmpty == false else {

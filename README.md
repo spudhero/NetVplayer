@@ -32,15 +32,15 @@
 
 ### 原生 macOS 媒体播放器
 
-NetVplayer 1.1.0 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+NetVplayer 1.1.1 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
 
-2026-10-07 已正式发布 **NetVplayer 1.1.0（构建号 14）**、最新主程序壳源码和五种 **Provider 1.1.0**。应用安装包、源码与扩展均已更新；下载安装包或从当前 main 构建都可使用下文功能。
+2026-10-09 的补丁版本为 **NetVplayer 1.1.1（构建号 15）**，同步最新主程序壳源码和四种目录扩展修复。包含海报连接、列表/详情加载、有声播放及历史/收藏/搜索返回路径修复；下载安装包或从当前 main 构建都可使用下文功能。
 
 | 项目 | 当前版本 | 获取入口 |
 | --- | --- | --- |
-| 稳定应用安装包 | 1.1.0 | [最新 GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
-| 公开主程序壳源码 | 1.1.0 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [更新说明](RELEASE_NOTES_1.1.0.md) |
-| 签名播放扩展 | 1.1.0 | [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) |
+| 稳定应用安装包 | 1.1.1 | [最新 GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
+| 公开主程序壳源码 | 1.1.1 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [更新说明](RELEASE_NOTES_1.1.1.md) |
+| 签名播放扩展 | 见下表 | [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) |
 
 ### 项目背景
 
@@ -98,17 +98,17 @@ Provider 是与主应用分离的扩展包。NetVplayer 只接受固定 HTTPS �
 
 ### 签名扩展发布
 
-五种 Provider 1.1.0 已正式发布，面向 **macOS 14+ / Apple Silicon arm64**。通常由应用自动安装与更新；可在“设置 → 扩展支持”选择“重新检查”。应用会核对主程序兼容版本，历史版本继续保留在官方索引中。
+五种签名 Provider 的最新兼容版本见下表，面向 **macOS 14+ / Apple Silicon arm64**。通常由应用自动安装与更新；可在“设置 → 扩展支持”选择“重新检查”。应用会核对主程序兼容版本，历史版本继续保留在官方索引中。
 
 | Provider | 版本 | 最低主程序版本 |
 | --- | --- | --- |
-| [Java 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.java-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
-| [JavaScript 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.javascript-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
-| [Python 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.python-v1.1.0-arm64) | 1.1.0 | 1.1.0 |
-| [QuickJS 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.quickjs-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+| [Java 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.java-v1.1.3-arm64) | 1.1.3 | 1.0.0 |
+| [JavaScript 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.javascript-v1.1.2-arm64) | 1.1.2 | 1.0.0 |
+| [Python 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.python-v1.1.6-arm64) | 1.1.6 | 1.1.0 |
+| [QuickJS 目录](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.quickjs-v1.1.2-arm64) | 1.1.2 | 1.0.0 |
 | [可配置 Python](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.configurable.python-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
 
-Python 目录 1.1.0 包含最新目录兼容修复，需要主程序 1.1.0 提供的新播放能力。Provider 实现源码保持私有；签名安装包与[官方 stable 索引](https://spudhero.github.io/NetVplayer-Provider-Distribution/stable/index.json)公开分发。
+Python 目录 1.1.6 包含最新目录、课堂和加载修复，需要主程序 1.1.0 或更新版本。Provider 实现源码保持私有；签名安装包与[官方 stable 索引](https://spudhero.github.io/NetVplayer-Provider-Distribution/stable/index.json)公开分发。
 
 ### 项目架构
 
@@ -235,15 +235,15 @@ NetVplayer 与 FongMi/TV 没有隶属或官方合作关系。NetVplayer 使用�
 
 ### A native media player for macOS
 
-NetVplayer 1.1.0 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+NetVplayer 1.1.1 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
 
-**NetVplayer 1.1.0 (build 14)**, the latest application shell source, and all five **Provider 1.1.0** packages were released on 2026-10-07. The stable application download, public source, and extensions are all updated. The features below are available in the downloaded application and in builds of the current main branch.
+The 2026-10-09 patch is **NetVplayer 1.1.1 (build 15)**, with the latest application shell source and four updated catalog extensions. It includes artwork connections, catalog/detail loading, audio playback, and return paths for history, favorites, and search. The features below are available in the downloaded application and in builds of the current main branch.
 
 | Component | Current version | Get it |
 | --- | --- | --- |
-| Stable application | 1.1.0 | [Latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
-| Public application shell source | 1.1.0 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [Update notes](RELEASE_NOTES_1.1.0.md) |
-| Signed playback extensions | 1.1.0 | [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) |
+| Stable application | 1.1.1 | [Latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
+| Public application shell source | 1.1.1 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [Update notes](RELEASE_NOTES_1.1.1.md) |
+| Signed playback extensions | See below | [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) |
 
 ### Project background
 
@@ -295,17 +295,17 @@ Settings reports component, cache, and user-data storage separately. Users can r
 
 ### Provider releases
 
-All five Provider 1.1.0 packages are published for **macOS 14+ / Apple Silicon arm64**. The application normally installs and updates compatible packages automatically. Select Settings → Verified Extensions → Check Again to check for updates; historical compatible versions remain in the official index.
+The latest compatible versions of the five signed Provider packages are listed below for **macOS 14+ / Apple Silicon arm64**. The application normally installs and updates compatible packages automatically. Select Settings → Verified Extensions → Check Again to check for updates; historical compatible versions remain in the official index.
 
 | Provider | Version | Minimum application version |
 | --- | --- | --- |
-| [Java catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.java-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
-| [JavaScript catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.javascript-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
-| [Python catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.python-v1.1.0-arm64) | 1.1.0 | 1.1.0 |
-| [QuickJS catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.quickjs-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
+| [Java catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.java-v1.1.3-arm64) | 1.1.3 | 1.0.0 |
+| [JavaScript catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.javascript-v1.1.2-arm64) | 1.1.2 | 1.0.0 |
+| [Python catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.python-v1.1.6-arm64) | 1.1.6 | 1.1.0 |
+| [QuickJS catalog](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.quickjs-v1.1.2-arm64) | 1.1.2 | 1.0.0 |
 | [Configurable Python](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.configurable.python-v1.1.0-arm64) | 1.1.0 | 1.0.0 |
 
-Python catalog 1.1.0 includes the latest compatibility fixes and requires the updated playback support in application 1.1.0. Provider implementation sources remain private; signed bundles and the [official stable index](https://spudhero.github.io/NetVplayer-Provider-Distribution/stable/index.json) are publicly distributed.
+Python catalog 1.1.6 includes the latest catalog, classroom, and loading fixes and requires application 1.1.0 or later. Provider implementation sources remain private; signed bundles and the [official stable index](https://spudhero.github.io/NetVplayer-Provider-Distribution/stable/index.json) are publicly distributed.
 
 ### Architecture
 
@@ -323,7 +323,7 @@ Start with the [Provider SDK development guide](provider-sdk/README.md), which r
 
 ### Download and build
 
-The current 1.1.0 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The current 1.1.1 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
 
 The app checks for application updates and marks the version in the sidebar and Settings when a new release is available. Open the version, review the update, and select Update to download and verify it in the background. Installation happens when the app normally quits. Version 1.0.8 and earlier need one manual installation of 1.0.9 or later to gain in-app updates. The current ad-hoc signature may still require macOS first-open or installation approval.
 

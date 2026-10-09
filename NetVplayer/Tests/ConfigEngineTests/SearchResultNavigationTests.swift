@@ -1,9 +1,13 @@
 import Combine
+import ConfigEngine
+import DriveEngine
 import Foundation
 import Models
+import Networking
 import SpiderEngine
 import Storage
 import Testing
+import WebHomeEngine
 @testable import NetVplayerApp
 @testable import SearchEngine
 
@@ -49,9 +53,9 @@ struct SearchResultNavigationTests {
         #expect(state.contentSearchState.generation == generation)
     }
 
-    @Test
-    func openingAnotherSourceKeepsStreamingSearchAlive() async throws {
-        let fixture = try await SearchNavigationFixture()
+    @Test(arguments: [false, true])
+    func openingAnotherSourceKeepsStreamingSearchAlive(opensLocalShare: Bool) async throws {
+        let fixture = try await SearchNavigationFixture(driveShareExpander: DriveShareExpander(expanders: [NavigationShareExpander()]))
         defer { fixture.removeStorage() }
         let state = fixture.state
         let gate = SearchNavigationGate()
@@ -68,7 +72,11 @@ struct SearchResultNavigationTests {
         let generation = state.contentSearchState.generation
         let vod = try #require(state.searchResults.first { $0.siteKey == fixture.destination.key }?.vods.first)
 
-        await state.openSearchResultVod(vod, from: fixture.destination)
+        if opensLocalShare {
+            await state.openImportedDriveShare(Vod(vodId: "https://pan.quark.cn/s/navigation-fixture", vodName: "分享"))
+        } else {
+            await state.openSearchResultVod(vod, from: fixture.destination)
+        }
         state.isDetailPresented = false
         #expect(state.isSearching)
         #expect(state.searchKeyword == "影片")
@@ -84,8 +92,8 @@ struct SearchResultNavigationTests {
         #expect(state.contentSearchState.generation == generation)
     }
 
-    @Test(arguments: [true, false])
-    func playbackRoundTripUsesOriginRoute(fromSearch: Bool) async throws {
+    @Test(arguments: [SidebarTab.search, .history, .favorites, .vodHome])
+    func playbackRoundTripUsesOriginRoute(origin: SidebarTab) async throws {
         let fixture = try await SearchNavigationFixture()
         defer { fixture.removeStorage() }
         let state = fixture.state
@@ -94,11 +102,10 @@ struct SearchResultNavigationTests {
         }
         await state.search(keyword: "影片")
         let vod = try #require(state.searchResults.first { $0.siteKey == fixture.destination.key }?.vods.first)
-        if !fromSearch { state.selectedTab = .history }
+        state.selectedTab = origin
         let generation = state.contentSearchState.generation
         let originalIDs = state.searchResults.flatMap(\.vods).map(\.vodId)
-        let expectedTab: SidebarTab = fromSearch ? .search : .vodHome
-        let expectedKeyword = fromSearch ? "影片" : ""
+        let expectedKeyword = origin == .search ? "影片" : ""
         await state.openSearchResultVod(vod, from: fixture.destination)
         let episode = try #require(state.episodes.first)
         var specs: [PlaySpec] = []
@@ -107,7 +114,7 @@ struct SearchResultNavigationTests {
         await state.playEpisode(episode)
         #expect(specs.count == 1)
         #expect(state.isPlayerPresented)
-        #expect(state.selectedTab == expectedTab)
+        #expect(state.selectedTab == origin)
         #expect(state.searchKeyword == expectedKeyword)
         #expect(state.searchResults.flatMap(\.vods).map(\.vodId) == originalIDs)
         #expect(state.contentSearchState.generation == generation)
@@ -118,11 +125,109 @@ struct SearchResultNavigationTests {
         #expect(state.isDetailPresented)
         state.isDetailPresented = false
         state.restoreVodHomeSiteIfNeeded()
-        #expect(state.selectedTab == expectedTab)
+        #expect(state.selectedTab == origin)
         #expect(state.searchKeyword == expectedKeyword)
         #expect(state.searchResults.flatMap(\.vods).map(\.vodId) == originalIDs)
-        #expect(state.contentSearchState.cursors[fixture.destination.key]?.nextPage == (fromSearch ? 2 : nil))
+        #expect(state.contentSearchState.cursors[fixture.destination.key]?.nextPage == (origin == .search ? 2 : nil))
         #expect(state.contentSearchState.generation == generation)
+    }
+
+    @Test(arguments: [SidebarTab.history, .favorites], [false, true])
+    func libraryEntryPlaybackReturnsToItsPage(origin: SidebarTab, switchesConfiguration: Bool) async throws {
+        let fixture = try await SearchNavigationFixture()
+        defer { fixture.removeStorage() }
+        let state = fixture.state
+        let current = Config(id: 1, url: "https://configuration.test/" + fixture.home.key)
+        let destination = Config(id: 2, url: "https://configuration.test/" + fixture.destination.key)
+        state.savedConfigs = [current, destination]
+        state.libraryConfigurationURL = current.url
+        let configuration = switchesConfiguration ? destination : current
+        let fingerprint = LibrarySourceIdentity.fingerprint(configurationURL: configuration.url, site: fixture.destination)
+        let key = PlaybackLinkage.vodKey(siteKey: fixture.destination.key, vodId: "saved-film", sourceFingerprint: fingerprint)
+        let history = History(
+            key: key, siteKey: fixture.destination.key, vodId: "saved-film", vodName: "影片",
+            vodFlag: "测试线路", episodeUrl: "https://example.test/film.mp4", episodeName: "测试集",
+            position: 42_000, duration: 600_000, configId: configuration.id, sourceFingerprint: fingerprint
+        )
+        let favorite = Keep(
+            key: key, vodName: "影片", type: .vod,
+            configId: configuration.id, sourceFingerprint: fingerprint
+        )
+        state.historyItems = [history]
+        state.keepItems = [favorite]
+        state.selectedTab = origin
+        var specs: [PlaySpec] = []
+        state.playSpecHandler = { specs.append($0) }
+
+        if origin == .history {
+            await state.playHistory(history)
+        } else {
+            await state.openKeep(favorite)
+            #expect(state.selectedTab == .favorites)
+            #expect(state.isDetailPresented)
+            await state.playEpisode(try #require(state.episodes.first))
+        }
+
+        #expect(specs.count == 1)
+        #expect(state.isPlayerPresented)
+        #expect(state.selectedTab == origin)
+        #expect(state.activeSite?.key == fixture.destination.key)
+        #expect(state.libraryConfigurationURL == configuration.url)
+        if origin == .history { #expect(specs.first?.initialStartPositionSeconds == 42) }
+        state.beginPlayerDismissalReturningToDetail()
+        state.completePlayerDismissalPresentation()
+        #expect(state.isDetailPresented)
+        #expect(!state.isPlayerPresented)
+        state.isDetailPresented = false
+        state.restoreVodHomeSiteIfNeeded()
+        #expect(state.selectedTab == origin)
+        #expect(state.historyItems.contains { $0.key == key })
+        #expect(state.keepItems.contains { $0.key == key })
+    }
+
+    @Test
+    func importedShareDetailsPreserveSearchResults() async throws {
+        let fixture = try await SearchNavigationFixture(driveShareExpander: DriveShareExpander(expanders: [NavigationShareExpander()]))
+        defer { fixture.removeStorage() }
+        let state = fixture.state
+        await state.search(keyword: "https://pan.quark.cn/s/navigation-fixture")
+        let vod = try #require(state.searchResults.first?.vods.first)
+        let results = state.searchResults.flatMap(\.vods).map(\.vodId)
+        let generation = state.contentSearchState.generation
+        let keyword = state.searchKeyword
+
+        await state.openImportedDriveShare(vod)
+        #expect(state.isDetailPresented)
+        #expect(state.episodes.count == 1)
+        state.isDetailPresented = false
+        state.restoreVodHomeSiteIfNeeded()
+        #expect(state.selectedTab == .search)
+        #expect(state.searchKeyword == keyword)
+        #expect(state.searchResults.flatMap(\.vods).map(\.vodId) == results)
+        #expect(state.contentSearchState.generation == generation)
+    }
+
+    @Test
+    func webHomeDirectPlaybackReturnsWithoutAnUnrelatedDetail() async throws {
+        let fixture = try await SearchNavigationFixture()
+        defer { fixture.removeStorage() }
+        let state = fixture.state
+        state.selectedTab = .webHome
+        state.detailVod = Vod(vodId: "previous-film", vodName: "之前关闭的详情")
+        var specs: [PlaySpec] = []
+        state.playSpecHandler = { specs.append($0) }
+        let reply = await state.makeWebHomeBridgeDispatcher().dispatch(WebHomeBridgeMessage(
+            id: "navigation-play", method: "play",
+            params: ["url": .string("https://example.test/film.mp4"), "title": .string("网页播放")]
+        ))
+        #expect(reply.ok)
+        #expect(specs.count == 1)
+        #expect(state.isPlayerPresented)
+        state.beginPlayerDismissalReturningToDetail()
+        state.completePlayerDismissalPresentation()
+        #expect(!state.isPlayerPresented)
+        #expect(!state.isDetailPresented)
+        #expect(state.selectedTab == .webHome)
     }
 
     @Test
@@ -170,7 +275,7 @@ private struct SearchNavigationFixture {
     private let suite: String
     private let defaults: UserDefaults
 
-    init() async throws {
+    init(driveShareExpander: DriveShareExpander = .shared) async throws {
         let id = UUID().uuidString
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("search-navigation-" + id)
         suite = "search-navigation-" + id
@@ -185,12 +290,20 @@ private struct SearchNavigationFixture {
                 provider: SearchNavigationProvider()
             )
         }
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [NavigationConfigurationURLProtocol.self]
         state = AppState(
             loadDefaultConfig: false,
             startProxyServer: false,
+            driveShareExpander: driveShareExpander,
+            configResolver: ConfigResolver(
+                httpClient: HTTPClient(session: URLSession(configuration: sessionConfiguration)),
+                preferences: preferences, allowsProxyFallback: false
+            ),
             storageManager: StorageManager(storageDirectory: directory),
             userPreferences: preferences,
-            providerRuntimeBootstrap: nil
+            providerRuntimeBootstrap: nil,
+            providerRuntimeRegistrationOverride: { true }
         )
         state.sites = [home, destination]
         state.activeSite = home
@@ -200,6 +313,29 @@ private struct SearchNavigationFixture {
     func removeStorage() {
         try? FileManager.default.removeItem(at: directory)
         defaults.removePersistentDomain(forName: suite)
+    }
+}
+
+private final class NavigationConfigurationURLProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "configuration.test" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url else { return }
+        let body = try! JSONSerialization.data(withJSONObject: ["sites": [[
+            "key": url.lastPathComponent, "name": "另一来源", "type": 3,
+            "api": "csp_SearchNavigationFixture", "searchable": 1
+        ]]])
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private struct NavigationShareExpander: DriveShareExpanding {
+    func canExpand(url: String) -> Bool { url == "https://pan.quark.cn/s/navigation-fixture" }
+    func expand(url: String, fallbackTitle: String) async throws -> [Episode] {
+        [Episode(name: "测试集", url: "https://example.test/film.mp4")]
     }
 }
 

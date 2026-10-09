@@ -414,14 +414,57 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
     #expect(selected.initialStartPositionSeconds == 48.5)
     #expect(appState.selectedDrivePlaybackRouteID == "quark:original-download")
     #expect(appState.pendingDrivePlaybackRouteID == "quark:personal-transcode")
-    #expect(appState.playbackDowngradeMessage == nil)
+    #expect(appState.playbackRouteNotice == nil)
     #expect(ProxyServer.shared.remoteStreamPlaybackInfo(forLocalURL: originalRelay.url) == nil)
 
     appState.handleMPVPlaybackStarted(spec: selected)
 
     #expect(appState.selectedDrivePlaybackRouteID == "quark:personal-transcode")
     #expect(appState.pendingDrivePlaybackRouteID == nil)
-    #expect(appState.playbackDowngradeMessage == "已切换到“夸克智”线路。")
+    #expect(appState.playbackRouteNotice?.message == "已切换到“夸克智”线路。")
+    #expect(appState.playbackRouteNotice?.kind == .manualSelection)
+}
+
+@MainActor
+@Test(arguments: [DriveProvider.uc, DriveProvider.quark])
+func testManualSmartToOriginalRouteShowsManualNoticeAfterPlaybackStarts(provider: DriveProvider) async throws {
+    let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
+    var original = PlaySpec(url: "https://media.example.invalid/video.mp4")
+    original.metadata[DrivePlaybackMetadataKey.provider] = provider.rawValue
+    original.metadata[DrivePlaybackMetadataKey.route] = DrivePlaybackRoute.originalDownload
+    original.metadata[TestDriveFallbackMetadataKey.fallbackURL] = "https://media.example.invalid/smart.m3u8"
+    original.metadata[TestDriveFallbackMetadataKey.fallbackRoute] = provider == .uc
+        ? DrivePlaybackRoute.ucSmartPlay : DrivePlaybackRoute.personalTranscode
+    original.metadata[TestDriveFallbackMetadataKey.fallbackQualityLabel] = "1080P"
+    _ = installDriveSpec(original, in: appState)
+    appState.playerState.position = 48.5
+    appState.playerState.duration = 3_600
+    var submitted: PlaySpec?
+    appState.playSpecHandler = { submitted = $0 }
+    let smart = try #require(appState.drivePlaybackRoutes.last)
+    let originalRoute = try #require(appState.drivePlaybackRoutes.first)
+
+    await appState.selectDrivePlaybackRoute(smart)
+    let smartSpec = try #require(submitted)
+    appState.playerState.currentSpec = smartSpec
+    appState.handleMPVPlaybackStarted(spec: smartSpec)
+    #expect(appState.playbackRouteNotice?.kind == .manualSelection)
+
+    await appState.selectDrivePlaybackRoute(originalRoute)
+    #expect(appState.playbackRouteNotice == nil)
+    #expect(appState.pendingDrivePlaybackRouteID == originalRoute.id)
+    let restored = try #require(submitted)
+    #expect(restored.initialStartPositionSeconds == 48.5)
+    appState.playerState.currentSpec = restored
+    appState.handleMPVPlaybackStarted(spec: restored)
+    #expect(appState.selectedDrivePlaybackRouteID == originalRoute.id)
+    #expect(appState.pendingDrivePlaybackRouteID == nil)
+    #expect(appState.playbackRouteNotice?.kind == .manualSelection)
+    #expect(appState.playbackRouteNotice?.title == "已切换播放线路")
+    #expect(appState.playbackRouteNotice?.message == "已切换到“\(originalRoute.title)”线路。")
+    appState.dismissPlaybackRouteNotice()
+    #expect(appState.playbackRouteNotice == nil)
+    ProxyServer.shared.unregisterRemoteStream(forLocalURL: restored.url)
 }
 
 @MainActor
@@ -447,7 +490,7 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
     #expect(capturedSpecs.count == 1)
     #expect(appState.selectedDrivePlaybackRouteID == "quark:original-download")
     #expect(appState.pendingDrivePlaybackRouteID == nil)
-    #expect(appState.playbackDowngradeMessage == nil)
+    #expect(appState.playbackRouteNotice == nil)
     #expect(appState.playerState.errorMessage == "夸克网盘原片和兼容线路均播放失败，请重试或切换来源。")
 }
 
@@ -559,14 +602,15 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
     #expect(fallback.metadata[LiveHLSRelayPolicy.transportMetadataKey] == LiveHLSRelayPolicy.localRelayTransport)
     #expect(appState.playerState.drivePlaybackStatus == "正在切换 夸克智")
     #expect(appState.pendingDrivePlaybackRouteID == "quark:personal-transcode")
-    #expect(appState.playbackDowngradeMessage == nil)
+    #expect(appState.playbackRouteNotice == nil)
     #expect(appState.playerState.errorMessage == nil)
 
     appState.handleMPVPlaybackStarted(spec: fallback)
 
     #expect(appState.pendingDrivePlaybackRouteID == nil)
     #expect(appState.selectedDrivePlaybackRouteID == "quark:personal-transcode")
-    #expect(appState.playbackDowngradeMessage == "已自动降级到“夸克智”线路（4K），以保持播放流畅。")
+    #expect(appState.playbackRouteNotice?.message == "已自动切换到“夸克智”线路（4K），以恢复播放。")
+    #expect(appState.playbackRouteNotice?.kind == .automaticFallback)
 }
 
 @MainActor
@@ -648,14 +692,14 @@ private func installDriveSpec(_ source: PlaySpec, in appState: AppState) -> Play
     #expect(DrivePlaybackRoutePolicy.candidate(for: fallback)?.id == "quark:personal-transcode")
     #expect(fallback.drivePlaybackSessionGeneration == localStream.drivePlaybackSessionGeneration)
     #expect(appState.playerState.drivePlaybackStatus == "正在切换 夸克智")
-    #expect(appState.playbackDowngradeMessage == nil)
+    #expect(appState.playbackRouteNotice == nil)
     #expect(appState.playerState.errorMessage == nil)
 
     appState.handleMPVPlaybackStarted(spec: fallback)
-    #expect(appState.playbackDowngradeMessage == "已自动降级到“夸克智”线路（4K），以保持播放流畅。")
+    #expect(appState.playbackRouteNotice?.message == "已自动切换到“夸克智”线路（4K），以恢复播放。")
 
-    appState.dismissPlaybackDowngradeNotice()
-    #expect(appState.playbackDowngradeMessage == nil)
+    appState.dismissPlaybackRouteNotice()
+    #expect(appState.playbackRouteNotice == nil)
 }
 
 @MainActor
@@ -851,11 +895,11 @@ func testDriveUCRefreshedLinkFailureBeforeFirstFrameCompletesRecovery(hasFallbac
 
     let fallback = try #require(capturedSpec)
     #expect(DrivePlaybackRoutePolicy.candidate(for: fallback)?.id == "uc:uc-smart-play")
-    #expect(appState.playbackDowngradeMessage == nil)
+    #expect(appState.playbackRouteNotice == nil)
     #expect(appState.playerState.errorMessage == nil)
 
     appState.handleMPVPlaybackStarted(spec: fallback)
-    #expect(appState.playbackDowngradeMessage == "已自动降级到“UC智”线路（流畅），以保持播放流畅。")
+    #expect(appState.playbackRouteNotice?.message == "已自动切换到“UC智”线路（流畅），以恢复播放。")
 }
 
 @MainActor

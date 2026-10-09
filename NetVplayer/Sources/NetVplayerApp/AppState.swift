@@ -279,7 +279,14 @@ final class AppState: ObservableObject {
     @Published var currentDanmakuCues: [DanmakuCue] = []
 
     // 点播业务数据
-    @Published var sites: [Site] = [] { didSet { if oldValue != sites { resetSearchState() } } }
+    @Published var sites: [Site] = [] {
+        didSet {
+            // The local share-detail adapter is not a searchable configuration source.
+            let oldSources = oldValue.filter { $0.key != Self.driveShareImportSiteKey }
+            let newSources = sites.filter { $0.key != Self.driveShareImportSiteKey }
+            if oldSources != newSources { resetSearchState() }
+        }
+    }
     @Published var activeSite: Site?
     @Published private(set) var contentCatalogState = ContentCatalogState()
     @Published private(set) var isCatalogRefreshing = false
@@ -372,7 +379,7 @@ final class AppState: ObservableObject {
     @Published var playbackErrorAuthProvider: DriveProvider?
     @Published var playbackVerificationRequest: PlaybackVerificationRequest?
     @Published var playbackWarningMessage: String?
-    @Published var playbackDowngradeMessage: String?
+    @Published private(set) var playbackRouteNotice: DrivePlaybackRouteNotice?
     @Published private(set) var drivePlaybackRoutes: [DrivePlaybackRouteOption] = []
     @Published private(set) var selectedDrivePlaybackRouteID: String?
     @Published private(set) var pendingDrivePlaybackRouteID: String?
@@ -473,7 +480,7 @@ final class AppState: ObservableObject {
     private var drivePlaybackStallGeneration: UInt64 = 0
     private var drivePlaybackStallTask: Task<Void, Never>?
     private var drivePlaybackStallSpecURL: String?
-    private var pendingDrivePlaybackSuccessMessage: String?
+    private var pendingDrivePlaybackNotice: DrivePlaybackRouteNotice?
     private let drivePlaybackSessionController = DrivePlaybackSessionController()
 
     // 直播业务数据
@@ -1739,33 +1746,6 @@ final class AppState: ObservableObject {
                 )
             }
             
-            // 异步自检测试：拉取前几个可加载的 JS 爬虫站点的首页内容，定位调试问题
-            Task {
-                let loadableSpiders = self.sites.filter { $0.type == 3 && ($0.api.hasPrefix("http://") || $0.api.hasPrefix("https://")) }
-                log("[TEST_RUNNER] 发现可加载的远程 JS 爬虫站点共: \(loadableSpiders.count) 个")
-                for site in loadableSpiders.prefix(5) {
-                    log("[TEST_RUNNER] 尝试自检可加载的 JS 爬虫站点 site=\(site.name), key=\(site.key), api=\(site.api)")
-                    do {
-                        let res = try await SiteApi.shared.homeContent(site: site)
-                        var listCount = res.list.count
-                        if listCount == 0, let firstType = res.types.first {
-                            let cateRes = try await SiteApi.shared.categoryContent(
-                                key: site.key,
-                                tid: firstType.typeId,
-                                page: "1",
-                                filter: true,
-                                extend: [:],
-                                sites: self.sites
-                            )
-                            listCount = cateRes.list.count
-                        }
-                        log("[TEST_RUNNER] 爬虫自检成功 site=\(site.name), 分类数=\(res.types.count), 列表数=\(listCount)")
-                    } catch {
-                        log("[TEST_RUNNER] 爬虫自检失败 site=\(site.name), error=\(error.localizedDescription) (\(error))")
-                    }
-                }
-            }
-            
             // 单个 MacCMS 输入的首次响应已经包含首页数据，无需再次请求。
             if let initialResult = resolvedInput.initialResult {
                 let loadingState = ContentCatalogCore.beginHome(self.contentCatalogState)
@@ -2105,7 +2085,8 @@ final class AppState: ObservableObject {
         spec.metadata["webhome.source"] = "bridge"
         spec.metadata["webhome.originalHost"] = safeURL.host ?? ""
         let playable = await proxiedPlaySpec(spec, logContext: "WEBHOME")
-        selectedTab = .vodHome
+        // Direct web playback has no native detail to restore on exit.
+        detailVod = nil
         isDetailPresented = false
         isPlayerPresented = true
         await play(spec: playable)
@@ -2957,7 +2938,6 @@ final class AppState: ObservableObject {
         ensureDriveShareImportSite()
         activeSite = site
         currentSiteName = site.name
-        selectedTab = .vodHome
         isDetailPresented = true
         isDetailLoading = true
         defer { isDetailLoading = false }
@@ -3756,7 +3736,7 @@ final class AppState: ObservableObject {
         self.isPlayerLoading = true
         self.playerLoadingMessage = L10n.text("正在解析视频，请稍候...")
         self.playbackWarningMessage = nil
-        self.playbackDowngradeMessage = nil
+        self.playbackRouteNotice = nil
         self.playbackErrorAuthProvider = nil
         self.pendingAuthEpisode = nil
         defer {
@@ -4309,10 +4289,8 @@ final class AppState: ObservableObject {
             resetDrivePlaybackRoutes()
             finalSpec = activateDrivePlaybackRoutes(for: finalSpec)
             
-            // Search remains the return destination while its player is presented.
-            if self.selectedTab != .search {
-                self.selectedTab = .vodHome
-            }
+            // The player replaces the presentation, not the browsing destination.
+            // Keep history, favorites, search and home behind the detail round trip.
             self.isDetailPresented = false
             self.isPlayerPresented = true
             
@@ -4548,8 +4526,8 @@ final class AppState: ObservableObject {
         playbackWarningMessage = nil
     }
 
-    func dismissPlaybackDowngradeNotice() {
-        playbackDowngradeMessage = nil
+    func dismissPlaybackRouteNotice() {
+        playbackRouteNotice = nil
     }
 
     func updateDrivePlaybackWarning(for spec: PlaySpec, episode: Episode) {
@@ -5888,7 +5866,7 @@ final class AppState: ObservableObject {
         case .started(let candidate):
             if pendingDrivePlaybackRouteID == spec.metadata[DrivePlaybackRoutePolicy.selectionIDMetadataKey] {
                 pendingDrivePlaybackRouteID = nil
-                pendingDrivePlaybackSuccessMessage = nil
+                pendingDrivePlaybackNotice = nil
             }
             Task { @MainActor in
                 guard !Task.isCancelled else { return }
@@ -5926,9 +5904,12 @@ final class AppState: ObservableObject {
                     reason: candidate.id == failedCandidateID
                         ? L10n.text("{0}线路失效，刷新后重试", ["\(provider.localizedDisplayName)"])
                         : L10n.text("{0}当前线路播放失败", ["\(provider.localizedDisplayName)"]),
-                    successMessage: candidate.id == failedCandidateID
-                        ? L10n.text("已刷新“{0}”线路并恢复播放。", ["\(routeTitle)"])
-                        : L10n.text("已自动降级到“{0}”线路{1}，以保持播放流畅。", ["\(routeTitle)", "\(qualitySuffix)"]),
+                    notice: DrivePlaybackRouteNotice(
+                        kind: candidate.id == failedCandidateID ? .routeRecovery : .automaticFallback,
+                        message: candidate.id == failedCandidateID
+                            ? L10n.text("已刷新“{0}”线路并恢复播放。", ["\(routeTitle)"])
+                            : L10n.text("已自动切换到“{0}”线路{1}，以恢复播放。", ["\(routeTitle)", "\(qualitySuffix)"])
+                    ),
                     logContext: candidate.id == failedCandidateID
                         ? "DRIVE_PLAYBACK_ROUTE_RECOVERY"
                         : "DRIVE_PLAYBACK_DOWNGRADE"
@@ -6263,7 +6244,7 @@ final class AppState: ObservableObject {
             ? selectionID
             : nil
         pendingDrivePlaybackRouteID = nil
-        pendingDrivePlaybackSuccessMessage = nil
+        pendingDrivePlaybackNotice = nil
         return prepared
     }
 
@@ -6292,7 +6273,10 @@ final class AppState: ObservableObject {
                     routeTitle: route.title,
                     positionSeconds: max(0, playerState.position),
                     reason: L10n.text("用户手动选择线路"),
-                    successMessage: L10n.text("已切换到“{0}”线路。", ["\(route.title)"]),
+                    notice: DrivePlaybackRouteNotice(
+                        kind: .manualSelection,
+                        message: L10n.text("已切换到“{0}”线路。", ["\(route.title)"])
+                    ),
                     logContext: "DRIVE_PLAYBACK_ROUTE"
                 )
             case .coalesced, .stale, .exhausted:
@@ -6308,7 +6292,7 @@ final class AppState: ObservableObject {
         routeTitle: String,
         positionSeconds: Double,
         reason: String,
-        successMessage: String,
+        notice: DrivePlaybackRouteNotice,
         logContext: String
     ) async -> DrivePlaybackTransitionOutcome {
         let prepared = DrivePlaybackRoutePolicy.preparedSpec(sourceSpec)
@@ -6321,8 +6305,8 @@ final class AppState: ObservableObject {
         }
 
         pendingDrivePlaybackRouteID = selectionID
-        pendingDrivePlaybackSuccessMessage = successMessage
-        playbackDowngradeMessage = nil
+        pendingDrivePlaybackNotice = notice
+        playbackRouteNotice = nil
         playerState.errorMessage = nil
         isPlaybackErrorPresented = false
         playerState.drivePlaybackStatus = L10n.text("正在切换 {0}", ["\(routeTitle)"])
@@ -6360,10 +6344,10 @@ final class AppState: ObservableObject {
 
         selectedDrivePlaybackRouteID = selectionID
         self.pendingDrivePlaybackRouteID = nil
-        playbackDowngradeMessage = pendingDrivePlaybackSuccessMessage
-        pendingDrivePlaybackSuccessMessage = nil
+        playbackRouteNotice = pendingDrivePlaybackNotice
+        pendingDrivePlaybackNotice = nil
         let title = DrivePlaybackRoutePolicy.title(for: spec) ?? selectionID
-        log("[DRIVE_PLAYBACK_ROUTE_STARTED] route=\(title)")
+        log("[DRIVE_PLAYBACK_ROUTE_STARTED] route=\(title) notice=\(playbackRouteNotice.map { String(describing: $0.kind) } ?? "none")")
     }
 
     private func resetDrivePlaybackRoutes() {
@@ -6371,7 +6355,7 @@ final class AppState: ObservableObject {
         drivePlaybackRoutes = []
         selectedDrivePlaybackRouteID = nil
         pendingDrivePlaybackRouteID = nil
-        pendingDrivePlaybackSuccessMessage = nil
+        pendingDrivePlaybackNotice = nil
     }
 
     private func presentDrivePlaybackTerminalError(for spec: PlaySpec) {
@@ -6381,9 +6365,9 @@ final class AppState: ObservableObject {
         }
         isPlayerLoading = false
         playerState.isMediaLoading = false
-        playbackDowngradeMessage = nil
+        playbackRouteNotice = nil
         pendingDrivePlaybackRouteID = nil
-        pendingDrivePlaybackSuccessMessage = nil
+        pendingDrivePlaybackNotice = nil
         playerState.drivePlaybackStatus = nil
         if plan.reauthenticationRequired {
             playerState.errorMessage = L10n.text("{0}登录已失效，请重新授权后重试。", ["\(plan.provider.localizedDisplayName)"])
@@ -7477,7 +7461,8 @@ final class AppState: ObservableObject {
     private var searchDataScope: String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
-        let sources = ((try? encoder.encode(sites)) ?? Data()).base64EncodedString()
+        let searchSources = sites.filter { $0.key != Self.driveShareImportSiteKey }
+        let sources = ((try? encoder.encode(searchSources)) ?? Data()).base64EncodedString()
         let runtimeVersions = providerRuntimeInstalled.map {
             $0.manifest.providerID + ":" + $0.manifest.version
         }.sorted()

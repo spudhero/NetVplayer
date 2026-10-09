@@ -49,6 +49,7 @@ public struct PlaybackTransferProfile: Sendable, Equatable {
     public var maxConcurrentPrefetches: Int
     public var parallelSegmentBytes: Int64
     public var parallelConcurrency: Int
+    public var upstreamRequestTimeout: TimeInterval
     public var usesHTTP2Multiplexing: Bool
     public var usesParallelUpstream: Bool
     public var adaptsConcurrency: Bool
@@ -62,6 +63,7 @@ public struct PlaybackTransferProfile: Sendable, Equatable {
                 maxConcurrentPrefetches: Int = 2,
                 parallelSegmentBytes: Int64 = 5 * 1024 * 1024,
                 parallelConcurrency: Int = 1,
+                upstreamRequestTimeout: TimeInterval = 8,
                 usesHTTP2Multiplexing: Bool = false,
                 usesParallelUpstream: Bool = false,
                 adaptsConcurrency: Bool = false,
@@ -74,6 +76,8 @@ public struct PlaybackTransferProfile: Sendable, Equatable {
         self.maxConcurrentPrefetches = max(0, maxConcurrentPrefetches)
         self.parallelSegmentBytes = max(1, parallelSegmentBytes)
         self.parallelConcurrency = max(1, parallelConcurrency)
+        self.upstreamRequestTimeout = upstreamRequestTimeout.isFinite
+            ? max(1, min(upstreamRequestTimeout, 60)) : 8
         self.usesHTTP2Multiplexing = usesHTTP2Multiplexing
         self.usesParallelUpstream = usesParallelUpstream
         self.adaptsConcurrency = adaptsConcurrency

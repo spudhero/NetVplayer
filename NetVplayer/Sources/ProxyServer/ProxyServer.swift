@@ -455,6 +455,7 @@ public final class ProxyServer: @unchecked Sendable {
             url: url,
             headers: headers,
             upstreamHTTPClient: upstreamHTTPClient,
+            upstreamRequestTimeout: transferProfile?.upstreamRequestTimeout ?? Self.defaultStreamTimeout,
             contentType: contentType,
             buffer: buffer,
             bufferConfiguration: bufferConfiguration,
@@ -1060,6 +1061,7 @@ struct RemoteStream: Sendable {
     let url: String
     let headers: [String: String]
     let upstreamHTTPClient: HTTPClient
+    let upstreamRequestTimeout: TimeInterval
     let contentType: String
     let buffer: RemoteStreamBuffer
     let bufferConfiguration: RemoteStreamBufferConfiguration
@@ -3000,7 +3002,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                 url: stream.url,
                 method: .get,
                 headers: headers,
-                timeout: ProxyServer.defaultStreamTimeout,
+                timeout: stream.upstreamRequestTimeout,
                 redactsURLInLogs: true
             )
         }

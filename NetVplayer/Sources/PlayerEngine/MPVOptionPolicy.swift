@@ -38,8 +38,10 @@ public enum MPVOptionPolicy {
         for (key, value) in transport where value != result[key]?.value || key == "http-proxy" {
             result[key] = .init(value: value, origin: .transport)
         }
-        // Structured headers are applied separately after this plan, never from source options.
-        result["http-header-fields"] = .init(value: "", origin: .transport)
+        // The engine clears this list with change-list/clr and appends structured
+        // headers afterwards. Setting an empty string creates an empty list entry;
+        // FFmpeg then sends a blank line before the appended headers.
+        result.removeValue(forKey: "http-header-fields")
         result["user-agent"] = .init(value: header("User-Agent", in: spec.headers) ?? PlaybackProxyPolicy.defaultHTTPUserAgent, origin: .transport)
         result["referrer"] = .init(value: header("Referer", in: spec.headers) ?? "", origin: .transport)
         return result

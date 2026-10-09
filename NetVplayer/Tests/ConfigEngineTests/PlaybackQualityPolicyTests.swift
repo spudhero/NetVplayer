@@ -577,6 +577,61 @@ import ConfigEngine
     #expect(MPVPlayerEngine.localStreamStartupTimeout(for: p115) == 60)
 }
 
+@Test func testDrivePlaybackStallWindowRecoversRepeatedShortStallsAndPreservesManualRoutes() {
+    var original = PlaySpec(url: "https://media.example.test/original.mp4")
+    original.drivePlaybackPlan = DrivePlaybackPlan(
+        provider: .ali,
+        asset: DrivePlaybackAssetIdentity(provider: .ali, shareID: "share", sourceFileID: "file"),
+        candidates: [
+            DrivePlaybackCandidate(id: "ali:original", providerRoute: DrivePlaybackRoute.originalDownload,
+                kind: .original, transport: .localRangeProxy, url: original.url, quality: .init(value: "Origin", label: "原画")),
+            DrivePlaybackCandidate(id: "ali:smart", providerRoute: DrivePlaybackRoute.personalTranscode,
+                kind: .transcode, transport: .hlsRelay, url: "https://media.example.test/smart.m3u8", quality: .init(value: "FHD", label: "1080P"))
+        ]
+    )
+    original = DrivePlaybackRoutePolicy.preparedSpec(original)
+    var window = DrivePlaybackStallWindow()
+    #expect(window.threshold(for: original, at: 0) == 8)
+    #expect(MPVPlayerEngine.localStreamStartupTimeout(for: original) == 8)
+    #expect(!MPVPlayerEngine.shouldCancelStartupWatchdogAfterDuration(for: original, seconds: 2891))
+    #expect(MPVPlayerEngine.shouldFireLocalStreamStartupWatchdog(
+        spec: original, playbackStarted: false,
+        positionMilliseconds: 2_109_732, durationMilliseconds: 2_891_000, alreadyFailed: false
+    ))
+    var resumedLocalOriginal = original
+    resumedLocalOriginal.url = "http://localhost:9978/stream?id=original"
+    #expect(MPVPlayerEngine.shouldFireLocalStreamStartupWatchdog(
+        spec: resumedLocalOriginal, playbackStarted: false,
+        positionMilliseconds: 2_109_732, durationMilliseconds: 2_891_000, alreadyFailed: false
+    ))
+    #expect(!MPVPlayerEngine.shouldFireLocalStreamStartupWatchdog(
+        spec: resumedLocalOriginal, playbackStarted: true,
+        positionMilliseconds: 2_109_732, durationMilliseconds: 2_891_000, alreadyFailed: false
+    ))
+    #expect(!MPVPlayerEngine.shouldFireLocalStreamStartupWatchdog(
+        spec: resumedLocalOriginal, playbackStarted: false,
+        positionMilliseconds: 2_109_732, durationMilliseconds: 2_891_000, alreadyFailed: true
+    ))
+    window.record(duration: 4, at: 10)
+    window.record(duration: 4, at: 20)
+    #expect(window.threshold(for: original, at: 21) == 4)
+    window.record(duration: 5, at: 30)
+    #expect(window.threshold(for: original, at: 31) == 1)
+    let candidate = original.drivePlaybackPlan!.candidates[0]
+    let manual = DrivePlaybackRoutePolicy.spec(for: candidate, basedOn: original, manualSelection: true)
+    #expect(window.threshold(for: manual, at: 31) == 20)
+    #expect(MPVPlayerEngine.localStreamStartupTimeout(for: manual) == 60)
+    #expect(MPVPlayerEngine.shouldCancelStartupWatchdogAfterDuration(for: manual, seconds: 2891))
+    let smart = DrivePlaybackRoutePolicy.spec(for: original.drivePlaybackPlan!.candidates[1], basedOn: original, manualSelection: false)
+    #expect(window.threshold(for: smart, at: 31) == 20)
+    #expect(MPVPlayerEngine.localStreamStartupTimeout(for: smart) == 60)
+    #expect(MPVPlayerEngine.shouldCancelStartupWatchdogAfterDuration(for: smart, seconds: 2891))
+    #expect(window.threshold(for: original, at: 76) == 8)
+    window.record(duration: 0.2, at: 80)
+    window.record(duration: .nan, at: 81)
+    #expect(window.threshold(for: original, at: 82) == 8)
+}
+
 @Test func testMPVEndFileStateRejectsEventsFromReplacedPlayback() {
     #expect(!MPVPlayerEngine.shouldApplyEndFileState(
         reason: MPVPlayerEngine.EndFileReason.restarted.rawValue,
@@ -812,6 +867,39 @@ import ConfigEngine
     tracker.reset()
     #expect(!tracker.hasActiveLoad)
     #expect(!tracker.expectsReplacedEndFile)
+}
+
+@Test func testMPVReplacementRetiresOldErrorsUntilNewStreamStarts() {
+    var tracker = MPVPlaybackLoadEventTracker()
+    tracker.prepareForLoad()
+    tracker.markLoadIssued()
+    tracker.markFileStarted()
+    tracker.markFileLoaded()
+
+    // The old proxy can fail after currentSpec changes but before loadfile.
+    tracker.prepareForLoad()
+    #expect(tracker.shouldIgnorePriorLoadEvent(2)) // old ffmpeg error log
+    #expect(tracker.shouldIgnorePriorLoadEvent(7)) // old END_FILE
+    #expect(tracker.shouldIgnorePriorLoadEvent(8)) // late old FILE_LOADED
+    #expect(tracker.shouldIgnorePriorLoadEvent(22)) // old property change
+    #expect(!tracker.shouldIgnorePriorLoadEvent(5)) // new command failure
+    _ = tracker.consumeEndFile()
+    // Error logs can follow END_FILE and still must not fail the new route.
+    #expect(tracker.shouldIgnorePriorLoadEvent(2))
+    tracker.markLoadIssued()
+    tracker.markFileStarted()
+    #expect(!tracker.shouldIgnorePriorLoadEvent(2))
+    #expect(!tracker.shouldIgnorePriorLoadEvent(7))
+    #expect(!tracker.shouldIgnorePriorLoadEvent(22))
+    let ignoredNewEnd = tracker.consumeEndFile()
+    #expect(!ignoredNewEnd) // real new-stream failure remains eligible
+
+    tracker.prepareForLoad()
+    tracker.cancelPreparedLoad()
+    #expect(!tracker.awaitsLoadStart)
+    tracker.prepareForLoad()
+    tracker.reset()
+    #expect(!tracker.awaitsLoadStart)
 }
 
 @Test func testMPVPausePropertyFollowsLatestCommandIntent() {

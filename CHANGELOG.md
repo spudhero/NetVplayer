@@ -4,6 +4,14 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [1.1.1](https://github.com/spudhero/NetVplayer/releases/tag/1.1.1)（2026-10-09）
+
+- 历史、收藏、搜索进入详情和播放后按原页面返回；分享详情保留搜索，播放失败关闭复用正常退出流程。
+- 修复部分网络环境下的海报连接；补齐请求总期限、取消与动态 DNS，减少重复首页请求并并行加载独立资料。
+- 修复有声内容请求头兼容、原画启播/缓冲备用线路恢复及手动切线提示，保留人工线路选择。
+- 目录扩展补齐课堂分类、筛选、分页等迁移遗漏；最终签名归档行为验收进入构建和发布门禁。
+- 同步 Java 1.1.3、JavaScript 1.1.2、Python 1.1.6、QuickJS 1.1.2；可配置 Python 保持 1.1.0。应用构建号为 15，详见[发布说明](RELEASE_NOTES_1.1.1.md)。
+
 ### 1.1.0（2026-10-07）
 
 本次正式版本汇总以下主干变更，构建号为 14。版本概览见[发布说明](RELEASE_NOTES_1.1.0.md)。
@@ -146,6 +154,14 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [1.1.1](https://github.com/spudhero/NetVplayer/releases/tag/1.1.1) (2026-10-09)
+
+- Return history, favorites, and search through details and playback to the original page; preserve share searches and use the normal exit path when closing playback errors.
+- Recover artwork connections on affected networks with bounded requests, cancellation, and dynamic DNS. Remove duplicate home requests and load independent catalog data concurrently.
+- Fix audio request-header compatibility, bounded fallback recovery during original-quality startup/buffering, and manual route messages while retaining the user's selection.
+- Deliver classroom categories, filtering, pagination, and other catalog migration fixes; build and publication gates execute behavior checks inside the final signed archives.
+- Update Java to 1.1.3, JavaScript to 1.1.2, Python to 1.1.6, and QuickJS to 1.1.2. Configurable Python remains 1.1.0. Application build 15; see the [release notes](RELEASE_NOTES_1.1.1.md).
 
 ### 1.1.0 (2026-10-07)
 

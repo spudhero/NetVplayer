@@ -29,6 +29,9 @@ func playbackTransferPolicySeparatesProvidersAudioAndStreaming(_ provider: Drive
     #expect(!streaming.usesParallelUpstream && !streaming.usesHTTP2Multiplexing)
     #expect(!audio.adaptsConcurrency && !wide.adaptsConcurrency)
     #expect(video.adaptsConcurrency == (provider == .uc || provider == .quark))
+    #expect(video.upstreamRequestTimeout == (provider == .ali ? 15 : 8))
+    #expect(audio.upstreamRequestTimeout == 8 && wide.upstreamRequestTimeout == 8)
+    #expect(streaming.upstreamRequestTimeout == 8)
     let tiny = PlaybackTransferPolicy.profile(context: .init(provider: provider, media: .video, contentLength: 1000, isOriginal: true))
     #expect(tiny.parallelConcurrency == video.parallelConcurrency) // Size cannot silently change transport.
 }

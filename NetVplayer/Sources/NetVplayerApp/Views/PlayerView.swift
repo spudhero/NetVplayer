@@ -2375,10 +2375,10 @@ struct PlayerView: View {
 
     @ViewBuilder
     private var playbackMessageBanners: some View {
-        if appState.playbackDowngradeMessage != nil || appState.playbackWarningMessage != nil {
+        if appState.playbackRouteNotice != nil || appState.playbackWarningMessage != nil {
             VStack(spacing: 10) {
-                if let message = appState.playbackDowngradeMessage {
-                    playbackDowngradeBanner(message: message)
+                if let notice = appState.playbackRouteNotice {
+                    playbackRouteBanner(notice: notice)
                 }
                 if let message = appState.playbackWarningMessage {
                     playbackWarningBanner(message: message)
@@ -2391,17 +2391,17 @@ struct PlayerView: View {
         }
     }
 
-    private func playbackDowngradeBanner(message: String) -> some View {
+    private func playbackRouteBanner(notice: DrivePlaybackRouteNotice) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "arrow.down.circle.fill")
+            Image(systemName: notice.symbolName)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(seaBlue)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.text("已自动降低清晰度"))
+                Text(notice.title)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white)
-                Text(message)
+                Text(notice.message)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.78))
                     .lineLimit(2)
@@ -2410,7 +2410,7 @@ struct PlayerView: View {
             Spacer(minLength: 12)
 
             Button {
-                appState.dismissPlaybackDowngradeNotice()
+                appState.dismissPlaybackRouteNotice()
             } label: {
                 Image(systemName: "xmark")
             }
@@ -2519,11 +2519,7 @@ struct PlayerView: View {
                         .buttonStyle(.bordered)
                     }
 
-                    Button {
-                        appState.cleanupDrivePlaybackIfNeeded(spec: appState.playerState.currentSpec)
-                        MPVPlayerEngine.vod.stop()
-                        appState.isPlayerPresented = false
-                    } label: {
+                    Button(action: exitPlayer) {
                         Label(L10n.text("关闭"), systemImage: "xmark")
                     }
                     .buttonStyle(.bordered)

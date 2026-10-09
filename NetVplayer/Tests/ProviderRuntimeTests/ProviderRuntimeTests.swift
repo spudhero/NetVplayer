@@ -2073,6 +2073,23 @@ private func signedDistributionDocument(
     let session = URLSession(configuration: configuration)
     let directHost = QuickJSHTTPHost(session: session, maximumResponseBytes: 16)
 
+    let prefixResponse = await directHost.handle(QuickJSHostControl(
+        type: "host_request", requestID: "http-response-prefix", capability: "http", operation: "request",
+        url: largeURL.absoluteString, options: ["response_prefix_bytes": .number(8)]
+    ))
+    #expect(prefixResponse.ok)
+    if case .object(let values) = prefixResponse.result,
+       case .string(let encoded) = values["content_base64"] {
+        #expect(Data(base64Encoded: encoded) == Data(repeating: 0x41, count: 8))
+    } else { Issue.record("Expected a bounded response prefix") }
+
+    let invalidPrefix = await directHost.handle(QuickJSHostControl(
+        type: "host_request", requestID: "http-invalid-prefix", capability: "http", operation: "request",
+        url: headerURL.absoluteString, options: ["response_prefix_bytes": .number(65_537)]
+    ))
+    #expect(!invalidPrefix.ok)
+    #expect(invalidPrefix.error?.code == "invalid_response_prefix")
+
     let headerResponse = await directHost.handle(QuickJSHostControl(
         type: "host_request",
         requestID: "http-header-method",

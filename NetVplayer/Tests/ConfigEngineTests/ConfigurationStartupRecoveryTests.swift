@@ -3,6 +3,7 @@ import Testing
 import ConfigEngine
 import Models
 import Networking
+import SpiderEngine
 import Storage
 @testable import NetVplayerApp
 
@@ -10,6 +11,34 @@ import Storage
 struct ConfigurationStartupRecoveryTests {
     private let cachedJSON = #"{"sites":[{"key":"cached-source","name":"Cached","type":3,"api":"csp_RecoveryFixture"}]}"#
     private let freshJSON = #"{"sites":[{"key":"fresh-source","name":"Fresh","type":3,"api":"csp_RecoveryFixture"}]}"#
+
+    @MainActor
+    @Test func startupLoadsOnlyTheSelectedSourceWithoutBackgroundCrawlerSelfTests() async throws {
+        let context = try RecoveryTestContext(replies: [.held])
+        defer { context.cleanup() }
+        let gate = RecoveryDelayGate()
+        let selected = RecoveryHomeProvider(gate: gate)
+        let unselected = RecoveryHomeProvider()
+        let selectedAPI = "csp_RecoveryHome_\(UUID().uuidString)"
+        let unselectedAPI = context.origin + "/unselected.js"
+        await SpiderReplacementRegistry.shared.register(originalAPI: selectedAPI, provider: selected)
+        await SpiderReplacementRegistry.shared.register(originalAPI: unselectedAPI, provider: unselected)
+        let json = """
+        {"sites":[{"key":"selected","name":"Selected","type":3,"api":"\(selectedAPI)"},
+        {"key":"unselected","name":"Unselected","type":3,"api":"\(unselectedAPI)"}]}
+        """
+        let state = try context.makeState(cachedJSON: json)
+        try await gate.waitUntilEntered()
+        // Leave the real home request pending while startup background work runs.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await selected.homeCalls == 1)
+        #expect(await unselected.homeCalls == 0)
+        await gate.release()
+        await state.initialConfigTask?.value
+        state.configurationRefreshTask?.cancel()
+        #expect(state.activeSite?.key == "selected")
+        #expect(await unselected.homeCalls == 0)
+    }
 
     @MainActor
     @Test(arguments: [false, true])
@@ -338,6 +367,21 @@ private actor RecoveryDelayGate {
         waiters.forEach { $0.resume() }
         waiters.removeAll()
     }
+}
+
+private actor RecoveryHomeProvider: SiteContentProvider {
+    private(set) var homeCalls = 0
+    private let gate: RecoveryDelayGate?
+    init(gate: RecoveryDelayGate? = nil) { self.gate = gate }
+    func homeContent(site: Site) async throws -> Models.Result {
+        homeCalls += 1
+        await gate?.wait()
+        return .empty
+    }
+    func categoryContent(site: Site, tid: String, page: String, filter: Bool, extend: [String: String]) async throws -> Models.Result { .empty }
+    func detailContent(site: Site, id: String) async throws -> Models.Result { .empty }
+    func playerContent(site: Site, flag: String, id: String) async throws -> Models.Result { .empty }
+    func searchContent(site: Site, keyword: String, quick: Bool, page: String) async throws -> Models.Result { .empty }
 }
 
 private final class RecoveryRequestFixture: @unchecked Sendable {

@@ -97,6 +97,16 @@ struct QuickJSHTTPHost: @unchecked Sendable {
         }
 
         let options = request.options ?? [:]
+        let responsePrefixBytes: Int?
+        if let requestedPrefix = number(options["response_prefix_bytes"]) {
+            guard requestedPrefix >= 1, requestedPrefix <= 65_536,
+                  requestedPrefix.rounded(.towardZero) == requestedPrefix else {
+                throw QuickJSHTTPHostError(code: "invalid_response_prefix", message: "HTTP response prefix limit is invalid")
+            }
+            responsePrefixBytes = Int(requestedPrefix)
+        } else {
+            responsePrefixBytes = nil
+        }
         let method = httpMethod(options["method"])
         var headers = try stringMap(options["headers"], name: "headers")
         let body = try requestBody(options, headers: &headers)
@@ -131,8 +141,12 @@ struct QuickJSHTTPHost: @unchecked Sendable {
                         message: "HTTP response exceeds the configured byte limit"
                     )
                 }
-                try Task.checkCancellation()
-                data.append(byte)
+                  try Task.checkCancellation()
+                  data.append(byte)
+                  if let responsePrefixBytes, data.count >= responsePrefixBytes {
+                      bytes.task.cancel()
+                      break
+                  }
             }
             return try responseValue(
                 data: data,

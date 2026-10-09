@@ -158,7 +158,37 @@ enum MPVPlaybackActivityPolicy {
         guard let spec, spec.drivePlaybackPlan != nil else {
             return defaultCacheStallThreshold
         }
+        if DrivePlaybackRoutePolicy.candidate(for: spec)?.kind == .original,
+           DrivePlaybackFallbackPolicy.fallbackSpec(for: spec, positionSeconds: 0) != nil {
+            return defaultCacheStallThreshold
+        }
         return drivePlaybackCacheStallThreshold
+    }
+}
+
+/// Repeated short stalls can make an original stream unusable without ever
+/// reaching the continuous-stall deadline. Count only normal playback stalls.
+struct DrivePlaybackStallWindow {
+    private var recovered: [(at: TimeInterval, duration: TimeInterval)] = []
+
+    mutating func record(duration: TimeInterval, at now: TimeInterval) {
+        prune(at: now)
+        guard duration.isFinite, duration >= 1 else { return }
+        recovered.append((now, min(duration, 20)))
+    }
+
+    mutating func threshold(for spec: PlaySpec?, at now: TimeInterval) -> TimeInterval {
+        prune(at: now)
+        let normal = MPVPlaybackActivityPolicy.cacheStallThreshold(for: spec)
+        guard let spec,
+              DrivePlaybackRoutePolicy.candidate(for: spec)?.kind == .original,
+              DrivePlaybackFallbackPolicy.fallbackSpec(for: spec, positionSeconds: 0) != nil,
+              recovered.count >= 2 else { return normal }
+        return max(1, min(normal, 12 - recovered.reduce(0) { $0 + $1.duration }))
+    }
+
+    private mutating func prune(at now: TimeInterval) {
+        recovered.removeAll { now - $0.at > 45 || $0.at > now }
     }
 }
 
@@ -303,9 +333,11 @@ final class PlaybackDisplaySleepController: @unchecked Sendable {
 struct MPVPlaybackLoadEventTracker {
     private(set) var hasActiveLoad = false
     private(set) var expectsReplacedEndFile = false
+    private(set) var awaitsLoadStart = false
 
     mutating func prepareForLoad() {
         expectsReplacedEndFile = hasActiveLoad
+        awaitsLoadStart = true
     }
 
     mutating func markLoadIssued() {
@@ -314,10 +346,23 @@ struct MPVPlaybackLoadEventTracker {
 
     mutating func cancelPreparedLoad() {
         expectsReplacedEndFile = false
+        awaitsLoadStart = false
+    }
+
+    mutating func markFileStarted() {
+        awaitsLoadStart = false
+        expectsReplacedEndFile = false
+    }
+
+    func shouldIgnorePriorLoadEvent(_ eventID: Int32) -> Bool {
+        // Native events still belong to the retired stream until START_FILE.
+        // Command replies remain eligible so a rejected new load still fails.
+        awaitsLoadStart && [2, 7, 8, 20, 21, 22].contains(eventID)
     }
 
     mutating func markFileLoaded() {
         expectsReplacedEndFile = false
+        awaitsLoadStart = false
     }
 
     mutating func consumeEndFile() -> Bool {
@@ -332,6 +377,7 @@ struct MPVPlaybackLoadEventTracker {
     mutating func reset() {
         hasActiveLoad = false
         expectsReplacedEndFile = false
+        awaitsLoadStart = false
     }
 }
 
@@ -408,9 +454,11 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private var postSeekEndGuard = PlaybackPostSeekEndGuard()
     private var seekActivity = PlaybackSeekActivity()
     private var cacheStallStart: Date?
+    private var cacheStallTimeoutInterval: TimeInterval?
     private var cacheStallTask: Task<Void, Never>?
     private var cacheStallNotified = false
     private var liveStallWindow = LivePlaybackStallWindow()
+    private var driveStallWindow = DrivePlaybackStallWindow()
     private var liveReuseFailureObserved = false
     private var liveConnectionRepairRequested = false
     private var cacheStallEligible = false
@@ -647,6 +695,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                     requestedSurface: requestedSurface
                 )
             }) else { return false }
+            self.withLock { self.loadEventTracker.prepareForLoad() }
             playerState?.currentSpec = spec
             playerState?.endDisposition = nil
             cancelSeekTransferMetrics()
@@ -745,9 +794,6 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 view.makeOpenGLContextCurrent()
                 try self.ensureContext()
                 try self.rebuildRenderContextForNewLoad()
-                self.withLock {
-                    self.loadEventTracker.prepareForLoad()
-                }
                 do {
                     try self.load(spec: spec)
                     self.withLock {
@@ -806,6 +852,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         lock.lock()
         let activeContext = context
         pauseRequested = true
+        driveStallWindow = DrivePlaybackStallWindow()
         status = .paused
         cacheStallStart = nil
         cacheStallTask?.cancel()
@@ -867,6 +914,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
         withLock {
             seekActivity.begin()
+            driveStallWindow = DrivePlaybackStallWindow()
             postSeekEndGuard.begin(targetSeconds: seconds)
         }
         let seekMode = MPVSeekModePolicy.commandMode(for: spec, targetSeconds: seconds, durationSeconds: durationSeconds)
@@ -1284,6 +1332,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private func load(spec: PlaySpec) throws {
         withLock {
             liveStallWindow = LivePlaybackStallWindow()
+            driveStallWindow = DrivePlaybackStallWindow()
             liveReuseFailureObserved = false
             liveConnectionRepairRequested = false
         }
@@ -1452,6 +1501,17 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     @MainActor
     private func handle(event: MPVEventSnapshot) {
         guard withLock({ seekActivity.owner.mediaID == event.owner.mediaID }) else { return }
+        if event.eventID == 6 { // MPV_EVENT_START_FILE owns subsequent native events.
+            withLock { loadEventTracker.markFileStarted() }
+            return
+        }
+        if withLock({ loadEventTracker.shouldIgnorePriorLoadEvent(event.eventID) }) {
+            if event.eventID == 7 {
+                _ = withLock { loadEventTracker.consumeEndFile() }
+                DiagnosticLog.write("[MPV_REPLACED_END_FILE_IGNORED] reason=\(event.endFileReason) error=\(event.endFileError)")
+            }
+            return
+        }
         if event.eventID == 20 || event.eventID == MPVPlaybackActivityPolicy.playbackRestartEventID
             || event.propertyName == "seeking" || event.propertyName == "time-pos" {
             guard withLock({ seekActivity.owner == event.owner }) else { return }
@@ -1765,7 +1825,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             playerState?.duration = seconds
             refreshChapters()
             if recoverInvalidInitialStartIfNeeded(durationSeconds: seconds) { return }
-            if seconds > 0 {
+            if Self.shouldCancelStartupWatchdogAfterDuration(for: playerState?.currentSpec, seconds: seconds) {
                 cancelStartupWatchdog()
             }
         case "pause":
@@ -1893,8 +1953,10 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 cacheStallEligible = playerState?.isMediaLoading == false && playerState?.isSeeking == false
                     && !withLock { seekActivity.isPending }
                 let startedAt = Date()
-                let stallThreshold = MPVPlaybackActivityPolicy.cacheStallThreshold(for: playerState?.currentSpec)
+                let spec = playerState?.currentSpec
+                let stallThreshold = withLock { driveStallWindow.threshold(for: spec, at: ProcessInfo.processInfo.systemUptime) }
                 cacheStallStart = startedAt
+                cacheStallTimeoutInterval = stallThreshold
                 DiagnosticLog.write("[MPV_CACHE_STALL] started threshold=\(stallThreshold)s")
                 cacheStallTask?.cancel()
                 cacheStallTask = Task { @MainActor in
@@ -1916,6 +1978,11 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 let duration = Date().timeIntervalSince(started)
                 DiagnosticLog.write("[MPV_CACHE_STALL] recovered durationSeconds=\(String(format: "%.3f", duration)) surface=\(videoSurface.rawValue) eligible=\(cacheStallEligible && !pauseRequested)")
                 if cacheStallEligible, !pauseRequested,
+                   recoveredSpec?.metadata["playback.kind"] != "live",
+                   recoveredSpec?.drivePlaybackPlan != nil {
+                    withLock { driveStallWindow.record(duration: duration, at: ProcessInfo.processInfo.systemUptime) }
+                }
+                if cacheStallEligible, !pauseRequested,
                    recoveredSpec?.metadata["playback.kind"] == "live",
                    withLock({ liveStallWindow.record(duration: duration, at: ProcessInfo.processInfo.systemUptime) }),
                    withLock({ liveReuseFailureObserved }) {
@@ -1923,6 +1990,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 }
             }
             cacheStallStart = nil
+            cacheStallTimeoutInterval = nil
             cacheStallTask?.cancel()
             cacheStallTask = nil
             cacheStallNotified = false
@@ -1935,7 +2003,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     @MainActor
     private func notifyCacheStallIfNeeded() {
-        let stallThreshold = MPVPlaybackActivityPolicy.cacheStallThreshold(for: playerState?.currentSpec)
+        let stallThreshold = cacheStallTimeoutInterval ?? MPVPlaybackActivityPolicy.cacheStallThreshold(for: playerState?.currentSpec)
         guard !cacheStallNotified,
               let cacheStallStart,
               Date().timeIntervalSince(cacheStallStart) >= stallThreshold else {
@@ -2180,7 +2248,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     }
 
     private func startLocalStreamStartupWatchdog(for spec: PlaySpec) {
-        guard Self.isLocalStreamSpec(spec) else { return }
+        guard Self.isLocalStreamSpec(spec) || Self.isAutomaticOriginalStreamSpec(spec) else { return }
         let timeout = Self.localStreamStartupTimeout(for: spec)
         let task = Task { [weak self] in
             do {
@@ -2223,7 +2291,12 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             return
         }
         let timeout = Int(Self.localStreamStartupTimeout(for: spec))
-        failLocalStreamStartupIfNeeded(L10n.text("本地视频流启动超时，原片在 {0} 秒内未返回可播放数据。", ["\(timeout)"]))
+        let automaticOriginal = Self.isAutomaticOriginalStreamSpec(spec)
+        DiagnosticLog.write("[MPV_STARTUP_TIMEOUT] timeoutSeconds=\(timeout) automaticOriginal=\(automaticOriginal)")
+        let message = automaticOriginal
+            ? L10n.text("原片启动超时，{0} 秒内未开始播放。", ["\(timeout)"])
+            : L10n.text("本地视频流启动超时，原片在 {0} 秒内未返回可播放数据。", ["\(timeout)"])
+        failLocalStreamStartupIfNeeded(message)
     }
 
     private func failLocalStreamStartupIfNeeded(_ message: String) {
@@ -2256,20 +2329,37 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         durationMilliseconds: Int64,
         alreadyFailed: Bool
     ) -> Bool {
-        isLocalStreamSpec(spec)
-            && !playbackStarted
-            && positionMilliseconds <= 0
-            && durationMilliseconds <= 0
-            && !alreadyFailed
+        guard !playbackStarted, !alreadyFailed else { return false }
+        // The requested resume position and an early duration notification do
+        // not prove that media has started. Automatic original routes must
+        // still recover when no real playback-start notification arrives.
+        if isAutomaticOriginalStreamSpec(spec) {
+            return true
+        }
+        return isLocalStreamSpec(spec) && positionMilliseconds <= 0 && durationMilliseconds <= 0
     }
 
     static func localStreamStartupTimeout(for spec: PlaySpec) -> TimeInterval {
+        if isAutomaticOriginalStreamSpec(spec) {
+            return MPVPlaybackActivityPolicy.defaultCacheStallThreshold
+        }
         let provider = spec.metadata[DrivePlaybackMetadataKey.provider]
         let route = spec.metadata[DrivePlaybackMetadataKey.route]
         if provider == DriveProvider.p115.rawValue && route == DrivePlaybackRoute.originalDownload {
             return 120
         }
         return defaultLocalStreamStartupTimeout
+    }
+
+    static func shouldCancelStartupWatchdogAfterDuration(for spec: PlaySpec?, seconds: Double) -> Bool {
+        seconds > 0 && !(spec.map(isAutomaticOriginalStreamSpec) ?? false)
+    }
+
+    private static func isAutomaticOriginalStreamSpec(_ spec: PlaySpec) -> Bool {
+        guard let scheme = URL(string: spec.url)?.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return false }
+        return DrivePlaybackRoutePolicy.candidate(for: spec)?.kind == .original
+            && DrivePlaybackFallbackPolicy.fallbackSpec(for: spec, positionSeconds: 0) != nil
     }
 
     private static func isLocalStreamSpec(_ spec: PlaySpec) -> Bool {

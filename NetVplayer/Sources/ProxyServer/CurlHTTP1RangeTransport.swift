@@ -75,6 +75,13 @@ enum CurlRangeTransport {
         return try await getResolvedIPv6(url: url, address: address, headers: headers, timeout: timeout)
     }
 
+    static func getPosterOverIPv6(
+        url: URL, address: String, headers: [String: String], timeout: TimeInterval
+    ) async throws -> Result {
+        guard SourceResourceTransport.supportsPoster(url) else { throw URLError(.unsupportedURL) }
+        return try await getResolvedIPv6(url: url, address: address, headers: headers, timeout: timeout)
+    }
+
     static func getSourceResource(
         url: URL, headers: [String: String], timeout: TimeInterval
     ) async throws -> Result {

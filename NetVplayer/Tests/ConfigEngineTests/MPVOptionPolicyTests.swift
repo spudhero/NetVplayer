@@ -18,18 +18,46 @@ import Testing
 }
 
 @Test func mpvOptionPolicyExplainsPriorityAndProtectsStructuredTransport() {
-    let spec = PlaySpec(url: "file:///tmp/a.mkv", mpvOptions: ["sub-pos": "1", "secondary-sid": "3", "http-proxy": "http://proxy.test:1", "referrer": "private", "brightness": "20"])
+    let spec = PlaySpec(url: "file:///tmp/a.mkv", mpvOptions: ["sub-pos": "1", "secondary-sid": "3", "http-proxy": "http://proxy.test:1", "referrer": "private", "brightness": "20", "http-header-fields": "Cookie: unstructured"])
     let plan = MPVOptionPolicy.resolve(spec: spec, user: ["sub-pos": "95"], session: ["secondary-sid": "no"])
     #expect(plan["brightness"] == .init(value: "20", origin: .source))
     #expect(plan["sub-pos"] == .init(value: "95", origin: .user))
     #expect(plan["secondary-sid"] == .init(value: "no", origin: .session))
     #expect(plan["http-proxy"] == .init(value: "", origin: .transport))
     #expect(plan["referrer"] == .init(value: "", origin: .transport))
+    #expect(plan["http-header-fields"] == nil)
     #expect(plan["stream-lavf-o"]?.value == "http_proxy=")
     #expect(PlaybackTransportOptions.resolved(["http-proxy": "http://proxy.test"], url: "https://127.example.test/a", direct: false)["http-proxy"] == "http://proxy.test")
     #expect(!MPVOptionPolicy.accepts(name: "private?token=secret", value: "yes"))
     #expect(!MPVOptionPolicy.accepts(name: "brightness", value: "\0"))
     #expect(!MPVOptionPolicy.accepts(name: "brightness", value: String(repeating: "x", count: 65 * 1_024)))
+}
+
+@MainActor
+@Test(.enabled(if: ProcessInfo.processInfo.environment["NETVPLAYER_FEATURE_FIXTURE"] != nil))
+func mpvStructuredHTTPHeadersHaveNoBlankEntryOrStaleCredentialsAfterReload() async throws {
+    let path = try #require(ProcessInfo.processInfo.environment["NETVPLAYER_FEATURE_FIXTURE"])
+    _ = NSApplication.shared
+    let engine = MPVPlayerEngine(videoSurface: .vod)
+    let state = PlayerState(); engine.playerState = state
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 180), styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false; window.alphaValue = 0.01; window.ignoresMouseEvents = true
+    let view = try #require(MPVOpenGLVideoView(engine: engine, surface: .vod))
+    view.frame = window.contentView!.bounds; window.contentView = view; window.orderFrontRegardless()
+    engine.attach(to: view, surface: .vod)
+    defer { engine.stop(); engine.detach(from: view); window.orderOut(nil) }
+    let url = URL(fileURLWithPath: path).absoluteString
+    for headers in [["User-Agent": "listen/1.8.9 ExoPlayerLib/2.8.4", "Cookie": "fixture-old"],
+                    ["User-Agent": "next-fixture"]] {
+        await engine.play(spec: PlaySpec(url: url, headers: headers,
+            mpvOptions: ["http-header-fields": "Cookie: unstructured-source-value"]))
+        try #require(await optionWait { !state.isMediaLoading || state.errorMessage != nil })
+        #expect(state.errorMessage == nil)
+        let json = try #require(engine.nativePropertyJSON("http-header-fields"))
+        let actual = try JSONDecoder().decode([String].self, from: Data(json.utf8))
+        #expect(Set(actual) == Set(headers.map { "\($0.key): \($0.value)" }))
+        #expect(!actual.contains(""))
+    }
 }
 
 @MainActor
