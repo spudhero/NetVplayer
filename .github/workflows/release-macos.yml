@@ -312,6 +312,18 @@ jobs:
             SHA256SUMS.txt
           )
           if gh release view "$release_version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_state="$(gh release view "$release_version" --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,assets --jq 'if .isDraft and (.assets | length) == 0 then "empty-draft" else "existing" end')"
+            if [[ "$release_state" == "empty-draft" ]]; then
+              draft_author="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_version" --jq '.author.login')"
+              if [[ "$draft_author" != "$GITHUB_REPOSITORY_OWNER" ]]; then
+                echo "error: empty draft must be created by the repository owner" >&2
+                exit 1
+              fi
+              gh release upload "$release_version" "${release_assets[@]}" --repo "$GITHUB_REPOSITORY"
+              echo "Verified assets staged in the owner's unpublished draft."
+              exit 0
+            fi
             existing_assets="$RUNNER_TEMP/existing-release"
             mkdir -p "$existing_assets"
             gh release download "$release_version" --repo "$GITHUB_REPOSITORY" \
