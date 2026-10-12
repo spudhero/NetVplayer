@@ -67,11 +67,13 @@ public struct UCPlayableSelection: Sendable, Equatable {
     public let url: String
     public let selectedReason: String
     public let candidateSummary: String
+    public let requiresAccountPlaybackHeaders: Bool
 
-    public init(url: String, selectedReason: String, candidateSummary: String) {
+    public init(url: String, selectedReason: String, candidateSummary: String, requiresAccountPlaybackHeaders: Bool = false) {
         self.url = url
         self.selectedReason = selectedReason
         self.candidateSummary = candidateSummary
+        self.requiresAccountPlaybackHeaders = requiresAccountPlaybackHeaders
     }
 }
 
@@ -83,6 +85,7 @@ public struct UCDownloadResult: Sendable {
     public let playbackRoute: String?
     public let selectedReason: String?
     public let candidateSummary: String?
+    public let requiresAccountPlaybackHeaders: Bool
 
     public init(
         url: String?,
@@ -91,7 +94,8 @@ public struct UCDownloadResult: Sendable {
         playbackUserAgent: String? = nil,
         playbackRoute: String? = nil,
         selectedReason: String? = nil,
-        candidateSummary: String? = nil
+        candidateSummary: String? = nil,
+        requiresAccountPlaybackHeaders: Bool = false
     ) {
         self.url = url
         self.updatedCookie = updatedCookie
@@ -100,6 +104,7 @@ public struct UCDownloadResult: Sendable {
         self.playbackRoute = playbackRoute
         self.selectedReason = selectedReason
         self.candidateSummary = candidateSummary
+        self.requiresAccountPlaybackHeaders = requiresAccountPlaybackHeaders
     }
 }
 
@@ -108,12 +113,14 @@ public struct UCPlayResult: Sendable {
     public let updatedCookie: String
     public let selectedReason: String?
     public let candidateSummary: String?
+    public let requiresAccountPlaybackHeaders: Bool
 
     public init(url: String?, updatedCookie: String, selection: UCPlayableSelection? = nil) {
         self.url = url
         self.updatedCookie = updatedCookie
         self.selectedReason = selection?.selectedReason
         self.candidateSummary = selection?.candidateSummary
+        self.requiresAccountPlaybackHeaders = selection?.requiresAccountPlaybackHeaders ?? false
     }
 }
 
@@ -335,7 +342,7 @@ public final class UCDriveClient: @unchecked Sendable {
                     return try await personalDownloadResultWaitingIfNeeded(for: cached, cookie: activeCookie)
                 } catch {
                     if Self.shouldInvalidateSavedRecord(error) {
-                        try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
+                        try? await DriveSavedFileStore.shared.invalidate(cached)
                         DiagnosticLog.write("[UC_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(cached.savedFID) reason=\(error.localizedDescription)")
                     } else if Self.shouldWaitForPersonalPlayback(error) {
                         throw DriveEngineError.officialPlayURLPending(cached.originalName)
@@ -349,11 +356,13 @@ public final class UCDriveClient: @unchecked Sendable {
         let transferStartCookie = activeCookie
         let transferResult = try await DriveTransferCoordinator.shared.transfer(cacheKey: identity.cacheKey) {
             var transferCookie = transferStartCookie
+            let rejectedFIDs = await DriveSavedFileStore.shared.rejectedFileIDs(cacheKey: identity.cacheKey)
             let existing = try await self.findPersonalFileRecursively(
                 fileName: identity.targetFileName,
                 size: playable.file.size,
                 rootFID: folder.fid,
-                cookie: transferCookie
+                cookie: transferCookie,
+                excludingFIDs: rejectedFIDs
             )
             transferCookie = existing.updatedCookie
             if let file = existing.file {
@@ -400,7 +409,8 @@ public final class UCDriveClient: @unchecked Sendable {
                 originalFileName: playable.file.name,
                 size: playable.file.size,
                 appFolderFID: folder.fid,
-                cookie: transferCookie
+                cookie: transferCookie,
+                excludingFIDs: rejectedFIDs
             )
             transferCookie = resolved.updatedCookie
             guard let savedFile = resolved.file else {
@@ -431,7 +441,7 @@ public final class UCDriveClient: @unchecked Sendable {
             return try await personalDownloadResultWaitingIfNeeded(for: transferResult.record, cookie: activeCookie)
         } catch {
             if Self.shouldInvalidateSavedRecord(error) {
-                try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
+                try? await DriveSavedFileStore.shared.invalidate(transferResult.record)
                 DiagnosticLog.write("[UC_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(transferResult.record.savedFID) reason=\(error.localizedDescription)")
             }
             if Self.shouldWaitForPersonalPlayback(error) {
@@ -471,7 +481,7 @@ public final class UCDriveClient: @unchecked Sendable {
             return playResult
         } catch {
             if Self.shouldInvalidateSavedRecord(error) {
-                try? await DriveSavedFileStore.shared.remove(cacheKey: savedFile.cacheKey)
+                try? await DriveSavedFileStore.shared.invalidate(savedFile)
                 DiagnosticLog.write(
                     "[UC_SAVED_CACHE] invalidated cacheKey=\(savedFile.cacheKey) fid=\(savedFile.savedFID) reason=personal-transcode-stale"
                 )
@@ -800,7 +810,10 @@ private extension UCDriveClient {
         throw DriveEngineError.api(provider: .uc, statusCode: 200, code: nil, message: message)
     }
 
-    func findPersonalFileRecursively(fileName: String, size: Int64?, rootFID: String, cookie: String) async throws -> PersonalFileLookupResult {
+    func findPersonalFileRecursively(
+        fileName: String, size: Int64?, rootFID: String, cookie: String,
+        excludingFIDs: Set<String>
+    ) async throws -> PersonalFileLookupResult {
         var activeCookie = cookie
         var queue = [rootFID]
         var visited = Set<String>()
@@ -812,7 +825,8 @@ private extension UCDriveClient {
             let listed = try await listPersonalFiles(parentFID: parentFID, cookie: activeCookie)
             activeCookie = listed.updatedCookie
 
-            let exactMatches = listed.files.filter { $0.isPlayableMediaObject && $0.name == fileName }
+            let candidates = listed.files.filter { $0.isPlayableMediaObject && !excludingFIDs.contains($0.fid) }
+            let exactMatches = candidates.filter { $0.name == fileName }
             if let size,
                let exact = exactMatches.first(where: { $0.size == size }) {
                 return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
@@ -820,7 +834,7 @@ private extension UCDriveClient {
             if let exact = exactMatches.first {
                 return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
             }
-            if let folded = listed.files.first(where: { $0.isPlayableMediaObject && $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
+            if let folded = candidates.first(where: { $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
                 return PersonalFileLookupResult(file: folded, updatedCookie: activeCookie)
             }
 
@@ -830,19 +844,23 @@ private extension UCDriveClient {
         return PersonalFileLookupResult(file: nil, updatedCookie: activeCookie)
     }
 
-    func resolveSavedPersonalFile(candidateFID: String, originalFileName: String, size: Int64, appFolderFID: String, cookie: String) async throws -> PersonalFileLookupResult {
+    func resolveSavedPersonalFile(
+        candidateFID: String, originalFileName: String, size: Int64, appFolderFID: String, cookie: String,
+        excludingFIDs: Set<String>
+    ) async throws -> PersonalFileLookupResult {
         var activeCookie = cookie
         let appFolder = try await listPersonalFiles(parentFID: appFolderFID, cookie: activeCookie)
         activeCookie = appFolder.updatedCookie
 
-        if let candidate = appFolder.files.first(where: { $0.fid == candidateFID }) {
+        if let candidate = appFolder.files.first(where: { $0.fid == candidateFID }), !excludingFIDs.contains(candidateFID) {
             DiagnosticLog.write("[UC_SAVED_CACHE] save candidate fid=\(candidateFID) name=\(candidate.name) dir=\(candidate.isDirectory) fileType=\(candidate.fileType) category=\(candidate.category) size=\(candidate.size)")
 
             let nested = try? await findPersonalFileRecursively(
                 fileName: originalFileName,
                 size: size,
                 rootFID: candidate.fid,
-                cookie: activeCookie
+                cookie: activeCookie,
+                excludingFIDs: excludingFIDs
             )
             if let nested {
                 activeCookie = nested.updatedCookie
@@ -858,12 +876,13 @@ private extension UCDriveClient {
             }
 
             DiagnosticLog.write("[UC_SAVED_CACHE] save task returned non-video fid=\(candidateFID); resolving under app folder file=\(originalFileName)")
-        } else {
+        } else if !excludingFIDs.contains(candidateFID) {
             let nested = try? await findPersonalFileRecursively(
                 fileName: originalFileName,
                 size: size,
                 rootFID: candidateFID,
-                cookie: activeCookie
+                cookie: activeCookie,
+                excludingFIDs: excludingFIDs
             )
             if let nested {
                 activeCookie = nested.updatedCookie
@@ -878,11 +897,15 @@ private extension UCDriveClient {
             fileName: originalFileName,
             size: size,
             rootFID: appFolderFID,
-            cookie: activeCookie
+            cookie: activeCookie,
+            excludingFIDs: excludingFIDs
         )
     }
 
-    func waitForResolvedSavedPersonalFile(candidateFID: String?, originalFileName: String, size: Int64, appFolderFID: String, cookie: String) async throws -> PersonalFileLookupResult {
+    func waitForResolvedSavedPersonalFile(
+        candidateFID: String?, originalFileName: String, size: Int64, appFolderFID: String, cookie: String,
+        excludingFIDs: Set<String>
+    ) async throws -> PersonalFileLookupResult {
         var activeCookie = cookie
         var latest = PersonalFileLookupResult(file: nil, updatedCookie: activeCookie)
 
@@ -893,14 +916,16 @@ private extension UCDriveClient {
                     originalFileName: originalFileName,
                     size: size,
                     appFolderFID: appFolderFID,
-                    cookie: activeCookie
+                    cookie: activeCookie,
+                    excludingFIDs: excludingFIDs
                 )
             } else {
                 latest = try await findPersonalFileRecursively(
                     fileName: originalFileName,
                     size: size,
                     rootFID: appFolderFID,
-                    cookie: activeCookie
+                    cookie: activeCookie,
+                    excludingFIDs: excludingFIDs
                 )
             }
 
@@ -933,7 +958,8 @@ private extension UCDriveClient {
                     playbackUserAgent: playbackUserAgent,
                     playbackRoute: DrivePlaybackRoute.ucSmartPlay,
                     selectedReason: playResult.selectedReason,
-                    candidateSummary: playResult.candidateSummary
+                    candidateSummary: playResult.candidateSummary,
+                    requiresAccountPlaybackHeaders: playResult.requiresAccountPlaybackHeaders
                 )
             }
             DiagnosticLog.write("[UC_LINK_SELECT] type=rejected-pds-download context=personal-play file=\(record.savedFileName)")
@@ -1377,12 +1403,12 @@ private extension UCDriveClient {
     }
 
     static func bestPlayableSelection(in data: [String: Any]) -> UCPlayableSelection? {
-        var candidates: [(url: String, reason: String)] = []
+        var candidates: [(url: String, reason: String, requiresAccountHeaders: Bool)] = []
         var candidateSummaries: [String] = []
         let defaultResolution = stringValue(data["default_resolution"]) ?? "-"
-        func append(_ urls: [String], reason: String) {
+        func append(_ urls: [String], reason: String, format: String? = nil) {
             for url in urls where !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                candidates.append((url, reason))
+                candidates.append((url, reason, requiresAccountPlaybackHeaders(for: url, format: format)))
             }
         }
 
@@ -1391,17 +1417,17 @@ private extension UCDriveClient {
             let preferredResolutions = preferredVideoResolutions(in: data)
             for resolution in preferredResolutions {
                 for item in videoList where stringValue(item["resolution"])?.lowercased() == resolution && isTranscodedM3U8Item(item) {
-                    append(playableURLs(fromVideoListItem: item), reason: "resolution:\(resolution):transcoded-m3u8")
+                    append(playableURLs(fromVideoListItem: item), reason: "resolution:\(resolution):transcoded-m3u8", format: stringValue(item["supports_format"]))
                 }
             }
             for resolution in preferredResolutions {
                 for item in videoList where stringValue(item["resolution"])?.lowercased() == resolution {
-                    append(playableURLs(fromVideoListItem: item), reason: "resolution:\(resolution)")
+                    append(playableURLs(fromVideoListItem: item), reason: "resolution:\(resolution)", format: stringValue(item["supports_format"]))
                 }
             }
             for item in videoList {
                 let resolution = stringValue(item["resolution"])?.lowercased() ?? "unknown"
-                append(playableURLs(fromVideoListItem: item), reason: "fallback-video-list:\(resolution)")
+                append(playableURLs(fromVideoListItem: item), reason: "fallback-video-list:\(resolution)", format: stringValue(item["supports_format"]))
             }
         }
 
@@ -1428,18 +1454,33 @@ private extension UCDriveClient {
         return UCPlayableSelection(
             url: selected.url,
             selectedReason: selected.reason,
-            candidateSummary: String(summary.prefix(900))
+            candidateSummary: String(summary.prefix(900)),
+            requiresAccountPlaybackHeaders: selected.requiresAccountHeaders
         )
     }
 
-    static func uniqueURLSelections(_ selections: [(url: String, reason: String)]) -> [(url: String, reason: String)] {
+    static func uniqueURLSelections(_ selections: [(url: String, reason: String, requiresAccountHeaders: Bool)]) -> [(url: String, reason: String, requiresAccountHeaders: Bool)] {
         var seen = Set<String>()
-        var result: [(url: String, reason: String)] = []
+        var result: [(url: String, reason: String, requiresAccountHeaders: Bool)] = []
         for selection in selections {
             guard seen.insert(selection.url).inserted else { continue }
             result.append(selection)
         }
         return result
+    }
+
+    static func requiresAccountPlaybackHeaders(for rawURL: String, format: String?) -> Bool {
+        guard let url = URL(string: rawURL), url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(),
+              host == "drive.uc.cn" || host.hasSuffix(".drive.uc.cn")
+                || host == "pds.uc.cn" || host.hasSuffix(".pds.uc.cn") else { return false }
+        // Personal /file/v2/play can return an extensionless MP4 (dfi=112).
+        // These account URLs need their own headers; signed HLS/OpenAPI do not
+        // inherit the original file's or the catalog site's headers.
+        guard !url.path.lowercased().contains(".m3u8") else { return false }
+        return ["mp4", "fmp4"].contains(format?.lowercased() ?? "")
+            || url.pathExtension.lowercased() == "mp4"
+            || isCallbackProtectedURL(rawURL)
     }
 
     static func preferredVideoResolutions(in data: [String: Any]) -> [String] {

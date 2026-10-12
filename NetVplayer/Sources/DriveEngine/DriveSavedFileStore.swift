@@ -129,6 +129,11 @@ public actor DriveSavedFileStore {
 
     private let fileURL: URL
     private let legacyFileURL: URL?
+    private struct RejectedFile: Hashable {
+        let cacheKey: String
+        let fid: String
+    }
+    private var rejectedFiles: [RejectedFile: Date] = [:]
 
     public init(fileURL: URL? = nil, legacyFileURL: URL? = nil) {
         if let fileURL {
@@ -184,8 +189,29 @@ public actor DriveSavedFileStore {
         try write(all)
     }
 
+    /// Keep a brief rejection across preparation retries, including a directory rescan.
+    func invalidate(_ record: DriveSavedFileRecord, now: Date = Date()) throws {
+        rejectedFiles[RejectedFile(cacheKey: record.cacheKey, fid: record.savedFID)] = now
+        if rejectedFiles.count > 256,
+           let oldest = rejectedFiles.min(by: { $0.value < $1.value })?.key {
+            rejectedFiles.removeValue(forKey: oldest)
+        }
+        var all = records()
+        // A late failure for an old file must not remove a newer successful transfer.
+        if all[record.cacheKey]?.savedFID == record.savedFID {
+            all.removeValue(forKey: record.cacheKey)
+            try write(all)
+        }
+    }
+
+    func rejectedFileIDs(cacheKey: String, now: Date = Date()) -> Set<String> {
+        rejectedFiles = rejectedFiles.filter { now.timeIntervalSince($0.value) < 300 }
+        return Set(rejectedFiles.keys.filter { $0.cacheKey == cacheKey }.map(\.fid))
+    }
+
     public func removeAll() throws {
         try write([:])
+        rejectedFiles.removeAll()
     }
 
     private func records() -> [String: DriveSavedFileRecord] {

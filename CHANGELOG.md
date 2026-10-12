@@ -4,6 +4,15 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [1.1.2](https://github.com/spudhero/NetVplayer/releases/tag/1.1.2)（2026-10-12）
+
+- 修复课堂等 Bilibili 条目被错误当作网盘分享过滤的问题，保留扩展返回的分集，恢复详情选集和播放入口。
+- 修复 UC 智能线路个人盘 MP4 缺失账号请求头引起的 403，保留已工作的 HLS 播放路径。
+- 网盘恢复不再重新选中刚被拒绝的转存文件；失败重试有界，切集和换片拒绝旧任务的迟到结果。
+- 原画起播超时转备用线路时保留历史续播目标，避免回到零秒。
+- 修复内容来源快速定位在 macOS 15.6 上报告的布局断言，以及“缓存与系统”中的 TMDB 图标依赖开发机器路径的问题；该系统版本的实机复测仍待完成。
+- 构建号为 16；目录扩展版本沿用 1.1.1 发布时的版本，详见[发布说明](RELEASE_NOTES_1.1.2.md)。
+
 ### [1.1.1](https://github.com/spudhero/NetVplayer/releases/tag/1.1.1)（2026-10-09）
 
 - 历史、收藏、搜索进入详情和播放后按原页面返回；分享详情保留搜索，播放失败关闭复用正常退出流程。
@@ -154,6 +163,15 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [1.1.2](https://github.com/spudhero/NetVplayer/releases/tag/1.1.2) (2026-10-12)
+
+- Preserve Bilibili classroom episodes returned by extensions instead of filtering them as cloud-drive shares, restoring episode selection and playback.
+- Fix HTTP 403 for UC personal-drive MP4 smart playback by retaining its own account headers; preserve the working HLS path.
+- Exclude rejected saved files from rediscovery, bound failed retries, and discard stale results after switching episodes or titles.
+- Preserve the history resume target when original-quality startup times out and switches to a fallback route.
+- Fix the Content Sources layout assertion reported on macOS 15.6 and load the TMDB attribution logo from bundled resources. Runtime verification on that OS version remains pending.
+- Application build 16; catalog extension versions remain those shipped with application 1.1.1. See the [release notes](RELEASE_NOTES_1.1.2.md).
 
 ### [1.1.1](https://github.com/spudhero/NetVplayer/releases/tag/1.1.1) (2026-10-09)
 

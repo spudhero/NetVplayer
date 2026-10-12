@@ -455,6 +455,7 @@ final class AppState: ObservableObject {
     }
     private var driveCleanupInFlight = Set<String>()
     private var pendingPlaybackStart: PendingPlaybackStart?
+    private var startedVodPlaybackSpec: PlaySpec?
     private var playbackStartupTrace: PlaybackStartupTrace?
     private var pendingPlaybackStartTask: Task<Void, Never>?
     private var playerDismissalDetailTask: Task<Void, Never>?
@@ -2377,6 +2378,10 @@ final class AppState: ObservableObject {
             displayedCatalogCacheKey = cacheKey
             log("[DEBUG_LOGGER] 首页加载成功! 分类数: \(result.types.count), 影片数: \(result.list.count)")
         } catch {
+            guard !Task.isCancelled,
+                  requestSerial == catalogRequestSerial,
+                  activeSite?.key == site.key,
+                  contentCatalogState.generation == generation else { return }
             log("[DEBUG_LOGGER] 加载首页推荐发生异常: \(error)")
             if let delay = Self.transientPreparationRetryDelayNanoseconds(
                 for: error,
@@ -4399,6 +4404,13 @@ final class AppState: ObservableObject {
     static func transientPreparationRetryDelayNanoseconds(for error: Error, attempt: Int) -> UInt64? {
         guard attempt == 0 else { return nil }
 
+        if let processError = error as? ProviderProcessError, case .timedOut = processError {
+            // ProviderManager retires the timed-out process before this retry.
+            return 500_000_000
+        }
+        if let providerError = error as? ProviderErrorPayload, providerError.retryable {
+            return 500_000_000
+        }
         if let driveError = error as? DriveEngineError,
            case .api(_, let statusCode, _, _) = driveError {
             if DriveEngineError.invalidatesSavedRecord(driveError) {
@@ -4435,6 +4447,7 @@ final class AppState: ObservableObject {
         let nsError = error as NSError
         guard !(error is CancellationError),
               !(nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled) else { return nil }
+        if let processError = error as? ProviderProcessError, case .canceled = processError { return nil }
 
         var measurements = [
             "attempt": attempt,
@@ -4455,8 +4468,16 @@ final class AppState: ObservableObject {
             default:
                 measurements["expected"] = 1
             }
-        } else if error is HTTPError {
+        } else if let httpError = error as? HTTPError {
             measurements["errorKind"] = 3
+            switch httpError {
+            case .invalidURL: measurements["code"] = 1
+            case .invalidResponse: measurements["code"] = 2
+            case .originMismatch: measurements["code"] = 3
+            case .httpError(let status, _):
+                measurements["code"] = 4
+                measurements["status"] = status
+            }
         } else if nsError.domain == NSURLErrorDomain {
             measurements["errorKind"] = 4
         } else if error is ConfigError
@@ -4466,6 +4487,43 @@ final class AppState: ObservableObject {
                     || error is DecodingError {
             measurements["errorKind"] = 6
             measurements["expected"] = 1
+        } else if let processError = error as? ProviderProcessError {
+            measurements["errorKind"] = 7
+            switch processError {
+            case .notRunning: measurements["code"] = 1
+            case .launchFailed: measurements["code"] = 2
+            case .writeFailed: measurements["code"] = 3
+            case .invalidResponse: measurements["code"] = 4
+            case .duplicateRequest: measurements["code"] = 5
+            case .timedOut: measurements["code"] = 6
+            case .canceled: return nil
+            case .terminated(let status):
+                measurements["code"] = 8
+                measurements["status"] = Int(status)
+            case .invalidEnvironment: measurements["code"] = 9
+            case .statePreparationFailed: measurements["code"] = 10
+            }
+        } else if let payload = error as? ProviderErrorPayload {
+            measurements["errorKind"] = 8
+            // Only fixed protocol categories may leave the device, never arbitrary provider text.
+            switch payload.code {
+            case "provider_error": measurements["code"] = 1
+            case "invalid_request": measurements["code"] = 2
+            case "startup_failed": measurements["code"] = 3
+            case "provider_failed": measurements["code"] = 4
+            case "missing_result": measurements["code"] = 5
+            default: measurements["code"] = 0
+            }
+        } else if let managerError = error as? ProviderManagerError {
+            measurements["errorKind"] = 9
+            switch managerError {
+            case .providerMismatch: measurements["code"] = 1
+            case .handshakeFailed: measurements["code"] = 2
+            case .initializationFailed: measurements["code"] = 3
+            case .missingProxyPayload: measurements["code"] = 4
+            case .restartLimitExceeded: measurements["code"] = 5
+            case .sourcePolicyMismatch: measurements["code"] = 6
+            }
         }
         return measurements
     }
@@ -5864,6 +5922,7 @@ final class AppState: ObservableObject {
         let provider = spec.drivePlaybackPlan?.provider ?? .unknown
         switch outcome {
         case .started(let candidate):
+            let recoveryPosition = playbackRecoveryPositionSeconds(for: spec)
             if pendingDrivePlaybackRouteID == spec.metadata[DrivePlaybackRoutePolicy.selectionIDMetadataKey] {
                 pendingDrivePlaybackRouteID = nil
                 pendingDrivePlaybackNotice = nil
@@ -5900,7 +5959,7 @@ final class AppState: ObservableObject {
                 _ = await self.beginDrivePlaybackRouteSwitch(
                     to: nextSpec,
                     routeTitle: routeTitle,
-                    positionSeconds: self.playerState.position,
+                    positionSeconds: recoveryPosition,
                     reason: candidate.id == failedCandidateID
                         ? L10n.text("{0}线路失效，刷新后重试", ["\(provider.localizedDisplayName)"])
                         : L10n.text("{0}当前线路播放失败", ["\(provider.localizedDisplayName)"]),
@@ -6177,6 +6236,7 @@ final class AppState: ObservableObject {
                !drivePlaybackSessionController.acceptsAttempt(for: spec) { return }
             let generation = spec.metadata["playback.sessionGeneration"].flatMap(UInt64.init)
             if let trace = playbackStartupTrace, generation != trace.generation { return }
+            startedVodPlaybackSpec = spec
             isPlayerLoading = false
             // libmpv reports its first valid time-pos here; this is playback progress,
             // not a renderer acknowledgement that a frame reached the display.
@@ -6229,6 +6289,7 @@ final class AppState: ObservableObject {
     }
 
     private func activateDrivePlaybackRoutes(for spec: PlaySpec) -> PlaySpec {
+        startedVodPlaybackSpec = nil
         var prepared = spec
         if let plan = prepared.drivePlaybackPlan,
            let candidate = DrivePlaybackRoutePolicy.candidate(for: prepared) {
@@ -6271,7 +6332,7 @@ final class AppState: ObservableObject {
                 _ = await beginDrivePlaybackRouteSwitch(
                     to: selectedSpec,
                     routeTitle: route.title,
-                    positionSeconds: max(0, playerState.position),
+                    positionSeconds: playbackRecoveryPositionSeconds(for: currentSpec),
                     reason: L10n.text("用户手动选择线路"),
                     notice: DrivePlaybackRouteNotice(
                         kind: .manualSelection,
@@ -6285,6 +6346,27 @@ final class AppState: ObservableObject {
             return
         }
 
+    }
+
+    private func playbackRecoveryPositionSeconds(for spec: PlaySpec) -> Double {
+        let current = playerState.position.isFinite ? max(0, playerState.position) : 0
+        let pending = pendingPlaybackStart.flatMap {
+            PlaybackStartPolicy.canApply(episodeURL: $0.episodeURL, spec: spec)
+                ? $0.resumePosition.map { Double($0) / 1_000 } : nil
+        } ?? 0
+        if let started = startedVodPlaybackSpec,
+           started.url == spec.url,
+           started.metadata["playback.sessionGeneration"] == spec.metadata["playback.sessionGeneration"],
+           started.metadata[DrivePlaybackSessionController.attemptMetadataKey]
+                == spec.metadata[DrivePlaybackSessionController.attemptMetadataKey] {
+            return max(current, pending)
+        }
+        // Before the first progress callback, time-pos can still be zero even
+        // though a history position was submitted with the failed load.
+        let initial = spec.initialStartPositionSeconds.flatMap {
+            $0.isFinite && $0 > 0 ? $0 : nil
+        } ?? 0
+        return max(current, initial, pending)
     }
 
     private func beginDrivePlaybackRouteSwitch(
@@ -6389,6 +6471,7 @@ final class AppState: ObservableObject {
             guard let submitted = drivePlaybackSessionController.prepareSubmission(for: spec) else { return }
             spec = submitted
         }
+        if !isLive { startedVodPlaybackSpec = nil }
         hlsRecoverySlots.invalidate(live: isLive)
         hlsRecoveryTasks.removeValue(forKey: isLive)?.cancel()
         let currentSpec = spec.metadata["playback.kind"] == "live"

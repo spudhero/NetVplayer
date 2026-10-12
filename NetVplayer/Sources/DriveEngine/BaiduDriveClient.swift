@@ -291,6 +291,7 @@ public struct BaiduDriveClient: Sendable {
         var retriedMissingFile = false
         var refreshedShareSession = false
         while true {
+            var attemptedRecord: DriveSavedFileRecord?
             do {
                 let record: DriveSavedFileRecord
                 if let saved = try await usableSavedRecord(reference: reference, identity: identity, accountCookie: requestCookie) {
@@ -303,6 +304,7 @@ public struct BaiduDriveClient: Sendable {
                     record = try await savedRecord(reference: reference, identity: identity,
                         shareCookie: shareKey ?? "", accountCookie: requestCookie)
                 }
+                attemptedRecord = record
                 let media = try await mediaInfo(path: record.parentFID, fileID: record.savedFID, cookie: requestCookie)
                 var metadata = record.playbackMetadata(provider: .baidu)
                 metadata[DrivePlaybackMetadataKey.route] = DrivePlaybackRoute.originalDownload
@@ -316,9 +318,12 @@ public struct BaiduDriveClient: Sendable {
                     metadata: metadata,
                     updatedCredential: .cookie(provider: .baidu, value: requestCookie)
                 )
-            } catch where !retriedMissingFile && Self.isMissingSavedFile(error) {
+            } catch where attemptedRecord != nil && Self.isMissingSavedFile(error) {
+                if let attemptedRecord {
+                    try? await savedFileStore.invalidate(attemptedRecord)
+                }
+                guard !retriedMissingFile else { throw error }
                 retriedMissingFile = true
-                try? await savedFileStore.remove(cacheKey: identity.cacheKey)
             } catch where !refreshedShareSession && !share.passcode.isEmpty && Self.isShareSessionError(error) {
                 refreshedShareSession = true
                 await clearShareSession(for: share.shortURLToken)
@@ -386,11 +391,13 @@ public struct BaiduDriveClient: Sendable {
                 return DriveSavedFileTransferResult(record: record, updatedCookie: accountCookie)
             }
             try await ensureTransferFolder(cookie: accountCookie)
+            let rejectedFIDs = await savedFileStore.rejectedFileIDs(cacheKey: identity.cacheKey)
             let saved = try await transfer(
                 reference: reference,
                 targetName: identity.targetFileName,
                 shareCookie: shareCookie,
-                accountCookie: accountCookie
+                accountCookie: accountCookie,
+                excludingFIDs: rejectedFIDs
             )
             let record = DriveSavedFileRecord(
                 provider: .baidu,
@@ -418,6 +425,8 @@ public struct BaiduDriveClient: Sendable {
         guard let record = await savedFileStore.record(for: identity) else {
             return nil
         }
+        let rejectedFIDs = await savedFileStore.rejectedFileIDs(cacheKey: identity.cacheKey)
+        guard !rejectedFIDs.contains(record.savedFID) else { return nil }
         guard record.savedFID == reference.fid else {
             return record
         }
@@ -426,9 +435,10 @@ public struct BaiduDriveClient: Sendable {
             name: record.savedFileName,
             size: record.size,
             cookie: accountCookie,
-            attempts: 1
+            attempts: 1,
+            excludingFIDs: rejectedFIDs
         ) else {
-            try? await savedFileStore.remove(cacheKey: identity.cacheKey)
+            try? await savedFileStore.invalidate(record)
             return nil
         }
         let repaired = DriveSavedFileRecord(
@@ -482,7 +492,8 @@ public struct BaiduDriveClient: Sendable {
         reference: DriveFileReference,
         targetName: String,
         shareCookie: String,
-        accountCookie: String
+        accountCookie: String,
+        excludingFIDs: Set<String>
     ) async throws -> (fileID: String, name: String, path: String, size: Int64) {
         guard !shareCookie.isEmpty else {
             throw DriveEngineError.api(provider: .baidu, statusCode: 401, code: nil, message: "分享提取码会话已失效，请重试")
@@ -545,12 +556,13 @@ public struct BaiduDriveClient: Sendable {
         }
         let returnedID = Self.firstString(item, keys: ["fs_id", "fsId", "fsid"])
         let savedSize = Self.int64Value(item["size"]) ?? reference.size
-        if returnedID.isEmpty,
+        if returnedID.isEmpty || excludingFIDs.contains(returnedID),
            let resolved = try await waitForSavedFile(
                path: savedPath,
                name: resolvedName,
                size: savedSize,
-               cookie: accountCookie
+               cookie: accountCookie,
+               excludingFIDs: excludingFIDs
            ) {
             return (
                 resolved.fileID,
@@ -559,7 +571,7 @@ public struct BaiduDriveClient: Sendable {
                 resolved.size > 0 ? resolved.size : savedSize
             )
         }
-        guard !returnedID.isEmpty else {
+        guard !returnedID.isEmpty, !excludingFIDs.contains(returnedID) else {
             throw DriveEngineError.api(
                 provider: .baidu,
                 statusCode: response.statusCode,
@@ -580,12 +592,15 @@ public struct BaiduDriveClient: Sendable {
         name: String,
         size: Int64,
         cookie: String,
-        attempts: Int = 6
+        attempts: Int = 6,
+        excludingFIDs: Set<String>
     ) async throws -> BaiduShareFile? {
         let expectedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         let expectedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         for attempt in 0..<max(1, attempts) {
-            let files = try await listTransferFolder(cookie: cookie)
+            let files = try await listTransferFolder(cookie: cookie).filter {
+                !$0.isDirectory && !excludingFIDs.contains($0.fileID)
+            }
             if !expectedPath.isEmpty,
                let exactPath = files.first(where: { $0.path == expectedPath }) {
                 return exactPath

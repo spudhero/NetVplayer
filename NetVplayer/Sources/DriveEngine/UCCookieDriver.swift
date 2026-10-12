@@ -114,7 +114,8 @@ public final class UCCookieDriver: @unchecked Sendable {
                 ? DrivePlaybackRoute.personalTranscode
                 : savedResult.playbackRoute,
             selectedReason: savedResult.selectedReason,
-            candidateSummary: savedResult.candidateSummary
+            candidateSummary: savedResult.candidateSummary,
+            requiresAccountPlaybackHeaders: savedResult.requiresAccountPlaybackHeaders
         )
         return (link, savedResult)
     }
@@ -198,7 +199,8 @@ public final class UCCookieDriver: @unchecked Sendable {
             userAgent: savedResult.playbackUserAgent,
             route: DrivePlaybackRoute.personalTranscode,
             selectedReason: savedResult.selectedReason,
-            candidateSummary: savedResult.candidateSummary
+            candidateSummary: savedResult.candidateSummary,
+            requiresAccountPlaybackHeaders: savedResult.requiresAccountPlaybackHeaders
         )
     }
 
@@ -275,7 +277,8 @@ public final class UCCookieDriver: @unchecked Sendable {
         userAgent: String?,
         route: String?,
         selectedReason: String? = nil,
-        candidateSummary: String? = nil
+        candidateSummary: String? = nil,
+        requiresAccountPlaybackHeaders: Bool = false
     ) -> CloudDriveLink {
         var playbackMetadata = metadata
         if let route {
@@ -287,7 +290,10 @@ public final class UCCookieDriver: @unchecked Sendable {
         if let candidateSummary, !candidateSummary.isEmpty {
             playbackMetadata[DrivePlaybackMetadataKey.candidateSummary] = candidateSummary
         }
-        let headers = personalPlaybackHeaders(cookie: cookie, userAgent: userAgent, route: route)
+        let headers = personalPlaybackHeaders(
+            cookie: cookie, userAgent: userAgent, route: route,
+            requiresAccountPlaybackHeaders: requiresAccountPlaybackHeaders
+        )
         let plan = UCDrivePlaybackAdapter().playbackPlan(
             primaryURL: url,
             primaryHeaders: headers,
@@ -302,9 +308,11 @@ public final class UCCookieDriver: @unchecked Sendable {
         )
     }
 
-    private func personalPlaybackHeaders(cookie: String, userAgent: String?, route: String?) -> [String: String] {
-        guard route != DrivePlaybackRoute.ucSmartPlay,
-              route != DrivePlaybackRoute.personalTranscode else {
+    private func personalPlaybackHeaders(
+        cookie: String, userAgent: String?, route: String?, requiresAccountPlaybackHeaders: Bool
+    ) -> [String: String] {
+        if (route == DrivePlaybackRoute.ucSmartPlay || route == DrivePlaybackRoute.personalTranscode),
+           !requiresAccountPlaybackHeaders {
             return [:]
         }
         return [

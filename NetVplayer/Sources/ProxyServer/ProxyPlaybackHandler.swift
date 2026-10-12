@@ -6,6 +6,11 @@ import Foundation
 import Models
 import Networking
 
+private actor QuarkHLSStreamState {
+    private(set) var started = false
+    func markStarted() { started = true }
+}
+
 private actor QuarkHLSNormalizationState {
     private var depthByContext: [String: Int] = [:]
 
@@ -435,19 +440,26 @@ public enum ProxyPlaybackHandler {
         var attemptedURLs = Set<String>()
         var receivedResponse = false
         var lastError: Error?
+        let streamState = QuarkHLSStreamState()
+        let forwardHead: @Sendable (ProxyStreamingResponseHead) async throws -> Void = { head in
+            // Once headers may have reached the player, another attempt would replay bytes.
+            await streamState.markStarted()
+            try await sendHead(head)
+        }
 
         if let context,
            let learnedDepth = await normalizationState.depth(for: context),
            let learnedURL = normalizedQuarkSignedHLSChildURL(targetURL, layers: learnedDepth) {
             attemptedURLs.insert(learnedURL.absoluteString)
             do {
-                let response = try await streamUpstream(
+                let response = try await streamQuarkHLSCandidate(
                     learnedURL,
                     headers: headers,
                     httpClient: httpClient,
-                    timeout: 10,
+                    canRetryTransport: true,
+                    streamState: streamState,
                     streamChunkSize: streamChunkSize,
-                    sendHead: sendHead,
+                    sendHead: forwardHead,
                     sendBody: sendBody
                 )
                 receivedResponse = true
@@ -458,7 +470,8 @@ public enum ProxyPlaybackHandler {
                     return true
                 }
             } catch {
-                guard shouldRetryNormalization(after: error) else { throw error }
+                guard !Task.isCancelled, !(await streamState.started),
+                      shouldRetryNormalization(after: error) else { throw error }
                 lastError = error
                 DiagnosticLog.write(
                     "[PROXY_QUARK_SIGNED_CHILD_STREAM_REUSE_FAILED] \(upstreamLogLabel(learnedURL)) layer=\(learnedDepth) error=\(error.localizedDescription)"
@@ -482,14 +495,16 @@ public enum ProxyPlaybackHandler {
 
             guard attemptedURLs.insert(candidateURL.absoluteString).inserted else { continue }
             do {
-                let response = try await streamUpstream(
+                let canRetryTransport = normalizationLayer > 0
+                    || normalizedQuarkSignedHLSChildURL(candidateURL) == nil
+                let response = try await streamQuarkHLSCandidate(
                     candidateURL,
                     headers: headers,
                     httpClient: httpClient,
-                    timeout: 10,
-                    allowsProxyFallback: normalizationLayer > 0,
+                    canRetryTransport: canRetryTransport,
+                    streamState: streamState,
                     streamChunkSize: streamChunkSize,
-                    sendHead: sendHead,
+                    sendHead: forwardHead,
                     sendBody: sendBody
                 )
                 receivedResponse = true
@@ -507,7 +522,8 @@ public enum ProxyPlaybackHandler {
                     return true
                 }
             } catch {
-                guard normalizationLayer == 0, shouldRetryNormalization(after: error) else {
+                guard !Task.isCancelled, !(await streamState.started),
+                      normalizationLayer == 0, shouldRetryNormalization(after: error) else {
                     throw error
                 }
                 lastError = error
@@ -519,6 +535,36 @@ public enum ProxyPlaybackHandler {
 
         if receivedResponse { return false }
         throw lastError ?? HTTPError.invalidResponse
+    }
+
+    private static func streamQuarkHLSCandidate(
+        _ url: URL,
+        headers: [String: String],
+        httpClient: HTTPClient,
+        canRetryTransport: Bool,
+        streamState: QuarkHLSStreamState,
+        streamChunkSize: Int,
+        sendHead: @escaping @Sendable (ProxyStreamingResponseHead) async throws -> Void,
+        sendBody: @escaping @Sendable (Data) async throws -> Void
+    ) async throws -> HTTPStreamResponse {
+        var attempt = 0
+        while true {
+            try Task.checkCancellation()
+            do {
+                return try await streamUpstream(
+                    url, headers: headers, httpClient: httpClient, timeout: 10,
+                    allowsProxyFallback: canRetryTransport,
+                    streamChunkSize: streamChunkSize, sendHead: sendHead, sendBody: sendBody
+                )
+            } catch {
+                guard canRetryTransport, attempt == 0, !Task.isCancelled,
+                      !(await streamState.started), shouldRetryNormalization(after: error) else {
+                    throw error
+                }
+                attempt += 1
+                DiagnosticLog.write("[PROXY_QUARK_SEGMENT_RETRY] attempt=\(attempt)")
+            }
+        }
     }
 
     private static func streamUpstream(

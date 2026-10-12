@@ -32,14 +32,14 @@
 
 ### 原生 macOS 媒体播放器
 
-NetVplayer 1.1.1 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
+NetVplayer 1.1.2 是基于 SwiftUI 与内嵌 `libmpv` 构建的原生 macOS 媒体播放器。它把内容发现、详情与选集、跨来源搜索、点播、直播、字幕、音轨和播放历史组织成一致的桌面体验，同时让内容入口和访问凭据始终由用户掌控。
 
-2026-10-09 的补丁版本为 **NetVplayer 1.1.1（构建号 15）**，同步最新主程序壳源码和四种目录扩展修复。包含海报连接、列表/详情加载、有声播放及历史/收藏/搜索返回路径修复；下载安装包或从当前 main 构建都可使用下文功能。
+2026-10-12 的补丁版本为 **NetVplayer 1.1.2（构建号 16）**，修复课堂选集被误判为空、UC 智能线路部分视频的 403，以及网盘恢复后丢失续播位置；同时补齐失败重试和设置页资源加载修复。下载安装包或从当前 main 构建都可使用下文功能。
 
 | 项目 | 当前版本 | 获取入口 |
 | --- | --- | --- |
-| 稳定应用安装包 | 1.1.1 | [最新 GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
-| 公开主程序壳源码 | 1.1.1 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [更新说明](RELEASE_NOTES_1.1.1.md) |
+| 稳定应用安装包 | 1.1.2 | [最新 GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
+| 公开主程序壳源码 | 1.1.2 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [更新说明](RELEASE_NOTES_1.1.2.md) |
 | 签名播放扩展 | 见下表 | [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) |
 
 ### 项目背景
@@ -235,14 +235,14 @@ NetVplayer 与 FongMi/TV 没有隶属或官方合作关系。NetVplayer 使用�
 
 ### A native media player for macOS
 
-NetVplayer 1.1.1 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
+NetVplayer 1.1.2 is a native macOS media player built with SwiftUI and an embedded `libmpv` playback core. It brings discovery, details and episodes, federated search, video on demand, live playback, subtitles, audio tracks, and viewing history into one desktop experience while keeping content entry points and access credentials under the user's control.
 
-The 2026-10-09 patch is **NetVplayer 1.1.1 (build 15)**, with the latest application shell source and four updated catalog extensions. It includes artwork connections, catalog/detail loading, audio playback, and return paths for history, favorites, and search. The features below are available in the downloaded application and in builds of the current main branch.
+The 2026-10-12 patch is **NetVplayer 1.1.2 (build 16)**. It restores classroom episodes, fixes HTTP 403 for affected UC smart-play videos, preserves resume positions during drive recovery, and improves retry limits and Settings resource loading. The features below are available in the downloaded application and in builds of the current main branch.
 
 | Component | Current version | Get it |
 | --- | --- | --- |
-| Stable application | 1.1.1 | [Latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
-| Public application shell source | 1.1.1 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [Update notes](RELEASE_NOTES_1.1.1.md) |
+| Stable application | 1.1.2 | [Latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest) |
+| Public application shell source | 1.1.2 | [main](https://github.com/spudhero/NetVplayer/tree/main) · [Update notes](RELEASE_NOTES_1.1.2.md) |
 | Signed playback extensions | See below | [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) |
 
 ### Project background
@@ -323,7 +323,7 @@ Start with the [Provider SDK development guide](provider-sdk/README.md), which r
 
 ### Download and build
 
-The current 1.1.1 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
+The current 1.1.2 release targets macOS 14 or later on Apple Silicon. Download it from the [project website](https://spudhero.github.io/NetVplayer/) or the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
 
 The app checks for application updates and marks the version in the sidebar and Settings when a new release is available. Open the version, review the update, and select Update to download and verify it in the background. Installation happens when the app normally quits. Version 1.0.8 and earlier need one manual installation of 1.0.9 or later to gain in-app updates. The current ad-hoc signature may still require macOS first-open or installation approval.
 

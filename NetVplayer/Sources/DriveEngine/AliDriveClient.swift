@@ -284,8 +284,9 @@ public final class AliDriveClient: @unchecked Sendable {
                             temporarySavedFile: true,
                             savedRecord: saved.record
                         )
-                    } catch where attempt == 0 && Self.isMissingPersonalFileError(error) {
-                        try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
+                    } catch where Self.isMissingPersonalFileError(error) {
+                        try? await DriveSavedFileStore.shared.invalidate(saved.record)
+                        guard attempt == 0 else { throw error }
                         DiagnosticLog.write("[ALI_SAVED_CACHE] retrying deleted personal file cacheKey=\(identity.cacheKey) fid=\(saved.personal.fileID)")
                     }
                 }
@@ -375,16 +376,22 @@ public final class AliDriveClient: @unchecked Sendable {
                         guard Self.isMissingPersonalFileError(error) else { throw error }
                     }
                 }
-                try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
+                if cacheMatchesFolder {
+                    try? await DriveSavedFileStore.shared.invalidate(cached)
+                } else {
+                    try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
+                }
                 DiagnosticLog.write("[ALI_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(cached.savedFID)")
             }
 
+            let rejectedFIDs = await DriveSavedFileStore.shared.rejectedFileIDs(cacheKey: identity.cacheKey)
             if let existing = try await self.findPersonalFile(
                 named: identity.targetFileName,
                 size: file.size,
                 parentFileID: folder.fileID,
                 driveID: targetDriveID,
-                auth: auth
+                auth: auth,
+                excludingFIDs: rejectedFIDs
             ) {
                 let record = self.savedRecord(
                     identity: identity,
@@ -581,10 +588,11 @@ public final class AliDriveClient: @unchecked Sendable {
         size: Int64,
         parentFileID: String,
         driveID: String,
-        auth: AliAuthenticatedCredential
+        auth: AliAuthenticatedCredential,
+        excludingFIDs: Set<String>
     ) async throws -> AliShareFile? {
         let files = try await listPersonalFiles(parentFileID: parentFileID, driveID: driveID, auth: auth)
-        let matches = files.filter { !$0.isDirectory && $0.name == name }
+        let matches = files.filter { !$0.isDirectory && !excludingFIDs.contains($0.fileID) && $0.name == name }
         if size > 0, let exact = matches.first(where: { $0.size == size }) {
             return exact
         }

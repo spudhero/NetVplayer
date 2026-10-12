@@ -3,6 +3,9 @@ import Foundation
 import Models
 import DriveEngine
 import ConfigEngine
+import Networking
+import ProviderRuntime
+import ProviderSDK
 @testable import ProxyServer
 @testable import PlayerEngine
 @testable import NetVplayerApp
@@ -74,6 +77,42 @@ import ConfigEngine
     #expect(config["expected"] == 1)
     #expect(catalog["errorKind"] == 6)
     #expect(catalog["expected"] == 1)
+}
+
+@Test @MainActor func testProviderRecoveryRetriesOnlyTransientErrorsAndPreservesNumericCauses() throws {
+    let transient = ProviderProcessError.timedOut("private-request-id")
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: transient, attempt: 0) == 500_000_000)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: transient, attempt: 1) == nil)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: ProviderProcessError.invalidResponse, attempt: 0) == nil)
+    let retryable = ProviderErrorPayload(code: "provider_error", message: "private", retryable: true)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: retryable, attempt: 0) == 500_000_000)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: retryable, attempt: 1) == nil)
+    #expect(AppState.remoteDiagnosticMeasurements(for: ProviderProcessError.canceled("private"), attempt: 0) == nil)
+    let process = try #require(AppState.remoteDiagnosticMeasurements(for: transient, attempt: 1))
+    #expect(process["errorKind"] == 7 && process["code"] == 6)
+    let payload = try #require(AppState.remoteDiagnosticMeasurements(for: retryable, attempt: 1))
+    #expect(payload["errorKind"] == 8 && payload["code"] == 1)
+    let unknown = ProviderErrorPayload(code: "private-provider-detail", message: "token=private")
+    let unknownMeasurements = try #require(AppState.remoteDiagnosticMeasurements(for: unknown, attempt: 0))
+    #expect(unknownMeasurements["errorKind"] == 8 && unknownMeasurements["code"] == 0)
+    let manager = try #require(AppState.remoteDiagnosticMeasurements(for: ProviderManagerError.handshakeFailed, attempt: 0))
+    #expect(manager["errorKind"] == 9 && manager["code"] == 2)
+    let http = try #require(AppState.remoteDiagnosticMeasurements(for: HTTPError.httpError(503, "private response"), attempt: 1))
+    #expect(http["errorKind"] == 3 && http["code"] == 4 && http["status"] == 503)
+    let invalid = try #require(AppState.remoteDiagnosticMeasurements(for: HTTPError.invalidResponse, attempt: 0))
+    #expect(invalid["code"] == 2 && invalid["status"] == nil)
+    #expect(Set(http.keys).isSubset(of: RemoteDiagnosticRecord.measurementKeys))
+}
+
+@Test func testPlaybackStartupTimeoutHasADedicatedFailureKindInBothLanguages() {
+    for message in [
+        "原片启动超时，8 秒内未开始播放。",
+        "本地视频流启动超时，原片在 60 秒内未返回可播放数据。",
+        "Original stream timed out. Playback did not start within 8 seconds.",
+        "Local video stream timed out. The original file returned no playable data within 60 seconds."
+    ] {
+        #expect(MPVPlayerEngine.failureDiagnosticMeasurements(for: message)["failureKind"] == 7)
+    }
 }
 
 @Test func testPlaybackDisplaySleepControllerTracksPlaybackWithoutLeakingActivities() {

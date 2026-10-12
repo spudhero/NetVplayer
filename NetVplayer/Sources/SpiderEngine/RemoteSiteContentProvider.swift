@@ -235,8 +235,11 @@ struct RemoteProviderDriveShareResolver: Sendable {
         result.list.enumerated().flatMap { vodIndex, vod in
             vod.parseFlags().enumerated().flatMap { flagIndex, flag in
                 flag.episodes.enumerated().compactMap { episodeIndex, episode in
+                    let provider = DriveFileReference.provider(for: episode.url)
+                    // Bilibili IDs and video pages are resolved by the site/player,
+                    // even though the shared provider classifier recognizes them.
                     guard DriveFileReference.parse(episode.url) == nil,
-                          DriveFileReference.provider(for: episode.url) != .unknown else { return nil }
+                          provider != .unknown, provider != .bilibili else { return nil }
                     return Share(location: Location(vod: vodIndex, flag: flagIndex, episode: episodeIndex), episode: episode)
                 }
             }

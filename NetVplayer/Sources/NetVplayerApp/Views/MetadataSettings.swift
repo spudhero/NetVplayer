@@ -59,7 +59,7 @@ struct MetadataAttributionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
-                Image("TMDB", bundle: .module).resizable().scaledToFit().frame(width: 110, height: 18)
+                Image("TMDB", bundle: AppThemeResourceBundle.bundle).resizable().scaledToFit().frame(width: 110, height: 18)
                 Link("TMDB", destination: URL(string: "https://www.themoviedb.org/")!)
                 Link("豆瓣电影", destination: URL(string: "https://movie.douban.com/")!)
             }

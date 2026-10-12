@@ -41,9 +41,17 @@ final class OwnedDataSourceRequests {
         let task = Task { try await operation() }
         cancellations[id] = { task.cancel() }
         defer { cancellations[id] = nil }
-        let value = try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: { task.cancel() }
+        let value: Value
+        do {
+            value = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: { task.cancel() }
+        } catch {
+            guard !Task.isCancelled, !task.isCancelled, scope.generation == generation else {
+                throw CancellationError()
+            }
+            throw error
+        }
         guard !Task.isCancelled, !task.isCancelled, scope.generation == generation else {
             await discard(value)
             throw CancellationError()

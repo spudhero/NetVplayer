@@ -528,15 +528,28 @@ struct SettingsView: View {
     }
 
     private func contentSourceNavigation(_ navigate: @escaping (ContentSourceCategory) -> Void) -> some View {
-        ViewThatFits(in: .horizontal) {
+        // macOS 15 can evaluate lazy ForEach content on its DisplayLink queue.
+        // Construct these fixed buttons before layout measures either arrangement.
+        let online = contentSourceNavigationButton(.online, navigate: navigate)
+        let cloud = contentSourceNavigationButton(.cloud, navigate: navigate)
+        let files = contentSourceNavigationButton(.files, navigate: navigate)
+        let search = contentSourceNavigationButton(.search, navigate: navigate)
+
+        return ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
-                ForEach(ContentSourceCategory.allCases) { category in
-                    contentSourceNavigationButton(category, navigate: navigate)
-                }
+                online
+                cloud
+                files
+                search
             }.fixedSize(horizontal: true, vertical: false)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ForEach(ContentSourceCategory.allCases) { category in
-                    contentSourceNavigationButton(category, navigate: navigate)
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    online
+                    cloud
+                }
+                HStack(spacing: 8) {
+                    files
+                    search
                 }
             }
         }

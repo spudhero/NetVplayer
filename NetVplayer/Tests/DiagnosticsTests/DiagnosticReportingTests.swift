@@ -63,6 +63,10 @@ import Sentry
         #expect(!http.isError && !ended.isError)
         #expect(http.measurements == ["status": 403])
         #expect(ended.measurements == ["code": 4, "errorCode": -13])
+        let startup = try #require(RemoteDiagnosticRecord(localMessage:
+            "[MPV_STARTUP_TIMEOUT] durationMs=60000 timeoutSeconds=60 automaticOriginal=false url=https://private.example/video"))
+        #expect(!startup.isError)
+        #expect(startup.measurements == ["durationMs": 60000])
     }
 
     @Test func developmentBinariesDoNotShareProductionReleaseIdentity() {

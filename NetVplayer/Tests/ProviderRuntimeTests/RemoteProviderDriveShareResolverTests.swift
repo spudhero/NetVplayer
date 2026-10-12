@@ -3,6 +3,55 @@ import Models
 import Testing
 @testable import SpiderEngine
 
+@Test(arguments: [
+    "bilibili://play?aid=12345&cid=67890",
+    "https://www.bilibili.com/video/BV1fixture?p=2"
+])
+func remoteProviderDriveShareResolverPreservesBilibiliEpisodes(playbackURL: String) async throws {
+    let resolver = RemoteProviderDriveShareResolver(expander: DriveShareExpander(expanders: []))
+    let input = Result(list: [Vod(
+        vodId: "classroom",
+        vodName: "Classroom",
+        vodPlayFrom: "Bilibili",
+        vodPlayUrl: "Lesson$\(playbackURL)"
+    )])
+
+    let provisional = resolver.provisional(input)
+    #expect(provisional.list[0].vodPlayUrl == input.list[0].vodPlayUrl)
+
+    let resolved = await resolver.resolve(input)
+    let episode = try #require(resolved.list[0].parseFlags().first?.episodes.first)
+    #expect(episode.name == "Lesson")
+    #expect(episode.url == playbackURL)
+    #expect(resolved.list[0].vodPlayFrom == "Bilibili")
+}
+
+@Test func remoteProviderDriveShareResolverPreservesBilibiliWhileExpandingDriveShares() async throws {
+    let playbackURL = "bilibili://play?aid=12345&cid=67890"
+    let shareURL = "https://pan.quark.cn/s/classroom-fixture"
+    let mediaURL = "https://media.example.test/lesson.mp4"
+    let resolver = RemoteProviderDriveShareResolver(expander: DriveShareExpander(expanders: [
+        RemoteProviderFixtureExpander(expectedURL: shareURL, episodes: [Episode(name: "File", url: mediaURL)])
+    ]))
+    let input = Result(list: [Vod(
+        vodId: "mixed",
+        vodPlayFrom: "Bilibili$$$Quark",
+        vodPlayUrl: "Lesson$\(playbackURL)$$$Share$\(shareURL)"
+    )])
+
+    let provisional = resolver.provisional(input).list[0].parseFlags()
+    #expect(provisional[0].episodes.first?.url == playbackURL)
+    #expect(provisional[1].episodes.first?.url.hasPrefix("netvplayer-pending:") == true)
+
+    let resolved = await resolver.resolve(input)
+    let flags = resolved.list[0].parseFlags()
+    #expect(flags.map(\.name) == ["Bilibili", "Quark"])
+    #expect(flags[0].episodes.first?.name == "Lesson")
+    #expect(flags[0].episodes.first?.url == playbackURL)
+    #expect(flags[1].episodes.first?.url == mediaURL)
+    #expect(resolved.list[0].episodeDetails.map(\.url) == [playbackURL, mediaURL])
+}
+
 @Test func remoteProviderDriveShareResolverExpandsSharesInsideTheShell() async {
     let shareURL = "https://pan.quark.cn/s/remote-provider-fixture?pwd=58b8"
     let expander = DriveShareExpander(expanders: [

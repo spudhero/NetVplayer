@@ -2292,7 +2292,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
         let timeout = Int(Self.localStreamStartupTimeout(for: spec))
         let automaticOriginal = Self.isAutomaticOriginalStreamSpec(spec)
-        DiagnosticLog.write("[MPV_STARTUP_TIMEOUT] timeoutSeconds=\(timeout) automaticOriginal=\(automaticOriginal)")
+        DiagnosticLog.write("[MPV_STARTUP_TIMEOUT] durationMs=\(timeout * 1000) timeoutSeconds=\(timeout) automaticOriginal=\(automaticOriginal)")
         let message = automaticOriginal
             ? L10n.text("原片启动超时，{0} 秒内未开始播放。", ["\(timeout)"])
             : L10n.text("本地视频流启动超时，原片在 {0} 秒内未返回可播放数据。", ["\(timeout)"])
@@ -2682,6 +2682,12 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     static func diagnosticErrorKind(for message: String) -> Int {
         let normalized = message.lowercased()
+        if normalized.contains("原片启动超时")
+            || normalized.contains("本地视频流启动超时")
+            || normalized.contains("original stream timed out")
+            || normalized.contains("local video stream timed out") {
+            return 7
+        }
         if normalized.contains(L10n.text("初始化失败").lowercased()) || normalized.contains("initialization") {
             return 1
         }

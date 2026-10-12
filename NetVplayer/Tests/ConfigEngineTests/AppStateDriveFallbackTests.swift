@@ -541,6 +541,47 @@ func testManualSmartToOriginalRouteShowsManualNoticeAfterPlaybackStarts(provider
 }
 
 @MainActor
+@Test(arguments: [false, true], [false, true])
+func testDriveStartupFallbackPreservesResumeUntilPlaybackStarts(hasStarted: Bool, durationKnown: Bool) async throws {
+    let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
+    var original = PlaySpec(url: "http://127.0.0.1:9978/stream?id=resume-original")
+    original.metadata[DrivePlaybackMetadataKey.provider] = DriveProvider.quark.rawValue
+    original.metadata[DrivePlaybackMetadataKey.route] = DrivePlaybackRoute.originalDownload
+    original.metadata[TestDriveFallbackMetadataKey.fallbackURL] = "https://media.example.invalid/resume.m3u8"
+    original.metadata[TestDriveFallbackMetadataKey.fallbackRoute] = DrivePlaybackRoute.personalTranscode
+    original.metadata["vod.episodeURL"] = "netvplayer-drive://quark/file?fid=resume-fixture"
+    original.initialStartPositionSeconds = 1_355.76
+    original = installDriveSpec(original, in: appState)
+    appState.playerState.duration = durationKnown ? 1_474 : 0
+    if hasStarted {
+        appState.handleMPVPlaybackStarted(spec: original)
+        // A user can seek back to the beginning after a successful resume.
+    }
+    appState.playerState.position = 0
+    var submitted: PlaySpec?
+    appState.playSpecHandler = {
+        submitted = $0
+        appState.playerState.currentSpec = $0
+    }
+    appState.handleMPVPlaybackFailure(spec: original, message: "原片启动超时")
+    for _ in 0..<100 where submitted == nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let fallback = try #require(submitted)
+    #expect(DrivePlaybackRoutePolicy.candidate(for: fallback)?.id == "quark:personal-transcode")
+    #expect(fallback.initialStartPositionSeconds == (!hasStarted && durationKnown ? 1_355.76 : nil))
+    if !durationKnown {
+        // A second route switch must keep the pending resume while duration
+        // was unavailable, without reviving a target the user already left.
+        appState.playerState.duration = 1_474
+        let originalRoute = try #require(appState.drivePlaybackRoutes.first)
+        appState.handleMPVPlaybackStarted(spec: fallback)
+        await appState.selectDrivePlaybackRoute(originalRoute)
+        #expect(submitted?.initialStartPositionSeconds == (hasStarted ? nil : 1_355.76))
+    }
+}
+
+@MainActor
 @Test func testDriveLocalStreamFailureFallsBackToTranscode() async throws {
     let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
     var localStream = PlaySpec(url: "http://127.0.0.1:9978/stream?id=quark-original")

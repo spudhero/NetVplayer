@@ -487,7 +487,7 @@ public final class QuarkDriveClient: @unchecked Sendable {
                     return try await personalPlayResultWaitingIfNeeded(for: cached, cookie: activeCookie, preferAudioOriginal: preferAudioOriginal)
                 } catch {
                     if Self.shouldInvalidateSavedRecord(error) {
-                        try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
+                        try? await DriveSavedFileStore.shared.invalidate(cached)
                         DiagnosticLog.write("[QUARK_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(cached.savedFID) reason=\(error.localizedDescription)")
                     } else if Self.shouldWaitForPersonalPlayback(error) {
                         throw DriveEngineError.officialPlayURLPending(cached.originalName)
@@ -501,11 +501,13 @@ public final class QuarkDriveClient: @unchecked Sendable {
         let transferStartCookie = activeCookie
         let transferResult = try await DriveTransferCoordinator.shared.transfer(cacheKey: identity.cacheKey) {
             var transferCookie = transferStartCookie
+            let rejectedFIDs = await DriveSavedFileStore.shared.rejectedFileIDs(cacheKey: identity.cacheKey)
             let existing = try await self.findPersonalFileRecursively(
                 fileName: identity.targetFileName,
                 size: playable.file.size,
                 rootFID: folder.fid,
-                cookie: transferCookie
+                cookie: transferCookie,
+                excludingFIDs: rejectedFIDs
             )
             transferCookie = existing.updatedCookie
             if let file = existing.file {
@@ -552,7 +554,8 @@ public final class QuarkDriveClient: @unchecked Sendable {
                 originalFileName: playable.file.name,
                 size: playable.file.size,
                 appFolderFID: folder.fid,
-                cookie: transferCookie
+                cookie: transferCookie,
+                excludingFIDs: rejectedFIDs
             )
             transferCookie = resolved.updatedCookie
             guard let savedFile = resolved.file else {
@@ -584,7 +587,7 @@ public final class QuarkDriveClient: @unchecked Sendable {
             return try await personalPlayResultWaitingIfNeeded(for: savedFile, cookie: activeCookie, preferAudioOriginal: preferAudioOriginal)
         } catch {
             if Self.shouldInvalidateSavedRecord(error) {
-                try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
+                try? await DriveSavedFileStore.shared.invalidate(savedFile)
                 DiagnosticLog.write("[QUARK_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(savedFile.savedFID) reason=\(error.localizedDescription)")
             }
             if Self.shouldWaitForPersonalPlayback(error) {
@@ -864,7 +867,10 @@ private extension QuarkDriveClient {
         throw DriveEngineError.api(provider: .quark, statusCode: 200, code: nil, message: message)
     }
 
-    func findPersonalFileRecursively(fileName: String, size: Int64?, rootFID: String, cookie: String) async throws -> PersonalFileLookupResult {
+    func findPersonalFileRecursively(
+        fileName: String, size: Int64?, rootFID: String, cookie: String,
+        excludingFIDs: Set<String>
+    ) async throws -> PersonalFileLookupResult {
         var activeCookie = cookie
         var queue = [rootFID]
         var visited = Set<String>()
@@ -876,7 +882,8 @@ private extension QuarkDriveClient {
             let listed = try await listPersonalFiles(parentFID: parentFID, cookie: activeCookie)
             activeCookie = listed.updatedCookie
 
-            let exactMatches = listed.files.filter { $0.isPlayableMediaObject && $0.name == fileName }
+            let candidates = listed.files.filter { $0.isPlayableMediaObject && !excludingFIDs.contains($0.fid) }
+            let exactMatches = candidates.filter { $0.name == fileName }
             if let size,
                let exact = exactMatches.first(where: { $0.size == size }) {
                 return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
@@ -884,7 +891,7 @@ private extension QuarkDriveClient {
             if let exact = exactMatches.first {
                 return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
             }
-            if let folded = listed.files.first(where: { $0.isPlayableMediaObject && $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
+            if let folded = candidates.first(where: { $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
                 return PersonalFileLookupResult(file: folded, updatedCookie: activeCookie)
             }
 
@@ -894,19 +901,23 @@ private extension QuarkDriveClient {
         return PersonalFileLookupResult(file: nil, updatedCookie: activeCookie)
     }
 
-    func resolveSavedPersonalFile(candidateFID: String, originalFileName: String, size: Int64, appFolderFID: String, cookie: String) async throws -> PersonalFileLookupResult {
+    func resolveSavedPersonalFile(
+        candidateFID: String, originalFileName: String, size: Int64, appFolderFID: String, cookie: String,
+        excludingFIDs: Set<String>
+    ) async throws -> PersonalFileLookupResult {
         var activeCookie = cookie
         let appFolder = try await listPersonalFiles(parentFID: appFolderFID, cookie: activeCookie)
         activeCookie = appFolder.updatedCookie
 
-        if let candidate = appFolder.files.first(where: { $0.fid == candidateFID }) {
+        if let candidate = appFolder.files.first(where: { $0.fid == candidateFID }), !excludingFIDs.contains(candidateFID) {
             DiagnosticLog.write("[QUARK_SAVED_CACHE] save candidate fid=\(candidateFID) name=\(candidate.name) dir=\(candidate.isDirectory) fileType=\(candidate.fileType) category=\(candidate.category) format=\(candidate.formatType) size=\(candidate.size)")
 
             let nested = try? await findPersonalFileRecursively(
                 fileName: originalFileName,
                 size: size,
                 rootFID: candidate.fid,
-                cookie: activeCookie
+                cookie: activeCookie,
+                excludingFIDs: excludingFIDs
             )
             if let nested {
                 activeCookie = nested.updatedCookie
@@ -922,12 +933,13 @@ private extension QuarkDriveClient {
             }
 
             DiagnosticLog.write("[QUARK_SAVED_CACHE] save task returned non-video fid=\(candidateFID); resolving under app folder file=\(originalFileName)")
-        } else {
+        } else if !excludingFIDs.contains(candidateFID) {
             let nested = try? await findPersonalFileRecursively(
                 fileName: originalFileName,
                 size: size,
                 rootFID: candidateFID,
-                cookie: activeCookie
+                cookie: activeCookie,
+                excludingFIDs: excludingFIDs
             )
             if let nested {
                 activeCookie = nested.updatedCookie
@@ -942,12 +954,16 @@ private extension QuarkDriveClient {
             fileName: originalFileName,
             size: size,
             rootFID: appFolderFID,
-            cookie: activeCookie
+            cookie: activeCookie,
+            excludingFIDs: excludingFIDs
         )
         return fallback
     }
 
-    func waitForResolvedSavedPersonalFile(candidateFID: String?, originalFileName: String, size: Int64, appFolderFID: String, cookie: String) async throws -> PersonalFileLookupResult {
+    func waitForResolvedSavedPersonalFile(
+        candidateFID: String?, originalFileName: String, size: Int64, appFolderFID: String, cookie: String,
+        excludingFIDs: Set<String>
+    ) async throws -> PersonalFileLookupResult {
         var activeCookie = cookie
         var latest = PersonalFileLookupResult(file: nil, updatedCookie: activeCookie)
 
@@ -958,14 +974,16 @@ private extension QuarkDriveClient {
                     originalFileName: originalFileName,
                     size: size,
                     appFolderFID: appFolderFID,
-                    cookie: activeCookie
+                    cookie: activeCookie,
+                    excludingFIDs: excludingFIDs
                 )
             } else {
                 latest = try await findPersonalFileRecursively(
                     fileName: originalFileName,
                     size: size,
                     rootFID: appFolderFID,
-                    cookie: activeCookie
+                    cookie: activeCookie,
+                    excludingFIDs: excludingFIDs
                 )
             }
 

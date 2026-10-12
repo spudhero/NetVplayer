@@ -59,6 +59,26 @@ private actor SourceLoadGate {
 }
 
 @MainActor
+@Test func retiredDataSourceFailureIsCancellationInsteadOfAnActiveCatalogError() async throws {
+    for cancelsCaller in [true, false] {
+        let requests = OwnedDataSourceRequests()
+        let gate = SourceLoadGate()
+        let scope = requests.scope(source: "old-source")
+        let caller = Task {
+            try await requests.run(scope: scope) { () async throws -> Int in
+                _ = await gate.load()
+                throw URLError(.timedOut)
+            }
+        }
+        await gate.waitForStart()
+        if cancelsCaller { caller.cancel() } else { requests.cancelAll() }
+        await gate.finish()
+        do { _ = try await caller.value; Issue.record("Retired request must be cancelled") }
+        catch { #expect(error is CancellationError) }
+    }
+}
+
+@MainActor
 @Test func dataSourceCoordinatorPreservesRepositoryCoalescingAndDoesNotCacheRetiredResults() async throws {
     let repository = CatalogRepository()
     let requests = OwnedDataSourceRequests()
