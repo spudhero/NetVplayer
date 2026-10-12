@@ -217,15 +217,21 @@ struct AppStateLiveRefreshTests {
             capturedSpecs.append(spec)
         }
         await appState.playChannel(channel)
-        let directSpec = try #require(capturedSpecs.first)
+        var directSpec = try #require(capturedSpecs.first)
         #expect(directSpec.mpvOptions["stream-lavf-o"] == "icy=0")
+        // This test exercises the relay stage after generic playlist recovery is exhausted.
+        directSpec.metadata[HLSRecovery.attemptedKey] = "true"
         appState.livePlayerState.currentSpec = directSpec
 
         appState.handleMPVPlaybackFailure(
             spec: directSpec,
             message: "直播 HLS 直连加载失败：源站连接被中断，通常是网络路径、源站防护或签名失效导致。已允许本地 relay 兜底。"
         )
-        try await Task.sleep(nanoseconds: 1_700_000_000)
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while capturedSpecs.count < 2, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
 
         #expect(capturedSpecs.count == 2)
         #expect(capturedSpecs.last?.metadata[LiveHLSRelayPolicy.transportMetadataKey] == LiveHLSRelayPolicy.localRelayTransport)
