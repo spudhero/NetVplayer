@@ -350,6 +350,8 @@ class ProviderPublicExportTests(unittest.TestCase):
             (source / "private-providers/example").mkdir(parents=True)
             files = {
                 "README.md": "public\n",
+                ".github/workflows/release-macos.yml": "name: legacy release\n",
+                "script/templates/release-macos.yml": "name: reviewed release\n",
                 ".github/ISSUE_TEMPLATE/user-feedback.yml": "name: user feedback\n",
                 ".github/ISSUE_TEMPLATE/config.yml": "blank_issues_enabled: true\n",
                 "NetVplayer/Sources/SpiderEngine/RemoteSiteContentProvider.swift": "public struct Remote {}\n",
@@ -383,6 +385,9 @@ class ProviderPublicExportTests(unittest.TestCase):
             self.assertTrue((output / "README.md").is_file())
             self.assertTrue((output / ".github/ISSUE_TEMPLATE/user-feedback.yml").is_file())
             self.assertTrue((output / ".github/ISSUE_TEMPLATE/config.yml").is_file())
+            self.assertEqual((output / ".github/workflows/release-macos.yml").read_text(),
+                             "name: reviewed release\n")
+            self.assertFalse((output / "script/templates/release-macos.yml").exists())
             self.assertFalse((output / "FongMi").exists())
             self.assertFalse((output / "private-providers").exists())
             self.assertFalse((output / "NetVplayer/Sources/SpiderEngine/BiliNativeProvider.swift").exists())

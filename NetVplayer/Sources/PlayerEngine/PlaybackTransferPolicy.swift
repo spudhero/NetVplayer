@@ -17,8 +17,15 @@ public enum PlaybackTransferPolicy {
         } ?? ((Int(spec.metadata[DrivePlaybackMetadataKey.width] ?? "") ?? 0) > 0
             && (Int(spec.metadata[DrivePlaybackMetadataKey.height] ?? "") ?? 0) > 0)
         if declaredVideo || videoDimensions { return .video }
-        let names = [reference?.fileName ?? "", spec.metadata["drive.fileName"] ?? "",
-                     spec.metadata["vod.episodeName"] ?? "", URL(string: spec.url)?.lastPathComponent ?? ""]
+        // Episode titles may hide the container extension, leaving a codec such
+        // as .AAC at the end. Prefer a real source/saved/URL filename before
+        // consulting that display title; otherwise a video gets an audio window.
+        let fileNames = [reference?.fileName ?? "", spec.metadata[DrivePlaybackMetadataKey.fileName] ?? "",
+                         URL(string: spec.url)?.lastPathComponent ?? ""]
+        let fileName = fileNames.first {
+            DriveMediaClassifier.isPlayableMedia(name: $0, isDirectory: false, isFile: true)
+        }
+        let names = [fileName ?? spec.metadata["vod.episodeName"] ?? ""]
         let isAudio = names.contains {
             DriveMediaClassifier.isPlayableAudio(name: $0, formatType: format,
                                                   isDirectory: false, isFile: true)

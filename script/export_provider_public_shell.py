@@ -19,6 +19,9 @@ from validate_publication_identity import audit_history, install_hooks
 
 
 FORBIDDEN_PREFIXES = ("FongMi/", "private-providers/")
+PUBLIC_WORKFLOW_TEMPLATES = {
+    ".github/workflows/release-macos.yml": "script/templates/release-macos.yml",
+}
 PUBLIC_RELEASE_DOCUMENTS = {
     "docs/data/torrent-bridge-license-audit-2026-08-18.json",
     "docs/design/player-ui/assets/w700d1q75cms.jpg",
@@ -71,6 +74,7 @@ INTERNAL_MIGRATION_FILES = {
     "script/test_validate_provider_source_policy.py",
     "script/validate_provider_source_policy.py",
     "script/templates/provider-diagnostic-release.yml",
+    "script/templates/release-macos.yml",
     ".github/workflows/provider-runtime-poc.yml",
     "script/analyze_fongmi_home_posters.py",
     "script/audit_android_provider.py",
@@ -295,12 +299,14 @@ def copy_tracked_public_files(source: Path, destination: Path) -> dict[str, Any]
 
     included: list[str] = []
     excluded: dict[str, list[str]] = {}
-    for relative in tracked_paths(source):
+    paths = tracked_paths(source)
+    for relative in paths:
         reason = exclusion_reason(relative)
         if reason:
             excluded.setdefault(reason, []).append(relative)
             continue
-        source_path = source / relative
+        template = PUBLIC_WORKFLOW_TEMPLATES.get(relative)
+        source_path = source / (template if template in paths else relative)
         if source_path.is_symlink():
             raise PublicExportError(f"tracked symlinks require explicit review: {relative}")
         if not source_path.is_file():

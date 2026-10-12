@@ -4,6 +4,13 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [1.1.3](https://github.com/spudhero/NetVplayer/releases/tag/1.1.3)（2026-10-13）
+
+- 媒体类型优先使用真实源文件名、保存文件名或媒体 URL，修复显示集名隐藏 `.mp4` 后将带 AAC 等标记的视频当作音频的问题。
+- UC 原片恢复视频传输配置，避免音频限速引起的起播超时与过早自动转码；真实 AAC、FLAC 等音频继续使用音频配置。
+- 保留 1.1.2 的课堂选集、UC 智能线路 403、失败重试和网盘续播恢复修复。
+- 构建号为 17，目录扩展版本保持现有兼容版本，详见[发布说明](RELEASE_NOTES_1.1.3.md)。
+
 ### [1.1.2](https://github.com/spudhero/NetVplayer/releases/tag/1.1.2)（2026-10-12）
 
 - 修复课堂等 Bilibili 条目被错误当作网盘分享过滤的问题，保留扩展返回的分集，恢复详情选集和播放入口。
@@ -163,6 +170,13 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [1.1.3](https://github.com/spudhero/NetVplayer/releases/tag/1.1.3) (2026-10-13)
+
+- Prioritize actual source filenames, saved filenames, and media URLs when classifying media. Fix videos with AAC or similar labels being treated as audio when the displayed episode title hides `.mp4`.
+- Restore the video transfer profile for UC original playback, avoiding startup timeouts and early transcoding caused by the audio profile. Preserve genuine AAC, FLAC, and other audio playback.
+- Retain the 1.1.2 fixes for classroom episodes, UC smart-play HTTP 403, bounded retries, and drive resume recovery.
+- Application build 17; existing compatible catalog extension versions remain available. See the [release notes](RELEASE_NOTES_1.1.3.md).
 
 ### [1.1.2](https://github.com/spudhero/NetVplayer/releases/tag/1.1.2) (2026-10-12)
 

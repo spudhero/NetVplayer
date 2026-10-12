@@ -37,6 +37,7 @@ INTERNAL_ONLY_FILES = (
     "script/export_provider_private_source.py",
     "script/run_provider_private_source_gate.py",
     "script/test_verify_private_covers_public.py",
+    "script/templates/release-macos.yml",
     "script/test_provider_runtime_matrix.py",
     "script/test_provider_runtime_packages.py",
     "script/test_provider_catalog.py",

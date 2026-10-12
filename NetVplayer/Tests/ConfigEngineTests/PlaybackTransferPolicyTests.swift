@@ -50,6 +50,45 @@ func playbackTransferPolicyRecognizesSignedAudioURLs(_ format: String) {
     #expect(spec.transferProfile == nil)
 }
 
+@Test(arguments: [DriveProvider.uc, .quark, .baidu, .ali, .p115, .pikpak])
+func playbackTransferClassificationUsesRealFileNamesBeforeDisplayTitles(_ provider: DriveProvider) {
+    let title = "S01E01.2026.2160p.25fps.HQ.WEB-DL.H265.10bit.AAC"
+    let reference = DriveFileReference(provider: provider, shareURL: "https://example.test/share",
+        pwdID: "share", fid: "file", fidToken: "", fileName: "\(title).mp4")
+    var spec = PlaySpec(url: "https://cdn.example.test/download?sign=fixture",
+        metadata: ["vod.episodeURL": reference.encodedURL, "vod.episodeName": title,
+            DrivePlaybackMetadataKey.fileName: "\(title)__saved.mp4",
+            DrivePlaybackMetadataKey.provider: provider.rawValue,
+            DrivePlaybackMetadataKey.route: DrivePlaybackRoute.originalDownload])
+    #expect(PlaybackTransferPolicy.media(for: spec) == .video)
+    let profile = PlaybackTransferPolicy.profile(for: spec)
+    #expect(profile.context.media == .video && profile.preloadLayout != .audioOriginal)
+    if provider == .uc {
+        #expect(profile.parallelConcurrency == 140 && profile.parallelSegmentBytes == 97_280)
+    }
+
+    // Saved-file and direct URL paths must work when there is no share reference.
+    spec.metadata["vod.episodeURL"] = nil
+    #expect(PlaybackTransferPolicy.media(for: spec) == .video)
+    spec.metadata[DrivePlaybackMetadataKey.fileName] = nil
+    spec.url = "https://cdn.example.test/\(title).mkv"
+    #expect(PlaybackTransferPolicy.media(for: spec) == .video)
+
+    // Genuine audio keeps its small window even when its display title looks like video.
+    spec.url = "https://cdn.example.test/download?sign=fixture"
+    spec.metadata["vod.episodeName"] = "concert.mp4"
+    spec.metadata[DrivePlaybackMetadataKey.fileName] = "track.aac"
+    #expect(PlaybackTransferPolicy.media(for: spec) == .compressedAudio)
+    #expect(PlaybackTransferPolicy.profile(for: spec).preloadLayout == .audioOriginal)
+    spec.metadata[DrivePlaybackMetadataKey.fileName] = "track.flac"
+    #expect(PlaybackTransferPolicy.media(for: spec) == .wideAudio)
+
+    // Legacy sources may only carry a display title as their audio hint.
+    spec.metadata[DrivePlaybackMetadataKey.fileName] = nil
+    spec.metadata["vod.episodeName"] = "track.mp3"
+    #expect(PlaybackTransferPolicy.media(for: spec) == .compressedAudio)
+}
+
 @Test func aliOriginalVideoUsesBoundedParallelRangesWithoutApplyingThemToAudioOrHLS() throws {
     let candidate = DrivePlaybackCandidate(id: "ali-original", providerRoute: DrivePlaybackRoute.originalDownload,
         kind: .original, transport: .localRangeProxy, url: "https://example.test/file",

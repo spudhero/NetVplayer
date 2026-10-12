@@ -20,21 +20,21 @@ jobs:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install libmpv development files
-        run: brew install mpv
-
-      - name: Prepare macOS 14 compatible libmpv runtime
+      - name: Reuse the pinned macOS 14 compatible libmpv runtime
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           runtime_root="$RUNNER_TEMP/libmpv-runtime"
+          mkdir -p "$runtime_root"
+          gh release download 1.1.2 --repo spudhero/NetVplayer \
+            --pattern NetVplayer-1.1.2-macos-arm64.zip --dir "$runtime_root"
+          printf '%s  %s\n' \
+            e03ebba79d6b396f837eca1f93462be69f99f0a3ef58d1f2d0b5ea1592d669fb \
+            "$runtime_root/NetVplayer-1.1.2-macos-arm64.zip" | shasum -a 256 --check
+          /usr/bin/ditto -x -k "$runtime_root/NetVplayer-1.1.2-macos-arm64.zip" "$runtime_root"
           runtime_bundle="$runtime_root/NetVplayer.app"
-          runtime_host="$runtime_bundle/Contents/MacOS/RuntimeHost"
-          mkdir -p "$(dirname "$runtime_host")" "$runtime_bundle/Contents/Resources"
-          xcrun clang -target arm64-apple-macos14.0 -x c -o "$runtime_host" - <<'EOF'
-          int main(void) { return 0; }
-          EOF
-          bash script/vendor_libmpv.sh "$runtime_bundle" "$runtime_host"
           python3 script/validate_macos_compatibility.py \
             --root "$runtime_bundle/Contents/Frameworks" \
             --maximum-version 14.0 \
@@ -42,8 +42,16 @@ jobs:
           python3 script/package_libmpv_runtime_licenses.py \
             --app-bundle "$runtime_bundle" \
             --audit-only
+          # Transfer only the audited runtime and its licenses. The app is rebuilt from the tag.
+          runtime_only="$runtime_root/runtime-only/NetVplayer.app"
+          mkdir -p "$runtime_only/Contents/Frameworks" "$runtime_only/Contents/Resources/ThirdPartyLicenses"
+          cp "$runtime_bundle/Contents/Frameworks/"*.dylib "$runtime_only/Contents/Frameworks/"
+          cp "$runtime_bundle/Contents/Resources/ThirdPartyLicenses/"libmpv-runtime.{json,md} \
+            "$runtime_only/Contents/Resources/ThirdPartyLicenses/"
+          /usr/bin/ditto "$runtime_bundle/Contents/Resources/ThirdPartyLicenses/libmpv" \
+            "$runtime_only/Contents/Resources/ThirdPartyLicenses/libmpv"
           /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
-            "$runtime_bundle" "$RUNNER_TEMP/libmpv-runtime-macos14-arm64.zip"
+            "$runtime_only" "$RUNNER_TEMP/libmpv-runtime-macos14-arm64.zip"
 
       - name: Upload compatible libmpv runtime
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -218,14 +226,6 @@ jobs:
           symbols_uuid="$(xcrun dwarfdump --uuid "$symbols" | awk '{print $2, $3}')"
           [[ -n "$binary_uuid" && "$binary_uuid" == "$symbols_uuid" ]]
 
-      - name: Retain Sentry debug symbols
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: NetVplayer-${{ github.ref_name }}-debug-symbols
-          path: ${{ runner.temp }}/netvplayer-release/symbols
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Upload Sentry symbols when a token is configured
         shell: bash
         env:
@@ -233,7 +233,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "$SENTRY_AUTH_TOKEN" ]]; then
-            echo "Sentry upload token is not configured; matching symbols are retained in the workflow artifact."
+            echo "Sentry upload token is not configured; symbols remain local to this runner."
             exit 0
           fi
           cli="$RUNNER_TEMP/sentry-cli"
@@ -295,7 +295,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish GitHub Release
+      - name: Stage verified GitHub Release draft
         shell: bash
         working-directory: ${{ steps.package.outputs.asset-output }}
         env:
@@ -321,15 +321,13 @@ jobs:
               shasum -a 256 --check SHA256SUMS.txt
             )
             cmp SHA256SUMS.txt "$existing_assets/SHA256SUMS.txt"
-            gh release edit "$release_version" --repo "$GITHUB_REPOSITORY" \
-              --title "NetVplayer $release_version" --latest
+            echo "Existing release assets match; the release is preserved."
           else
             gh release create "$release_version" "${release_assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --fail-on-no-commits \
               --title "NetVplayer $release_version" \
-              --notes "This release contains the verified source-free Apple Silicon macOS app. It requires macOS 14 or later and uses community ad-hoc signing, so first launch may require Finder's Open command or approval in Privacy & Security." \
-              --generate-notes \
-              --latest
+              --notes-file "$GITHUB_WORKSPACE/RELEASE_NOTES_${release_version}.md" \
+              --draft
           fi
