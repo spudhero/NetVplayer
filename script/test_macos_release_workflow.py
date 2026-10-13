@@ -111,6 +111,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             "gh release upload",
             '[[ "$release_state" == "empty-draft" ]]',
             '[[ "$draft_author" != "$GITHUB_REPOSITORY_OWNER" ]]',
+            '--json author --jq \'.author.login\'',
             "gh release download",
             'cmp SHA256SUMS.txt "$existing_assets/SHA256SUMS.txt"',
             "--verify-tag",
@@ -128,6 +129,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             self.assertIn(fragment, self.workflow)
         self.assertNotIn("--clobber", self.workflow)
         self.assertNotIn("gh release edit", self.workflow)
+        self.assertNotIn('releases/tags/$release_version', self.workflow)
 
     def test_application_version_matches_the_release_documentation(self) -> None:
         with INFO_PLIST.open("rb") as handle:

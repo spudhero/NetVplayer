@@ -315,7 +315,7 @@ jobs:
             release_state="$(gh release view "$release_version" --repo "$GITHUB_REPOSITORY" \
               --json isDraft,assets --jq 'if .isDraft and (.assets | length) == 0 then "empty-draft" else "existing" end')"
             if [[ "$release_state" == "empty-draft" ]]; then
-              draft_author="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_version" --jq '.author.login')"
+              draft_author="$(gh release view "$release_version" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')"
               if [[ "$draft_author" != "$GITHUB_REPOSITORY_OWNER" ]]; then
                 echo "error: empty draft must be created by the repository owner" >&2
                 exit 1
