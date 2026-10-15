@@ -75,7 +75,7 @@ public actor MediaLibraryScanner {
                     status.failedDirectories.append(path); status.message = error.localizedDescription; publish(status); continue
                 }
                 let sidecars = entries.filter { !FileServiceRuntime.isVideo($0) && !$0.isDirectory }
-                let fingerprintMaterial = library.kind.rawValue + "|" + parentFingerprint + "|" + sidecars.map { $0.name + ":\($0.size):\($0.modifiedAt?.timeIntervalSince1970 ?? 0):" + ($0.version ?? "") }.sorted().joined(separator: "|")
+                let fingerprintMaterial = "nfo-details-v3|" + library.kind.rawValue + "|" + parentFingerprint + "|" + sidecars.map { $0.name + ":\($0.size):\($0.modifiedAt?.timeIntervalSince1970 ?? 0):" + ($0.version ?? "") }.sorted().joined(separator: "|")
                 let fingerprint = SHA256.hash(data: Data(fingerprintMaterial.utf8)).map { String(format: "%02x", $0) }.joined()
                 let entryByName = Dictionary(entries.map { ($0.name.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
                 var show = inherited

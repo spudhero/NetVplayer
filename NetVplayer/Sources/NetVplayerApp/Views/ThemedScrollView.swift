@@ -1,6 +1,6 @@
 import Models
 // NetVplayerApp/Views/ThemedScrollView.swift
-// Theme-aware scroll indicators that never cover app content.
+// Theme-aware scroll indicators with reserved space or an edge overlay.
 
 import AppKit
 import SwiftUI
@@ -118,18 +118,30 @@ enum AppScrollbarMetrics {
     static let gutterWidth: CGFloat = 16
 }
 
+enum AppScrollbarPlacement {
+    case gutter
+    /// Full-width artwork can continue beneath the indicator; inset interactive content.
+    case overlay
+}
+
 struct ThemedScrollView<Content: View>: View {
     private let axes: Axis.Set
     private let theme: AppScrollbarTheme
+    private let scrollbarPlacement: AppScrollbarPlacement
     private let content: Content
+    private let onScrollPositionChange: ((CGFloat, CGFloat) -> Void)?
 
     init(
         _ axes: Axis.Set = .vertical,
         theme: AppScrollbarTheme = .standard,
+        scrollbarPlacement: AppScrollbarPlacement = .gutter,
+        onScrollPositionChange: ((CGFloat, CGFloat) -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.axes = axes
         self.theme = theme
+        self.scrollbarPlacement = scrollbarPlacement
+        self.onScrollPositionChange = onScrollPositionChange
         self.content = content()
     }
 
@@ -137,9 +149,9 @@ struct ThemedScrollView<Content: View>: View {
     var body: some View {
         if axes == .vertical {
             if #available(macOS 15.0, *) {
-                GeometryTrackedScrollView(theme: theme, content: content)
+                GeometryTrackedScrollView(theme: theme, scrollbarPlacement: scrollbarPlacement, content: content, onScrollPositionChange: onScrollPositionChange)
             } else {
-                LegacyTrackedScrollView(theme: theme, content: content)
+                LegacyTrackedScrollView(theme: theme, scrollbarPlacement: scrollbarPlacement, content: content, onScrollPositionChange: onScrollPositionChange)
             }
         } else {
             ScrollView(axes, showsIndicators: false) {
@@ -152,14 +164,16 @@ struct ThemedScrollView<Content: View>: View {
 @available(macOS 15.0, *)
 private struct GeometryTrackedScrollView<Content: View>: View {
     let theme: AppScrollbarTheme
+    let scrollbarPlacement: AppScrollbarPlacement
     let content: Content
+    var onScrollPositionChange: ((CGFloat, CGFloat) -> Void)?
 
     @State private var scrollPosition = ScrollPosition()
     @State private var metrics = AppScrollMetrics.zero
 
     var body: some View {
-        GeometryReader { viewport in
-            HStack(spacing: 0) {
+        GeometryReader { _ in
+            ZStack(alignment: .trailing) {
                 ScrollView(.vertical, showsIndicators: false) {
                     content
                         .background(alignment: .topLeading) {
@@ -176,8 +190,9 @@ private struct GeometryTrackedScrollView<Content: View>: View {
                     AppScrollMetrics(geometry: geometry)
                 } action: { _, newMetrics in
                     metrics = newMetrics
+                    onScrollPositionChange?(newMetrics.offsetY, max(0, newMetrics.maximumOffset - newMetrics.offsetY))
                 }
-                .frame(width: max(0, viewport.size.width - theme.gutterWidth))
+                .padding(.trailing, scrollbarPlacement == .gutter ? theme.gutterWidth : 0)
 
                 ThemedScrollbar(theme: theme, metrics: metrics) { targetOffset in
                     scrollPosition.scrollTo(y: targetOffset)
@@ -191,14 +206,16 @@ private struct GeometryTrackedScrollView<Content: View>: View {
 
 private struct LegacyTrackedScrollView<Content: View>: View {
     let theme: AppScrollbarTheme
+    let scrollbarPlacement: AppScrollbarPlacement
     let content: Content
+    var onScrollPositionChange: ((CGFloat, CGFloat) -> Void)?
 
     @State private var coordinateSpaceName = UUID()
     @State private var measurement = LegacyScrollMeasurement.zero
 
     var body: some View {
         GeometryReader { viewport in
-            HStack(spacing: 0) {
+            ZStack(alignment: .trailing) {
                 ScrollView(.vertical, showsIndicators: false) {
                     content
                         .background {
@@ -223,8 +240,10 @@ private struct LegacyTrackedScrollView<Content: View>: View {
                 .coordinateSpace(name: coordinateSpaceName)
                 .onPreferenceChange(LegacyScrollMeasurementKey.self) { value in
                     measurement = value
+                    let offset = max(0, -value.minY)
+                    onScrollPositionChange?(offset, max(0, value.contentHeight - viewport.size.height - offset))
                 }
-                .frame(width: max(0, viewport.size.width - theme.gutterWidth))
+                .padding(.trailing, scrollbarPlacement == .gutter ? theme.gutterWidth : 0)
 
                 ThemedScrollbar(
                     theme: theme,
@@ -241,7 +260,110 @@ private struct LegacyTrackedScrollView<Content: View>: View {
     }
 }
 
-private struct AppScrollMetrics: Equatable {
+/// Uses the same theme and thumb geometry as the vertical scrollbar. The small
+/// AppKit proxy measures the native clip view and performs pixel scrolling on macOS 14+.
+struct ThemedHorizontalScrollView<Content: View>: View {
+    let theme: AppScrollbarTheme
+    private let content: Content
+    @StateObject private var proxy = HorizontalScrollProxy()
+
+    init(theme: AppScrollbarTheme = .subtle, @ViewBuilder content: () -> Content) {
+        self.theme = theme
+        self.content = content()
+    }
+
+    var body: some View {
+        GeometryReader { viewport in
+            VStack(spacing: 0) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    content
+                        .background(alignment: .topLeading) {
+                            NativeScrollerHidingProbe(axis: .horizontal) { proxy.attach(to: $0) }
+                                .frame(width: 1, height: 1)
+                        }
+                }
+                .scrollIndicators(.hidden)
+                .frame(height: max(0, viewport.size.height - theme.gutterWidth))
+
+                ThemedScrollbar(theme: theme, metrics: proxy.metrics,
+                    onScroll: { proxy.scroll(to: $0) }, axis: .horizontal)
+                    .frame(height: theme.gutterWidth)
+            }
+        }
+    }
+}
+
+@MainActor
+final class HorizontalScrollProxy: ObservableObject {
+    @Published private(set) var metrics = AppScrollMetrics.zero
+    private weak var scrollView: NSScrollView?
+    private weak var observedDocument: NSView?
+    private let observations = ScrollNotificationObservations()
+    private var updateScheduled = false
+
+    func attach(to scrollView: NSScrollView) {
+        if self.scrollView !== scrollView || observedDocument !== scrollView.documentView {
+            observations.removeAll()
+            self.scrollView = scrollView
+            observedDocument = scrollView.documentView
+            let clip = scrollView.contentView
+            clip.postsBoundsChangedNotifications = true
+            clip.postsFrameChangedNotifications = true
+            observedDocument?.postsFrameChangedNotifications = true
+            observedDocument?.postsBoundsChangedNotifications = true
+            for view in [clip, observedDocument].compactMap({ $0 }) {
+                for name in [NSView.boundsDidChangeNotification, NSView.frameDidChangeNotification] {
+                    observations.tokens.append(NotificationCenter.default.addObserver(
+                        forName: name, object: view, queue: .main
+                    ) { [weak self] _ in
+                        MainActor.assumeIsolated { self?.scheduleMeasurement() }
+                    })
+                }
+            }
+        }
+        scheduleMeasurement()
+    }
+
+    private func scheduleMeasurement() {
+        guard !updateScheduled else { return }
+        updateScheduled = true
+        // A probe resolves while SwiftUI is laying out. Publish after that layout completes.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.updateScheduled = false
+            guard let scrollView = self.scrollView, let document = scrollView.documentView else { return }
+            let clip = scrollView.contentView
+            let value = AppScrollMetrics(offsetY: max(0, clip.bounds.origin.x),
+                contentHeight: document.bounds.width, containerHeight: clip.bounds.width)
+            if self.metrics != value { self.metrics = value }
+        }
+    }
+
+    func scroll(to offset: CGFloat) {
+        guard offset.isFinite, let scrollView, let document = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        let maximum = max(0, document.bounds.width - clip.bounds.width)
+        clip.scroll(to: NSPoint(x: min(max(offset, 0), maximum), y: clip.bounds.origin.y))
+        scrollView.reflectScrolledClipView(clip)
+        scheduleMeasurement()
+    }
+
+}
+
+/// Owns notification tokens without actor isolation so teardown can remove them
+/// synchronously even when SwiftUI releases its state object off the main actor.
+private final class ScrollNotificationObservations {
+    var tokens: [NSObjectProtocol] = []
+
+    func removeAll() {
+        tokens.forEach(NotificationCenter.default.removeObserver)
+        tokens.removeAll()
+    }
+
+    deinit { removeAll() }
+}
+
+struct AppScrollMetrics: Equatable {
     var offsetY: CGFloat
     var contentHeight: CGFloat
     var containerHeight: CGFloat
@@ -276,27 +398,30 @@ private struct ThemedScrollbar: View {
     let theme: AppScrollbarTheme
     let metrics: AppScrollMetrics
     let onScroll: ((CGFloat) -> Void)?
+    var axis: Axis = .vertical
 
     @State private var dragGrabOffset: CGFloat?
     @State private var isHovered = false
 
     var body: some View {
         GeometryReader { geometry in
-            let layout = ScrollbarLayout(metrics: metrics, availableHeight: geometry.size.height)
+            let layout = ScrollbarLayout(metrics: metrics, availableHeight: axis == .vertical ? geometry.size.height : geometry.size.width)
             let colors = theme.colorSet(for: palette)
             let thumbOpacity = dragGrabOffset != nil
                 ? colors.activeOpacity
                 : (isHovered ? colors.hoverOpacity : colors.idleOpacity)
 
-            ZStack(alignment: .top) {
+            ZStack(alignment: axis == .vertical ? .top : .leading) {
                 Capsule()
                     .fill(Color(appHex: colors.trackHex).opacity(colors.trackOpacity))
-                    .frame(width: theme.trackWidth, height: layout.trackHeight)
-                    .offset(y: layout.verticalInset)
+                    .frame(width: axis == .vertical ? theme.trackWidth : layout.trackHeight,
+                           height: axis == .vertical ? layout.trackHeight : theme.trackWidth)
+                    .offset(x: axis == .horizontal ? layout.verticalInset : 0, y: axis == .vertical ? layout.verticalInset : 0)
 
                 Capsule()
                     .fill(Color(appHex: colors.thumbHex).opacity(thumbOpacity))
-                    .frame(width: theme.thumbWidth, height: layout.thumbHeight)
+                    .frame(width: axis == .vertical ? theme.thumbWidth : layout.thumbHeight,
+                           height: axis == .vertical ? layout.thumbHeight : theme.thumbWidth)
                     .overlay {
                         Capsule()
                             .stroke(
@@ -308,7 +433,7 @@ private struct ThemedScrollbar: View {
                         color: Color(appHex: colors.glowHex).opacity(colors.glowOpacity),
                         radius: colors.glowOpacity == 0 ? 0 : 2
                     )
-                    .offset(y: layout.thumbOffset)
+                    .offset(x: axis == .horizontal ? layout.thumbOffset : 0, y: axis == .vertical ? layout.thumbOffset : 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
@@ -330,13 +455,13 @@ private struct ThemedScrollbar: View {
                 guard let onScroll, layout.travelDistance > 0 else { return }
 
                 if dragGrabOffset == nil {
-                    let positionInsideThumb = value.startLocation.y - layout.thumbOffset
+                    let positionInsideThumb = (axis == .vertical ? value.startLocation.y : value.startLocation.x) - layout.thumbOffset
                     dragGrabOffset = (0...layout.thumbHeight).contains(positionInsideThumb)
                         ? positionInsideThumb
                         : layout.thumbHeight / 2
                 }
 
-                let targetThumbOffset = value.location.y - (dragGrabOffset ?? layout.thumbHeight / 2)
+                let targetThumbOffset = (axis == .vertical ? value.location.y : value.location.x) - (dragGrabOffset ?? layout.thumbHeight / 2)
                 let trackRelativeOffset = targetThumbOffset - layout.verticalInset
                 let progress = min(max(trackRelativeOffset / layout.travelDistance, 0), 1)
                 onScroll(progress * metrics.maximumOffset)
@@ -386,23 +511,41 @@ private struct LegacyScrollMeasurementKey: PreferenceKey {
 }
 
 private struct NativeScrollerHidingProbe: NSViewRepresentable {
+    var axis: Axis = .vertical
+    var onResolve: ((NSScrollView) -> Void)?
+
     func makeNSView(context _: Context) -> NativeScrollerHidingProbeView {
-        NativeScrollerHidingProbeView()
+        let view = NativeScrollerHidingProbeView()
+        view.axis = axis
+        view.onResolve = onResolve
+        return view
     }
 
     func updateNSView(_ nsView: NativeScrollerHidingProbeView, context _: Context) {
+        nsView.axis = axis
+        nsView.onResolve = onResolve
         nsView.hideEnclosingNativeScroller()
     }
 }
 
 final class NativeScrollerHidingProbeView: NSView {
+    var axis: Axis = .vertical {
+        didSet { if oldValue != axis { stopMonitoringScroller() } }
+    }
+    var onResolve: ((NSScrollView) -> Void)?
     private var isUpdateScheduled = false
     private var isHidingScroller = false
     private weak var monitoredScrollView: NSScrollView?
     private weak var monitoredScroller: NSScroller?
-    private var verticalScrollerEnabledObservation: NSKeyValueObservation?
-    private var verticalScrollerObservation: NSKeyValueObservation?
+    private var scrollerEnabledObservation: NSKeyValueObservation?
+    private var scrollerObservation: NSKeyValueObservation?
     private var scrollerVisibilityObservation: NSKeyValueObservation?
+    private var enabledKeyPath: ReferenceWritableKeyPath<NSScrollView, Bool> {
+        axis == .vertical ? \.hasVerticalScroller : \.hasHorizontalScroller
+    }
+    private var scrollerKeyPath: ReferenceWritableKeyPath<NSScrollView, NSScroller?> {
+        axis == .vertical ? \.verticalScroller : \.horizontalScroller
+    }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
@@ -469,30 +612,34 @@ final class NativeScrollerHidingProbeView: NSView {
 
     private func hideScroller(in scrollView: NSScrollView) {
         monitorScroller(in: scrollView)
+        onResolve?(scrollView)
 
         guard !isHidingScroller else { return }
         isHidingScroller = true
         defer { isHidingScroller = false }
 
-        if scrollView.hasVerticalScroller {
-            scrollView.hasVerticalScroller = false
+        // A legacy scroller can leave a 17-point document inset after it is hidden.
+        // Keep this owned host in overlay mode across scrolling and host updates.
+        if scrollView.scrollerStyle != .overlay { scrollView.scrollerStyle = .overlay }
+        if scrollView[keyPath: enabledKeyPath] {
+            scrollView[keyPath: enabledKeyPath] = false
         }
-        monitorVisibility(of: scrollView.verticalScroller, in: scrollView)
-        if let scroller = scrollView.verticalScroller, !scroller.isHidden {
+        monitorVisibility(of: scrollView[keyPath: scrollerKeyPath], in: scrollView)
+        if let scroller = scrollView[keyPath: scrollerKeyPath], !scroller.isHidden {
             scroller.isHidden = true
         }
     }
 
     private func monitorScroller(in scrollView: NSScrollView) {
         guard monitoredScrollView !== scrollView else {
-            monitorVisibility(of: scrollView.verticalScroller, in: scrollView)
+            monitorVisibility(of: scrollView[keyPath: scrollerKeyPath], in: scrollView)
             return
         }
 
         stopMonitoringScroller()
         monitoredScrollView = scrollView
-        verticalScrollerEnabledObservation = scrollView.observe(
-            \.hasVerticalScroller,
+        scrollerEnabledObservation = scrollView.observe(
+            enabledKeyPath,
             options: [.new]
         ) { [weak self] scrollView, change in
             guard change.newValue == true else { return }
@@ -500,17 +647,17 @@ final class NativeScrollerHidingProbeView: NSView {
                 self?.hideScroller(in: scrollView)
             }
         }
-        verticalScrollerObservation = scrollView.observe(
-            \.verticalScroller,
+        scrollerObservation = scrollView.observe(
+            scrollerKeyPath,
             options: [.new]
         ) { [weak self] scrollView, _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.monitorVisibility(of: scrollView.verticalScroller, in: scrollView)
+                self.monitorVisibility(of: scrollView[keyPath: self.scrollerKeyPath], in: scrollView)
                 self.hideScroller(in: scrollView)
             }
         }
-        monitorVisibility(of: scrollView.verticalScroller, in: scrollView)
+        monitorVisibility(of: scrollView[keyPath: scrollerKeyPath], in: scrollView)
     }
 
     private func monitorVisibility(of scroller: NSScroller?, in scrollView: NSScrollView) {
@@ -530,8 +677,8 @@ final class NativeScrollerHidingProbeView: NSView {
     }
 
     private func stopMonitoringScroller() {
-        verticalScrollerEnabledObservation = nil
-        verticalScrollerObservation = nil
+        scrollerEnabledObservation = nil
+        scrollerObservation = nil
         scrollerVisibilityObservation = nil
         monitoredScrollView = nil
         monitoredScroller = nil

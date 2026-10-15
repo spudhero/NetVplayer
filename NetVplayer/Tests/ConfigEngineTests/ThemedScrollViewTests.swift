@@ -104,6 +104,87 @@ struct ThemedScrollViewTests {
     }
 
     @Test @MainActor
+    func horizontalProbeOnlyHidesItsAxisAndSurvivesNativeReplacement() {
+        let scrollView = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let document = NSView(frame: CGRect(x: 0, y: 0, width: 960, height: 720))
+        let probe = NativeScrollerHidingProbeView(frame: .zero)
+        probe.axis = .horizontal
+        scrollView.documentView = document
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        document.addSubview(probe)
+        probe.hideEnclosingNativeScroller()
+        #expect(scrollView.hasVerticalScroller)
+        #expect(!scrollView.hasHorizontalScroller)
+
+        scrollView.horizontalScroller = NSScroller()
+        scrollView.hasHorizontalScroller = true
+        scrollView.horizontalScroller?.isHidden = false
+        #expect(scrollView.hasVerticalScroller)
+        #expect(!scrollView.hasHorizontalScroller)
+        #expect(scrollView.horizontalScroller?.isHidden != false)
+    }
+
+    @Test @MainActor
+    func horizontalDraggingClampsToContentAndPreservesVerticalPosition() {
+        let scrollView = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let document = NSView(frame: CGRect(x: 0, y: 0, width: 960, height: 720))
+        scrollView.documentView = document
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 48))
+        let proxy = HorizontalScrollProxy()
+        proxy.attach(to: scrollView)
+        proxy.scroll(to: 160)
+        #expect(scrollView.contentView.bounds.origin.x == 160)
+        #expect(scrollView.contentView.bounds.origin.y == 48)
+        proxy.scroll(to: 2000)
+        #expect(scrollView.contentView.bounds.origin.x == document.bounds.width - scrollView.contentView.bounds.width)
+        proxy.scroll(to: -100)
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+        proxy.scroll(to: .nan)
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+    }
+
+    @Test @MainActor
+    func horizontalMetricsFollowNativeScrollingResizingAndDocumentReplacement() async {
+        let scrollView = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let document = NSView(frame: CGRect(x: 0, y: 0, width: 960, height: 240))
+        scrollView.documentView = document
+        let proxy = HorizontalScrollProxy()
+        proxy.attach(to: scrollView)
+        await flushScrollMeasurement()
+        #expect(proxy.metrics.isScrollable)
+        #expect(proxy.metrics.contentHeight == 960)
+        #expect(proxy.metrics.containerHeight == scrollView.contentView.bounds.width)
+
+        // Native scrolling (including a trackpad) must update the custom thumb.
+        scrollView.contentView.scroll(to: NSPoint(x: 160, y: 0))
+        await flushScrollMeasurement()
+        #expect(proxy.metrics.offsetY == 160)
+
+        document.setFrameSize(CGSize(width: 1200, height: 240))
+        scrollView.setFrameSize(CGSize(width: 480, height: 240))
+        scrollView.tile()
+        await flushScrollMeasurement()
+        #expect(proxy.metrics.contentHeight == 1200)
+        #expect(proxy.metrics.containerHeight == scrollView.contentView.bounds.width)
+
+        scrollView.documentView = NSView(frame: CGRect(x: 0, y: 0, width: 200, height: 240))
+        proxy.attach(to: scrollView)
+        await flushScrollMeasurement()
+        #expect(!proxy.metrics.isScrollable)
+        document.setFrameSize(CGSize(width: 1800, height: 240))
+        await flushScrollMeasurement()
+        #expect(!proxy.metrics.isScrollable)
+    }
+
+    @MainActor
+    private func flushScrollMeasurement() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    @Test @MainActor
     func containerProbeHidesTheSpatiallyMatchingScrollerSynchronously() {
         let contentView = NSView(frame: CGRect(x: 0, y: 0, width: 480, height: 320))
         let scrollView = NSScrollView(frame: CGRect(x: 0, y: 0, width: 440, height: 320))
@@ -204,6 +285,48 @@ struct ThemedScrollViewTests {
         return result
     }
 
+    @Test @MainActor
+    func contentReachesTheIntendedEdgeAfterScrollingResizingAndNativeScrollerReenable() async throws {
+        for placement in [AppScrollbarPlacement.gutter, .overlay] {
+            let root = ThemedScrollView(theme: .subtle, scrollbarPlacement: placement) {
+                VStack(spacing: 0) {
+                    Color.purple.frame(height: 420)
+                    Color.blue.frame(height: 1200)
+                }
+                .frame(maxWidth: .infinity)
+                .background(ScrollContentEdgeProbe())
+            }
+            let hosting = NSHostingView(rootView: root)
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 480, height: 320),
+                styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false; window.contentView = hosting
+            defer { window.orderOut(nil); window.close() }
+            for width in [480.0, 720.0, 360.0] {
+                window.setContentSize(CGSize(width: width, height: 320))
+                hosting.frame = CGRect(x: 0, y: 0, width: width, height: 320)
+                hosting.layoutSubtreeIfNeeded()
+                await flushScrollMeasurement()
+                let scroll = try #require(descendantScrollViews(in: hosting).first)
+                // A host update can reenable the system scroller after the initial render.
+                scroll.scrollerStyle = .legacy
+                scroll.hasVerticalScroller = true
+                scroll.verticalScroller?.isHidden = false
+                for y in [0.0, 300.0, 1300.0] {
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    hosting.layoutSubtreeIfNeeded()
+                    await flushScrollMeasurement()
+                    let marker = try #require(descendantViews(of: ScrollContentEdgeMarker.self, in: hosting).first)
+                    let expected = width - (placement == .gutter ? 10 : 0)
+                    #expect(abs(marker.bounds.width - expected) < 1)
+                    #expect(abs(scroll.contentView.frame.maxX - scroll.bounds.maxX) < 1)
+                    #expect(!scroll.hasVerticalScroller)
+                    #expect(scroll.verticalScroller?.isHidden != false)
+                }
+            }
+        }
+    }
+
     @MainActor
     private func descendantViews<T: NSView>(of type: T.Type, in view: NSView) -> [T] {
         var result = view.subviews.flatMap { descendantViews(of: type, in: $0) }
@@ -212,4 +335,10 @@ struct ThemedScrollViewTests {
         }
         return result
     }
+}
+
+private final class ScrollContentEdgeMarker: NSView {}
+private struct ScrollContentEdgeProbe: NSViewRepresentable {
+    func makeNSView(context: Context) -> ScrollContentEdgeMarker { ScrollContentEdgeMarker() }
+    func updateNSView(_ nsView: ScrollContentEdgeMarker, context: Context) {}
 }

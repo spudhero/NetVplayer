@@ -8,12 +8,16 @@ struct FileServiceBrowserView: View {
     @ObservedObject var state = FileServicesState.shared
     let service: FileServiceConfiguration
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("浏览方式", selection: $state.mode) {
-                ForEach(FileServicesState.FileViewMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }.pickerStyle(.segmented).frame(width: 210)
+        VStack(alignment: .leading, spacing: 16) {
             if state.mode == .library { MediaLibraryWallView(state: state, service: service) }
-            else { directoryContent }
+            else {
+                HStack {
+                    Text(L10n.text("文件")).font(.system(size: 22, weight: .semibold))
+                    Spacer()
+                    FileServiceModePicker(selection: $state.mode)
+                }
+                directoryContent
+            }
         }
         .task(id: service.id) { state.selectService(service.id) }
         .onChange(of: state.mode) { _, mode in
@@ -76,5 +80,14 @@ struct FileServiceBrowserView: View {
                 catch { state.error = error.localizedDescription }
             }
         }
+    }
+}
+
+struct FileServiceModePicker: View {
+    @Binding var selection: FileServicesState.FileViewMode
+    var body: some View {
+        Picker(L10n.text("浏览方式"), selection: $selection) {
+            ForEach(FileServicesState.FileViewMode.allCases, id: \.self) { Text(L10n.text($0.rawValue)).tag($0) }
+        }.labelsHidden().pickerStyle(.segmented).frame(width: 146)
     }
 }

@@ -13,6 +13,8 @@ public struct Episode: Codable, Identifiable, Sendable {
     public var released: String?
     public var season: Int?
     public var number: Int?
+    /// Explicit share/directory provenance, independent of the playback URL.
+    public var series: EpisodeSeries?
 
     public var id: String { "\(name)_\(url)" }
 
@@ -24,7 +26,8 @@ public struct Episode: Codable, Identifiable, Sendable {
         overview: String? = nil,
         released: String? = nil,
         season: Int? = nil,
-        number: Int? = nil
+        number: Int? = nil,
+        series: EpisodeSeries? = nil
     ) {
         self.name = name
         self.url = url
@@ -34,6 +37,7 @@ public struct Episode: Codable, Identifiable, Sendable {
         self.released = released
         self.season = season
         self.number = number
+        self.series = series
     }
 
     /// 从 "集名$url#集名$url" 格式解析
@@ -44,5 +48,15 @@ public struct Episode: Codable, Identifiable, Sendable {
             guard parts.count >= 2 else { return nil }
             return Episode(name: String(parts[0]), url: String(parts[1]))
         }
+    }
+}
+
+public struct EpisodeSeries: Codable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+
+    public init(id: String, name: String = "") {
+        self.id = id
+        self.name = name
     }
 }

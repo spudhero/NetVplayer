@@ -323,6 +323,112 @@ struct PlaybackEndedTests {
     }
 
     @MainActor
+    @Test(arguments: [false, true])
+    func groupEndStopsManualAutoAdvanceAndPreloading(descending: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (state, provider, site) = await fixture(directory)
+        let series = EpisodeSeries(id: "series-a", name: "Series A")
+        let first = Episode(name: "01", url: "episode-1", series: series)
+        let last = Episode(name: "02", url: "episode-2", series: series)
+        let other = Episode(name: "01", url: "episode-3", series: EpisodeSeries(id: "series-b"))
+        state.detailVod = Vod(vodId: "film", siteKey: site.key)
+        state.episodes = [first, last, other]
+        state.selectedPlayFlag = "line"
+        state.episodeSortOrder = descending ? .descending : .ascending
+        state.playSpecHandler = { spec in
+            await Task.yield()
+            state.playerState.currentSpec = spec
+        }
+        let final = descending ? first : last
+        await state.playEpisode(final)
+        let spec = try #require(state.playerState.currentSpec)
+        #expect(spec.metadata["vod.episodeSeriesID"] == series.id)
+        state.playerState.duration = 600
+        state.playerState.position = 590
+        state.evaluateNextEpisodePreload(spec: spec, positionSeconds: 590)
+        #expect(await state.playRelativeEpisode(offset: 1) == nil)
+        state.playerState.endDisposition = .natural
+        state.handleMPVPlaybackEnded(spec: spec)
+        await Task.yield()
+        #expect(state.shouldShowPlaybackEndedPanel)
+        #expect(!state.isPreparingVodPlayback)
+        #expect(await provider.playerCalls == [final.url])
+    }
+
+    @MainActor
+    @Test func changingGroupMembershipCancelsAnInFlightNextEpisode() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (state, provider, site) = await fixture(directory)
+        let series = EpisodeSeries(id: "a")
+        let first = Episode(name: "01", url: "episode-1", series: series)
+        var second = Episode(name: "02", url: "episode-2", series: series)
+        state.detailVod = Vod(vodId: "film", siteKey: site.key)
+        state.episodes = [first, second]
+        state.selectedPlayFlag = "line"
+        var submissions: [String] = []
+        state.playSpecHandler = { spec in
+            await Task.yield()
+            state.playerState.currentSpec = spec
+            submissions.append(spec.metadata["vod.episodeURL"] ?? "")
+        }
+        await state.playEpisode(first)
+        let spec = try #require(state.playerState.currentSpec)
+        await provider.blockPlayback(id: second.url)
+        state.playerState.duration = 600
+        state.playerState.position = 590
+        state.evaluateNextEpisodePreload(spec: spec, positionSeconds: 590)
+        for _ in 0..<200 {
+            if await provider.isPlaybackBlocked { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        try #require(await provider.isPlaybackBlocked)
+        second.series = EpisodeSeries(id: "b")
+        state.episodes = [first, second]
+        await provider.finishBlockedPlayback()
+        state.playerState.endDisposition = .natural
+        state.handleMPVPlaybackEnded(spec: spec)
+        await Task.yield()
+        #expect(state.shouldShowPlaybackEndedPanel)
+        #expect(submissions == [first.url])
+        #expect(!state.playbackEpisodeContext().hasNext)
+    }
+
+    @MainActor
+    @Test func browsingAnotherLineKeepsAutoAdvanceInThePlayingSeries() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (state, provider, site) = await fixture(directory)
+        let series = EpisodeSeries(id: "playing-series")
+        let first = Episode(name: "01", url: "episode-1", series: series)
+        let second = Episode(name: "02", url: "episode-2", series: series)
+        let other = Episode(name: "01", url: "episode-3", series: EpisodeSeries(id: "other-series"))
+        let detail = Vod(vodId: "film", episodeDetails: [first, second, other],
+            vodPlayFrom: "line-a$$$line-b", vodPlayUrl: "01$episode-1#02$episode-2$$$01$episode-3", siteKey: site.key)
+        state.detailVod = detail
+        state.applyPlaybackAvailability(for: detail, preferredFlag: "line-a")
+        var submissions: [PlaySpec] = []
+        state.playSpecHandler = { spec in
+            await Task.yield()
+            state.playerState.currentSpec = spec
+            submissions.append(spec)
+        }
+        await state.playEpisode(first)
+        let spec = try #require(state.playerState.currentSpec)
+        state.selectPlayFlag("line-b")
+        #expect(state.episodes.map(\.id) == [other.id])
+        #expect(state.playbackEpisodeContext().nextEpisode?.id == second.id)
+        #expect(state.playbackEpisodeContext(in: state.episodes).currentIndex == nil)
+        state.playerState.endDisposition = .natural
+        state.handleMPVPlaybackEnded(spec: spec)
+        try await waitForPreparedPlayback(state)
+        #expect(submissions.last?.metadata["vod.episodeURL"] == second.url)
+        #expect(submissions.last?.flag == "line-a")
+        #expect(await provider.playerCalls == [first.url, second.url])
+    }
+
+    @MainActor
     private func waitForPreparedPlayback(_ state: AppState) async throws {
         // Resolution may include an asynchronous transport probe; 40ms is not a completion signal.
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))

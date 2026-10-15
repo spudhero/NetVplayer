@@ -183,10 +183,12 @@ private enum QuarkPlayableFileClassifier {
 public struct QuarkPlayableFile: Sendable {
     public let file: QuarkShareFile
     public let stoken: String
+    public let directoryPath: String
 
-    public init(file: QuarkShareFile, stoken: String) {
+    public init(file: QuarkShareFile, stoken: String, directoryPath: String = "") {
         self.file = file
         self.stoken = stoken
+        self.directoryPath = directoryPath
     }
 }
 
@@ -342,6 +344,7 @@ public final class QuarkDriveClient: @unchecked Sendable {
         var playableFiles: [QuarkPlayableFile] = []
         var filteredAssetNames: [String] = []
         var directoryQueue = ["0"]
+        var directoryPaths: [String: String] = ["0": ""]
         var visitedDirectories = Set<String>()
 
         while !directoryQueue.isEmpty && visitedDirectories.count < Self.maxDirectories {
@@ -354,8 +357,13 @@ public final class QuarkDriveClient: @unchecked Sendable {
                 for item in result.list {
                     if item.isDirectory {
                         directoryQueue.append(item.fid)
+                        directoryPaths[item.fid] = (directoryPaths[pdirFID] ?? "") + "/" + item.name
                     } else if item.isPlayableMedia {
-                        playableFiles.append(QuarkPlayableFile(file: item, stoken: result.stoken))
+                        playableFiles.append(QuarkPlayableFile(
+                            file: item,
+                            stoken: result.stoken,
+                            directoryPath: directoryPaths[pdirFID] ?? ""
+                        ))
                     } else if item.isKnownNonVideoAsset {
                         filteredAssetNames.append(item.name)
                     }

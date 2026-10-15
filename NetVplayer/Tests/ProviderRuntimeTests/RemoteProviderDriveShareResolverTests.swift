@@ -1,3 +1,4 @@
+import Foundation
 import DriveEngine
 import Models
 import Testing
@@ -138,6 +139,26 @@ func remoteProviderDriveShareResolverPreservesBilibiliEpisodes(playbackURL: Stri
     let episode = try #require(output.list[0].parseFlags().first?.episodes.first)
     #expect(episode.url == reference)
     #expect(episode.name == "Episode")
+}
+
+@Test func remoteProviderDriveShareResolverPreservesDistinctShareGroupsWithIdenticalTitles() async throws {
+    let shares = ["https://pan.quark.cn/s/a", "https://pan.quark.cn/s/b"]
+    let resolver = RemoteProviderDriveShareResolver(expander: DriveShareExpander(expanders: shares.enumerated().map { index, share in
+        RemoteProviderFixtureExpander(expectedURL: share, episodes: [
+            Episode(name: "01", url: "https://media.example.test/\(index)/01.mp4"),
+            Episode(name: "02", url: "https://media.example.test/\(index)/02.mp4")
+        ])
+    }))
+    let input = Result(list: [Vod(vodId: "fixture", vodPlayFrom: "Quark",
+        vodPlayUrl: shares.map { "Series$\($0)" }.joined(separator: "#"))])
+    let resolved = await resolver.resolve(input)
+    let episodes = try #require(resolved.list.first?.parseFlags().first?.episodes)
+    let groups = DriveEpisodeSeries.groups(in: episodes)
+    #expect(groups.count == 2)
+    #expect(groups.map { $0.episodes.count } == [2, 2])
+    #expect(episodes[0].series?.id != episodes[2].series?.id)
+    let decoded = try JSONDecoder().decode(Result.self, from: JSONEncoder().encode(resolved))
+    #expect(decoded.list[0].parseFlags()[0].episodes.map(\.series) == episodes.map(\.series))
 }
 
 private struct RemoteProviderFixtureExpander: DriveShareExpanding {

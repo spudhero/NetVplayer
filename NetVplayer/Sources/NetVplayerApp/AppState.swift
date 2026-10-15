@@ -323,16 +323,28 @@ final class AppState: ObservableObject {
     @Published var detailVod: Vod?
     @Published var playFlags: [String] = []
     @Published var selectedPlayFlag: String = ""
-    @Published var episodes: [Episode] = []
+    @Published var episodes: [Episode] = [] {
+        didSet {
+            episodeGroups = DriveEpisodeSeries.groups(in: episodes)
+            invalidateNextEpisodePreload(reason: "episode-list-changed")
+        }
+    }
+    @Published private(set) var episodeGroups: [EpisodeGroup] = []
     @Published var episodeSortOrder: EpisodeSortOrder = .ascending {
         didSet {
             guard oldValue != episodeSortOrder else { return }
             invalidateNextEpisodePreload(reason: "episode-sort-changed")
         }
     }
-    // The visible list is also the playback queue. Names, formats and versions
-    // never silently exclude a selectable entry from previous/next or auto-advance.
-    var displayedPlaybackEpisodes: [Episode] { episodeSortOrder.ordered(episodes) }
+    // Both pickers expose these boundaries; navigation follows the visible group.
+    var displayedEpisodeGroups: [EpisodeGroup] {
+        episodeGroups.map { group in
+            var group = group
+            group.episodes = episodeSortOrder.ordered(group.episodes)
+            return group
+        }
+    }
+    var displayedPlaybackEpisodes: [Episode] { displayedEpisodeGroups.flatMap(\.episodes) }
     private var availablePlaybackLines: [VodPlaybackLine] = []
     @Published var episodeDisplayMode: EpisodeDisplayMode = .grid
     @Published var isDetailPresented: Bool = false
@@ -3214,22 +3226,75 @@ final class AppState: ObservableObject {
 
     func episodeForCurrentPlayback(in episodeList: [Episode]) -> Episode? {
         guard !episodeList.isEmpty, let spec = playerState.currentSpec else { return nil }
+        let candidates: [Episode]
+        if let seriesID = spec.metadata["vod.episodeSeriesID"] {
+            candidates = episodeList.filter { DriveEpisodeSeries.source(for: $0)?.id == seriesID }
+        } else {
+            candidates = episodeList
+        }
+        let episodeURL = spec.metadata["vod.episodeURL"] ?? spec.url
+        if let exact = candidates.first(where: { $0.url == episodeURL }) { return exact }
+        // A refreshed share token must not move playback into a namesake upload.
+        if let reference = DriveFileReference.parse(episodeURL) {
+            return candidates.first { episode in
+                guard let other = DriveFileReference.parse(episode.url) else { return false }
+                return other.provider == reference.provider && other.pwdID == reference.pwdID && other.fid == reference.fid
+            }
+        }
+        if spec.metadata["vod.episodeSeriesID"] == nil,
+           candidates.contains(where: { $0.series != nil }),
+           spec.metadata["vod.episodeURL"] != nil { return nil }
         return PlaybackSessionCore.episode(
-            in: episodeList,
+            in: candidates,
             metadataEpisodeURL: spec.metadata["vod.episodeURL"],
             fallbackPlaybackURL: spec.url,
             metadataEpisodeName: spec.metadata["vod.episodeName"]
         )
     }
 
+    private func playbackQueue(in episodeList: [Episode]? = nil) -> [Episode] {
+        let groups: [EpisodeGroup]
+        if let episodeList {
+            groups = DriveEpisodeSeries.groups(in: episodeList)
+        } else if let spec = playerState.currentSpec,
+                  spec.metadata["vod.episodeSeriesID"] != nil,
+                  spec.flag != selectedPlayFlag,
+                  let line = availablePlaybackLines.first(where: { $0.flag == spec.flag }),
+                  episodeForCurrentPlayback(in: line.episodes) != nil {
+            // Browsing another line does not replace the series already playing.
+            groups = DriveEpisodeSeries.groups(in: line.episodes)
+        } else {
+            groups = episodeGroups
+        }
+        let current = episodeForCurrentPlayback(in: groups.flatMap(\.episodes))
+        let group = current.flatMap { current in
+            groups.first { $0.episodes.contains { $0.id == current.id } }
+        }
+        if current == nil, let seriesID = playerState.currentSpec?.metadata["vod.episodeSeriesID"] {
+            return episodeSortOrder.ordered(groups.first(where: { $0.id == seriesID })?.episodes ?? [])
+        }
+        return episodeSortOrder.ordered(group?.episodes ?? groups.flatMap(\.episodes))
+    }
+
+    private func playbackLine(for episode: Episode) -> String {
+        guard let spec = playerState.currentSpec,
+              let seriesID = spec.metadata["vod.episodeSeriesID"],
+              DriveEpisodeSeries.source(for: episode)?.id == seriesID,
+              availablePlaybackLines.contains(where: { $0.flag == spec.flag && $0.episodes.contains { $0.id == episode.id } }) else {
+            return selectedPlayFlag
+        }
+        return spec.flag
+    }
+
     func playbackEpisodeContext(in episodeList: [Episode]? = nil) -> PlaybackEpisodeContext {
-        let list = episodeList.map { episodeSortOrder.ordered($0) } ?? displayedPlaybackEpisodes
+        let list = playbackQueue(in: episodeList)
+        let current = episodeForCurrentPlayback(in: list)
         let spec = playerState.currentSpec
         return PlaybackSessionCore.episodeContext(
             episodes: list,
-            metadataEpisodeURL: spec?.metadata["vod.episodeURL"],
+            metadataEpisodeURL: current?.url ?? spec?.metadata["vod.episodeURL"],
             fallbackPlaybackURL: spec?.url ?? "",
-            metadataEpisodeName: spec?.metadata["vod.episodeName"],
+            metadataEpisodeName: current?.name,
             progressText: currentPlaybackProgressText()
         )
     }
@@ -3243,7 +3308,7 @@ final class AppState: ObservableObject {
         return PlaybackPreloadKey(
             siteKey: site.key,
             vodID: detailVod?.vodId ?? spec.metadata["vod.id"] ?? "",
-            playFlag: selectedPlayFlag,
+            playFlag: playbackLine(for: targetEpisode),
             currentEpisodeURL: currentEpisodeURL,
             targetEpisodeURL: targetEpisode.url,
             playbackGeneration: playbackSessionState.generation
@@ -3562,7 +3627,7 @@ final class AppState: ObservableObject {
     func playRelativeEpisode(offset: Int, automaticSelection: Bool = false) async -> Episode? {
         let context = playbackEpisodeContext()
         guard let target = PlaybackSessionCore.relativeEpisode(
-            in: displayedPlaybackEpisodes,
+            in: playbackQueue(),
             context: context,
             offset: offset
         ) else { return nil }
@@ -3662,6 +3727,8 @@ final class AppState: ObservableObject {
         guard (authorizationOrigin ?? expectedPlaybackOrigin) == nil || (authorizationOrigin ?? expectedPlaybackOrigin) == playbackAuthorizationOrigin,
               !Task.isCancelled else { return }
         guard let site = activeSite else { return }
+        let targetLine = playbackLine(for: episode)
+        if targetLine != selectedPlayFlag { selectPlayFlag(targetLine) }
         if !automaticSelection { pendingAutoAdvanceID = nil }
         let sourceScope = vodScope(for: site)
         if VodPlaybackAvailabilityPolicy.needsMagnetExpansion(episode, site: site) {
@@ -4127,6 +4194,7 @@ final class AppState: ObservableObject {
             finalSpec.metadata["vod.id"] = vodID
             finalSpec.metadata["vod.episodeURL"] = episode.url
             finalSpec.metadata["vod.episodeName"] = episode.name
+            finalSpec.metadata["vod.episodeSeriesID"] = DriveEpisodeSeries.source(for: episode)?.id
             if let leaseID = result.fileResourceLeaseID { finalSpec.metadata["files.leaseID"] = leaseID }
             finalSpec.metadata["playback.sessionGeneration"] = String(sessionGeneration)
             if enforcesSessionGeneration, vodLineFallbackGeneration == sessionGeneration {
@@ -7112,7 +7180,7 @@ final class AppState: ObservableObject {
     func replayCurrentEpisode() async {
         guard !isPreparingVodPlayback, isPlayerPresented,
               let spec = playerState.currentSpec, ownsPlaybackContext(spec),
-              let episode = episodeForCurrentPlayback(in: episodes) else { return }
+              let episode = episodeForCurrentPlayback(in: playbackQueue()) else { return }
         clearPlaybackError()
         await playEpisode(episode, resumePosition: 0, restartFromBeginning: true)
     }
@@ -7120,7 +7188,8 @@ final class AppState: ObservableObject {
     private func ownsPlaybackContext(_ spec: PlaySpec) -> Bool {
         isPlayerPresented && spec.metadata["vod.siteKey"] == activeSite?.key
             && spec.metadata["vod.id"] == detailVod?.vodId
-            && spec.flag == selectedPlayFlag
+            && (spec.flag == selectedPlayFlag || (spec.metadata["vod.episodeSeriesID"] != nil
+                && episodeForCurrentPlayback(in: playbackEpisodes(for: spec.flag)) != nil))
             && spec.metadata["playback.sessionGeneration"] == String(playbackSessionState.generation)
             && spec.metadata["playback.sourceFingerprint"] == playbackAuthorizationOrigin.sourceFingerprint
     }
@@ -7134,7 +7203,6 @@ final class AppState: ObservableObject {
         let episodeURL = PlaybackResumePolicy.episodeURL(for: spec)
         guard episodeListState == .ready, ownsPlaybackContext(spec),
               playerState.currentSpec?.metadata["playback.sessionGeneration"] == spec.metadata["playback.sessionGeneration"] else { return }
-        let origin = playbackAuthorizationOrigin
         let context = playbackEpisodeContext()
         let transition = PlaybackSessionCore.requestAutoAdvance(
             playbackSessionState,
@@ -7144,6 +7212,9 @@ final class AppState: ObservableObject {
         )
         playbackSessionState = transition.state
         guard let targetEpisode = transition.targetEpisode else { return }
+        let targetLine = playbackLine(for: targetEpisode)
+        if targetLine != selectedPlayFlag { selectPlayFlag(targetLine) }
+        let origin = playbackAuthorizationOrigin
 
         // Claim the UI transition before yielding to preloaded metadata resolution.
         let requestID = UUID()

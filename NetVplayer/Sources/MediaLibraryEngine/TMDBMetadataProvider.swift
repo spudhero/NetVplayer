@@ -51,18 +51,48 @@ public struct TMDBMetadataProvider: MetadataProvider {
     }
     public func details(id: String, kind: MediaLibraryKind) async throws -> MediaMetadata {
         guard id.allSatisfy(\.isNumber), !id.isEmpty, id.count <= 12 else { throw MetadataProviderError.invalidResponse }
-        return try map(await get((kind == .television ? "tv/" : "movie/") + id), kind: kind)
+        let object = try await get((kind == .television ? "tv/" : "movie/") + id, params: ["append_to_response": "credits"])
+        var metadata = map(object, kind: kind)
+        metadata.detailVersion = 2
+        return metadata
     }
     private func map(_ object: [String: Any], kind: MediaLibraryKind) -> MediaMetadata {
         let title = object["title"] as? String ?? object["name"] as? String
         let date = object["release_date"] as? String ?? object["first_air_date"] as? String ?? ""
         let originalTitle = object["original_title"] as? String ?? object["original_name"] as? String
+        let credits = object["credits"] as? [String: Any] ?? [:]
+        let crew = credits["crew"] as? [[String: Any]] ?? []
+        let runtime = object["runtime"] as? Int ?? (object["episode_run_time"] as? [Int])?.first
+        let cast = (credits["cast"] as? [[String: Any]])?.prefix(40).compactMap { person -> MediaCastMember? in
+            guard let name = nonempty(person["name"] as? String) else { return nil }
+            return .init(name: name, role: nonempty(person["character"] as? String), portrait: image(person["profile_path"], size: "w185"),
+                         tmdbID: (person["id"] as? NSNumber)?.stringValue)
+        }
+        let collection = (object["belongs_to_collection"] as? [String: Any]).flatMap { item -> MediaCollection? in
+            guard kind != .television, let name = nonempty(item["name"] as? String) else { return nil }
+            return .init(name: name, tmdbID: (item["id"] as? NSNumber)?.stringValue)
+        }
         return .init(title: title, originalTitle: originalTitle, year: Int(date.prefix(4)), kind: kind, showTitle: kind == .television ? title : nil,
-                     plot: (object["overview"] as? String).flatMap { $0.isEmpty ? nil : $0 }, poster: image(object["poster_path"]), fanart: image(object["backdrop_path"]),
-                     tmdbID: (object["id"] as? NSNumber)?.stringValue, tmdbRating: (object["vote_average"] as? NSNumber)?.doubleValue)
+                     plot: nonempty(object["overview"] as? String), poster: image(object["poster_path"]), fanart: image(object["backdrop_path"], size: "w1280"),
+                     tmdbID: (object["id"] as? NSNumber)?.stringValue, tmdbRating: (object["vote_average"] as? NSNumber)?.doubleValue,
+                     genres: names(object["genres"]), runtimeMinutes: runtime.flatMap { $0 > 0 ? $0 : nil }, releaseDate: nonempty(date),
+                     countries: names(object["production_countries"]), languages: names(object["spoken_languages"]),
+                     studios: names(object["production_companies"]), tagline: nonempty(object["tagline"] as? String),
+                     directors: names(crew.filter { $0["job"] as? String == "Director" }),
+                     writers: names(crew.filter { ["Writer", "Screenplay", "Story"].contains($0["job"] as? String ?? "") }), cast: cast, collection: collection)
     }
-    private func image(_ value: Any?) -> String? {
+    private func nonempty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
+    }
+    private func names(_ value: Any?) -> [String]? {
+        guard let items = value as? [[String: Any]] else { return nil }
+        var seen = Set<String>()
+        let names = items.prefix(80).compactMap { nonempty($0["name"] as? String) }.filter { seen.insert($0).inserted }
+        return names.isEmpty ? nil : names
+    }
+    private func image(_ value: Any?, size: String = "w500") -> String? {
         guard let path = value as? String, path.hasPrefix("/"), !path.contains("..") else { return nil }
-        return "https://image.tmdb.org/t/p/w500" + path
+        return "https://image.tmdb.org/t/p/" + size + path
     }
 }

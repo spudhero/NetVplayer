@@ -40,6 +40,10 @@ public enum MediaFilenameParser {
             stem = (folder as NSString).lastPathComponent
         }
         if stem.isEmpty { stem = (file as NSString).deletingPathExtension }
+        if television {
+            let base = MediaLibraryIdentity.showTitle(stem)
+            if !base.isEmpty { stem = base }
+        }
         return .init(title: stem, originalTitle: originalTitle, year: year, kind: television ? .television : .movies,
                      showTitle: television ? stem : nil, season: television ? (season ?? 1) : nil, episode: number)
     }
@@ -76,11 +80,13 @@ private final class NFODocument: NSObject, XMLParserDelegate {
     var metadata = MediaMetadata()
     private var stack: [(String, [String: String], String)] = []
     private var ratingSource: String?
+    private var actor: MediaCastMember?
     func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
         stack.append((name, attributes, ""))
         if name == "movie" { metadata.kind = .movies }
         if name == "tvshow" || name == "episodedetails" { metadata.kind = .television }
         if name == "rating" { ratingSource = attributes["name"]?.lowercased() }
+        if name == "actor" { actor = MediaCastMember(name: "") }
     }
     func parser(_ parser: XMLParser, foundCharacters string: String) { if !stack.isEmpty { stack[stack.count - 1].2 += string } }
     func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) { if let text = String(data: CDATABlock, encoding: .utf8), !stack.isEmpty { stack[stack.count - 1].2 += text } }
@@ -88,9 +94,35 @@ private final class NFODocument: NSObject, XMLParserDelegate {
         defer { if name == "rating" { ratingSource = nil } }
         guard let element = stack.popLast() else { return }
         let value = element.2.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name == "actor" {
+            if let actor, !actor.name.isEmpty, (metadata.cast?.count ?? 0) < 40 {
+                metadata.cast = (metadata.cast ?? []) + [actor]
+            }
+            actor = nil; return
+        }
         guard !value.isEmpty else { return }
+        if stack.contains(where: { $0.0 == "actor" }) {
+            if name == "name" { actor?.name = value }
+            if name == "role" { actor?.role = value }
+            if name == "thumb" { actor?.portrait = Self.imageURL(value) }
+            if name == "tmdbid" { actor?.tmdbID = value }
+            return
+        }
+        if stack.contains(where: { $0.0 == "set" }), name == "name" {
+            metadata.collection = .init(name: value); return
+        }
         switch name {
+        case "set": if metadata.collection == nil { metadata.collection = .init(name: value) }
         case "title": if metadata.title == nil { metadata.title = value }
+        case "originaltitle": metadata.originalTitle = value
+        case "tagline": metadata.tagline = value
+        case "genre": metadata.genres = (metadata.genres ?? []) + [value]
+        case "country": metadata.countries = (metadata.countries ?? []) + [value]
+        case "studio": metadata.studios = (metadata.studios ?? []) + [value]
+        case "director": metadata.directors = (metadata.directors ?? []) + [value]
+        case "credits": metadata.writers = (metadata.writers ?? []) + [value]
+        case "runtime": metadata.runtimeMinutes = Int(value).flatMap { $0 > 0 ? $0 : nil }
+        case "premiered", "releasedate": metadata.releaseDate = value
         case "showtitle": metadata.showTitle = value
         case "year": metadata.year = Int(value)
         case "season": metadata.season = Int(value)

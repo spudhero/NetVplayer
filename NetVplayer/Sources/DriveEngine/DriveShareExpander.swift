@@ -47,7 +47,19 @@ public final class DriveShareExpander: @unchecked Sendable {
         guard let expander = expanders.first(where: { $0.canExpand(url: url) }) else {
             throw DriveEngineError.unsupported("该网盘分享暂未适配目录展开")
         }
-        return try await expander.expand(url: url, fallbackTitle: fallbackTitle)
+        return try await expander.expand(url: url, fallbackTitle: fallbackTitle).map { episode in
+            var episode = episode
+            if episode.series == nil {
+                if let reference = DriveFileReference.parse(episode.url) {
+                    episode.series = DriveEpisodeSeries.source(for: reference)
+                } else {
+                    episode.series = DriveEpisodeSeries.source(
+                        provider: DriveFileReference.provider(for: url), shareID: url
+                    )
+                }
+            }
+            return episode
+        }
     }
 
     public func expansionOutcome(url: String, fallbackTitle: String) async -> DriveShareExpansionOutcome {
@@ -137,7 +149,13 @@ public struct QuarkDriveShareExpander: DriveShareExpanding {
                     index: index,
                     total: files.count
                 ),
-                url: reference.encodedURL
+                url: reference.encodedURL,
+                series: DriveEpisodeSeries.source(
+                    provider: .quark,
+                    shareID: share.pwdID,
+                    directoryID: playable.file.pdirFID,
+                    directoryPath: playable.directoryPath
+                )
             )
         }
     }

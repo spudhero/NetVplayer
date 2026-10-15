@@ -67,7 +67,7 @@ func presentationAndPlaybackKeepSourceOrderAcrossVersions(descending: Bool) thro
 }
 
 @MainActor
-@Test func quarkHiddenExtensionsAndAlternateSharesFollowVisibleNeighbours() throws {
+@Test func quarkAlternateSharesExposeSeparateVisibleQueues() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let state = AppState(loadDefaultConfig: false, startProxyServer: false,
@@ -89,11 +89,13 @@ func presentationAndPlaybackKeepSourceOrderAcrossVersions(descending: Bool) thro
     let context = state.playbackEpisodeContext()
     #expect(context.previousEpisode?.id == primary[31].id)
     #expect(context.nextEpisode?.name == "04(1)")
+    #expect(context.total == 34)
+    #expect(state.episodeGroups.count == 2)
     #expect(state.playbackEpisodeContext(in: state.episodes).nextEpisode?.id == context.nextEpisode?.id)
     state.playerState.currentSpec = PlaySpec(url: "https://media.example.test/copy.mp4",
         metadata: ["vod.episodeURL": state.episodes[33].url, "vod.episodeName": "04(1)"])
     #expect(state.playbackEpisodeContext().previousEpisode?.id == primary.last?.id)
-    #expect(state.playbackEpisodeContext().nextEpisode?.id == alternate.first?.id)
+    #expect(!state.playbackEpisodeContext().hasNext)
     state.playerState.currentSpec = PlaySpec(url: "https://media.example.test/34.mp4",
         metadata: ["vod.episodeURL": alternate[27].url, "vod.episodeName": "E34.mp3"])
     #expect(state.playbackEpisodeContext().nextEpisode?.name == "E35.mp3")
@@ -101,7 +103,7 @@ func presentationAndPlaybackKeepSourceOrderAcrossVersions(descending: Bool) thro
 
 @MainActor
 @Test(arguments: [false, true])
-func baiduDirectoryVersionsAndLegacyReferencesFollowOneVisibleList(legacyReference: Bool) throws {
+func baiduDirectoryGroupsUsePathsAndKeepLegacyEntriesSelectable(legacyReference: Bool) throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let state = AppState(loadDefaultConfig: false, startProxyServer: false,
@@ -138,7 +140,8 @@ func baiduDirectoryVersionsAndLegacyReferencesFollowOneVisibleList(legacyReferen
     let context = state.playbackEpisodeContext()
     #expect(context.previousEpisode?.id == selected[0].id)
     #expect(context.nextEpisode?.id == selected[2].id)
-    #expect(context.total == 18)
+    #expect(context.total == (legacyReference ? 18 : 9))
+    #expect(state.episodeGroups.count == (legacyReference ? 1 : 2))
     #expect(state.playbackEpisodeContext(in: state.episodes).nextEpisode?.id == context.nextEpisode?.id)
     #expect(state.displayedPlaybackEpisodes.count == 18)
     play(selected[7])
@@ -146,9 +149,9 @@ func baiduDirectoryVersionsAndLegacyReferencesFollowOneVisibleList(legacyReferen
     play(base[5])
     #expect(state.playbackEpisodeContext().nextEpisode?.id == base[6].id)
     play(base[8])
-    #expect(state.playbackEpisodeContext().nextEpisode?.id == selected[0].id)
+    #expect(state.playbackEpisodeContext().nextEpisode?.id == (legacyReference ? selected[0].id : nil))
     play(selected[0])
-    #expect(state.playbackEpisodeContext().previousEpisode?.id == base[8].id)
+    #expect(state.playbackEpisodeContext().previousEpisode?.id == (legacyReference ? base[8].id : nil))
     play(final)
     #expect(state.playbackEpisodeContext().previousEpisode?.id == selected[7].id)
     #expect(!state.playbackEpisodeContext().hasNext)
@@ -156,7 +159,7 @@ func baiduDirectoryVersionsAndLegacyReferencesFollowOneVisibleList(legacyReferen
 
 @MainActor
 @Test(arguments: [DriveProvider.quark, .uc, .baidu])
-func audioEntriesAcrossSharesAndFoldersStayInTheVisibleQueue(provider: DriveProvider) throws {
+func audioEntriesAcrossSharesAndFoldersRemainSelectableInVisibleGroups(provider: DriveProvider) throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let state = AppState(loadDefaultConfig: false, startProxyServer: false,
@@ -172,9 +175,10 @@ func audioEntriesAcrossSharesAndFoldersStayInTheVisibleQueue(provider: DriveProv
     state.playerState.currentSpec = PlaySpec(url: "https://media.example.test/current",
         metadata: ["vod.episodeURL": items[2].url, "vod.episodeName": items[2].name])
     #expect(state.displayedPlaybackEpisodes.map(\.id) == items.map(\.id))
-    #expect(state.playbackEpisodeContext().previousEpisode?.id == items[1].id)
-    #expect(state.playbackEpisodeContext().nextEpisode?.id == items[3].id)
-    #expect(state.playbackEpisodeContext().total == 4)
+    #expect(state.episodeGroups.count == 4)
+    #expect(!state.playbackEpisodeContext().hasPrevious)
+    #expect(!state.playbackEpisodeContext().hasNext)
+    #expect(state.playbackEpisodeContext().total == 1)
 }
 
 @MainActor

@@ -30,6 +30,11 @@ public enum MediaLibraryPresentation {
         } else {
             vod.vodPlayFrom = "播放文件"
             vod.vodPlayUrl = records.map { safeEpisodeName($0.entry.name) + "$" + $0.reference.locator }.joined(separator: "#")
+            // Alternative encodes are versions of one film, not consecutive episodes.
+            vod.episodeDetails = records.map { item in
+                Episode(name: item.entry.name, url: item.reference.locator,
+                        series: EpisodeSeries(id: item.reference.locator, name: item.entry.name))
+            }
         }
         return vod
     }

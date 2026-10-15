@@ -16,6 +16,8 @@ public actor MetadataMatcher {
     private var cache: [String: MediaMetadata] = [:]
     private var candidateCache: [String: [MetadataCandidate]] = [:]
     private var progress: [UUID: MetadataMatchProgress] = [:]
+    private var detailCache: [String: MediaMetadata] = [:]
+    private var detailRequests: [String: Task<MediaMetadata, Error>] = [:]
     private let index: MediaIndex
     private let suppliedProviders: [any MetadataProvider]?
     public init(index: MediaIndex = .shared, providers: [any MetadataProvider]? = nil) {
@@ -49,6 +51,83 @@ public actor MetadataMatcher {
     }
     public func currentProgress(libraryID: UUID) -> MetadataMatchProgress? { progress[libraryID] }
     public func verificationURL() -> URL? { verification }
+    /// Explicit library action: fetch known identities sequentially, sharing the detail cache.
+    public func enrichLibraryDetails(_ library: MediaLibraryConfiguration) {
+        jobs[library.id]?.cancel(); paused[library.id] = nil
+        let jobID = UUID(); jobIDs[library.id] = jobID
+        jobs[library.id] = Task(priority: .utility) {
+            await self.processLibraryDetails(library, jobID: jobID)
+            if self.jobIDs[library.id] == jobID { self.jobs[library.id] = nil }
+        }
+    }
+    private func processLibraryDetails(_ library: MediaLibraryConfiguration, jobID: UUID) async {
+        var status = MetadataMatchProgress(libraryID: library.id, total: 0, message: "正在补全系列与演员资料")
+        var lastError: String?
+        defer {
+            status.isRunning = false
+            status.message = Task.isCancelled ? "资料补全已取消，已保存的资料可继续使用" : "系列与演员资料已更新"
+            if let lastError { status.message = "部分资料暂未更新：" + lastError }
+            publish(status, jobID: jobID)
+            NotificationCenter.default.post(name: .mediaLibraryIndexDidChange, object: library.id)
+        }
+        do {
+            var records: [MediaRecord] = []
+            while true {
+                let page = try await index.representatives(libraryID: library.id, limit: 500, offset: records.count)
+                try Task.checkCancellation()
+                records += page
+                if page.count < 500 { break }
+            }
+            let known = records.filter { $0.candidates.isEmpty && ($0.metadata.tmdbID != nil || $0.metadata.doubanID != nil) }
+            status.total = known.count; publish(status, jobID: jobID)
+            for record in known {
+                try Task.checkCancellation()
+                do {
+                    _ = try await enrichDetails(reference: record.reference, source: library.metadataSource)
+                    status.matched += 1
+                } catch is CancellationError { return }
+                catch { lastError = error.localizedDescription; status.unmatched += 1 }
+                status.completed += 1; publish(status, jobID: jobID)
+            }
+        } catch is CancellationError { return }
+        catch { lastError = error.localizedDescription }
+    }
+    /// Enrich an existing, unambiguous match on demand; never search/rematch on opening a detail page.
+    public func enrichDetails(reference: FileResourceReference, source: MetadataSource) async throws -> MediaRecord? {
+        guard let record = try await index.record(reference: reference) else { return nil }
+        guard source != .local, record.metadataSource == nil || record.metadataSource == source,
+              record.candidates.isEmpty else { return record }
+        let metadata = record.metadata
+        let kind = metadata.kind ?? .movies
+        for provider in providers(for: source) {
+            guard let id = provider.source == .tmdb ? metadata.tmdbID : metadata.doubanID, !id.isEmpty else { continue }
+            let requiredVersion = provider.source == .tmdb ? 2 : 1
+            if (record.onlineMetadata.detailVersion ?? 0) >= requiredVersion { return record }
+            let key = provider.source.rawValue + ":" + kind.rawValue + ":" + id
+            let details: MediaMetadata
+            if let cached = detailCache[key] { details = cached }
+            else {
+                let task: Task<MediaMetadata, Error>
+                if let pending = detailRequests[key] { task = pending }
+                else {
+                    task = Task { try await provider.details(id: id, kind: kind) }
+                    detailRequests[key] = task
+                }
+                do {
+                    details = try await task.value
+                    detailRequests[key] = nil
+                    if detailCache.count >= 100 { detailCache.removeAll() }
+                    detailCache[key] = details
+                } catch {
+                    detailRequests[key] = nil
+                    throw error
+                }
+            }
+            try Task.checkCancellation()
+            return try await index.enrichDetails(details, snapshot: record)
+        }
+        return record
+    }
     public func resumeAfterVerification() {
         verification = nil
         let pending = paused; paused.removeAll()

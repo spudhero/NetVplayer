@@ -2106,7 +2106,7 @@ struct PlayerView: View {
     private func episodeDrawer(size _: CGSize) -> some View {
         let currentEpisode = appState.episodeForCurrentPlayback(in: appState.episodes)
         let context = appState.playbackEpisodeContext(in: appState.episodes)
-        let sortedEpisodes = appState.displayedPlaybackEpisodes
+        let groups = appState.displayedEpisodeGroups
         let sourceColumns = Array(
             repeating: GridItem(.flexible(), spacing: 8),
             count: PlayerHUDVisualPolicy.drawerSourceColumnCount
@@ -2218,27 +2218,27 @@ struct PlayerView: View {
                             .tint(lavender)
                     }
 
-                    switch appState.episodeDisplayMode {
-                    case .grid:
-                        LazyVGrid(columns: episodeColumns, spacing: PlayerHUDVisualPolicy.drawerGridGap) {
-                            ForEach(sortedEpisodes) { episode in
-                                episodeGridButton(
-                                    episode,
-                                    isCurrent: currentEpisode?.url == episode.url && currentEpisode?.name == episode.name,
-                                    isHistory: appState.isHistoryEpisode(episode)
-                                )
+                    if groups.count > 1 {
+                        Text(L10n.text("自动续播仅在当前资源组内，播完本组后停止"))
+                            .font(.caption)
+                            .foregroundStyle(PlayerHUDPalette.muted)
+                        ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                            let isCurrent = group.episodes.contains { $0.id == currentEpisode?.id }
+                            let isHistory = group.episodes.contains { appState.isHistoryEpisode($0) }
+                            EpisodeGroupSection(
+                                group: group,
+                                ordinal: index,
+                                isCurrent: isCurrent,
+                                isHistory: isHistory,
+                                usesPlayerPalette: true,
+                                prefersExpanded: isCurrent || (currentEpisode == nil && (isHistory || index == 0))
+                            ) {
+                                drawerEpisodeItems(group.episodes, currentEpisode: currentEpisode, columns: episodeColumns)
                             }
                         }
-                    case .list:
-                        LazyVStack(spacing: PlayerHUDVisualPolicy.drawerGridGap) {
-                            ForEach(sortedEpisodes) { episode in
-                                episodeListButton(
-                                    episode,
-                                    isCurrent: currentEpisode?.url == episode.url && currentEpisode?.name == episode.name,
-                                    isHistory: appState.isHistoryEpisode(episode)
-                                )
-                            }
-                        }
+                        .id(appState.selectedPlayFlag)
+                    } else {
+                        drawerEpisodeItems(appState.displayedPlaybackEpisodes, currentEpisode: currentEpisode, columns: episodeColumns)
                     }
                 }
                 .padding(PlayerHUDVisualPolicy.drawerContentPadding)
@@ -2253,6 +2253,24 @@ struct PlayerView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func drawerEpisodeItems(_ episodes: [Episode], currentEpisode: Episode?, columns: [GridItem]) -> some View {
+        switch appState.episodeDisplayMode {
+        case .grid:
+            LazyVGrid(columns: columns, spacing: PlayerHUDVisualPolicy.drawerGridGap) {
+                ForEach(episodes) { episode in
+                    episodeGridButton(episode, isCurrent: currentEpisode?.id == episode.id, isHistory: appState.isHistoryEpisode(episode))
+                }
+            }
+        case .list:
+            LazyVStack(spacing: PlayerHUDVisualPolicy.drawerGridGap) {
+                ForEach(episodes) { episode in
+                    episodeListButton(episode, isCurrent: currentEpisode?.id == episode.id, isHistory: appState.isHistoryEpisode(episode))
+                }
+            }
+        }
     }
 
     private var skipEditorDialog: some View {

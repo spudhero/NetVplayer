@@ -21,6 +21,12 @@
 
 ![NetVplayer running on macOS](website/assets/home-aurora.webp)
 
+发布基线 / Release baseline: **NetVplayer 1.1.4 (build 18)**.
+
+| Component | Version |
+| --- | --- |
+| Stable application | 1.1.4 |
+
 ## 中文
 
 NetVplayer 是基于 SwiftUI 与内嵌 libmpv 的原生 macOS 媒体播放器，支持点播、直播、云盘和自有文件。适用于 **macOS 14+ / Apple Silicon**，界面支持简体中文和 English。

@@ -41,14 +41,10 @@ enum VodPlaybackAvailabilityPolicy {
     }
 
     static func visibleLines(in detail: Vod) -> [VodPlaybackLine] {
-        let flags = detail.vodPlayFrom.components(separatedBy: "$$$")
-        let playLists = detail.vodPlayUrl.components(separatedBy: "$$$")
-
-        return flags.enumerated().compactMap { index, rawFlag in
-            let flag = rawFlag.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !flag.isEmpty, index < playLists.count else { return nil }
-
-            let episodes = Episode.parse(from: playLists[index]).filter(isVisibleEpisode)
+        return detail.parseFlags().compactMap { parsed in
+            let flag = parsed.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !flag.isEmpty else { return nil }
+            let episodes = parsed.episodes.filter(isVisibleEpisode)
             guard !episodes.isEmpty else { return nil }
             return VodPlaybackLine(flag: flag, episodes: episodes)
         }

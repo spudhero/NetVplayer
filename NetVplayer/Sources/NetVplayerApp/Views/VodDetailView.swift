@@ -61,6 +61,9 @@ struct VodDetailView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
+            if FileResourceReference(locator: detail.vodId) != nil {
+                NASMediaDetailView(vod: detail, size: layout.containerSize)
+            } else {
             VodDetailThemeBackground(
                 palette: palette,
                 artworkURL: detail.vodBackground.isEmpty ? detail.vodPic : detail.vodBackground,
@@ -86,6 +89,7 @@ struct VodDetailView: View {
                 playbackPane
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
 
             Button {
                 appState.isDetailPresented = false
@@ -381,6 +385,12 @@ struct VodDetailView: View {
     private var episodeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             episodeToolbar
+
+            if appState.episodeGroups.count > 1 {
+                Text(L10n.text("自动续播仅在当前资源组内，播完本组后停止"))
+                    .font(.caption)
+                    .foregroundStyle(palette.muted)
+            }
 
             if selectedFlagStatus.shouldShowBanner {
                 statusBanner
@@ -757,8 +767,34 @@ private extension VodDetailView {
 
     @ViewBuilder
     var episodeCollection: some View {
-        let episodes = appState.displayedPlaybackEpisodes
+        let groups = appState.displayedEpisodeGroups
+        let current = appState.episodeForCurrentPlayback(in: appState.episodes)
+        let preferred = current ?? appState.episodes.first(where: { appState.isHistoryEpisode($0) })
 
+        if groups.count > 1 {
+            LazyVStack(spacing: 12) {
+                ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                    let isCurrent = group.episodes.contains { $0.id == current?.id }
+                    let isHistory = group.episodes.contains { appState.isHistoryEpisode($0) }
+                    EpisodeGroupSection(
+                        group: group,
+                        ordinal: index,
+                        isCurrent: isCurrent,
+                        isHistory: isHistory,
+                        prefersExpanded: preferred.map { item in group.episodes.contains { $0.id == item.id } } ?? (index == 0)
+                    ) {
+                        episodeItems(group.episodes)
+                    }
+                }
+            }
+            .id(appState.selectedPlayFlag)
+        } else {
+            episodeItems(appState.displayedPlaybackEpisodes)
+        }
+    }
+
+    @ViewBuilder
+    private func episodeItems(_ episodes: [Episode]) -> some View {
         switch appState.episodeDisplayMode {
         case .grid:
             LazyVGrid(columns: columns, spacing: 10) {

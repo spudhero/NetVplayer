@@ -53,6 +53,13 @@ public enum PlaybackLinkage {
     ) -> History? {
         let siteKey = vod.siteKey.isEmpty ? activeSiteKey : vod.siteKey
         let key = vodKey(siteKey: siteKey, vodId: vod.vodId, sourceFingerprint: sourceFingerprint)
+        if FileResourceReference(locator: vod.vodId) != nil {
+            let files = Set(vod.parseFlags().flatMap { $0.episodes.map(\.url) })
+            // A merged show can use a different representative file while history keeps its original identity.
+            return items.filter {
+                $0.sourceFingerprint == sourceFingerprint && $0.siteKey == siteKey && files.contains($0.episodeUrl)
+            }.max { $0.createTime < $1.createTime }
+        }
         return items.first {
             $0.sourceFingerprint == sourceFingerprint && ($0.key == key || ($0.siteKey == siteKey && $0.vodId == vod.vodId))
         }

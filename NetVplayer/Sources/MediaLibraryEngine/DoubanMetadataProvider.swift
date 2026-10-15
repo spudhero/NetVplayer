@@ -114,6 +114,12 @@ public actor DoubanMetadataProvider: MetadataProvider {
             metadata.kind = (json["@type"] as? String)?.contains("TV") == true ? .television : .movies
             if let rating = (json["aggregateRating"] as? [String: Any])?["ratingValue"] { metadata.doubanRating = Double(String(describing: rating)) }
             metadata.year = (json["datePublished"] as? String).flatMap { Int($0.prefix(4)) }
+            metadata.releaseDate = json["datePublished"] as? String
+            metadata.genres = (json["genre"] as? [String]) ?? (json["genre"] as? String).map { [$0] }
+            metadata.runtimeMinutes = durationMinutes(json["duration"] as? String)
+            metadata.directors = people(json["director"]).map(\.name)
+            metadata.writers = people(json["author"]).map(\.name)
+            metadata.cast = people(json["actor"])
         }
         if metadata.title == nil { metadata.title = try document.select("h1 span[property=v\u{3a}itemreviewed]").first()?.text() }
         if metadata.poster == nil { metadata.poster = validImage(try document.select("#mainpic img").first()?.attr("src")) }
@@ -127,9 +133,35 @@ public actor DoubanMetadataProvider: MetadataProvider {
             metadata.year = value.flatMap { Int($0.filter(\.isNumber)) }
         }
         metadata.kind = metadata.kind ?? fallbackKind
+        if metadata.genres?.isEmpty != false {
+            let genres = try document.select("[property=v\u{3a}genre]").array().map { try $0.text() }
+            metadata.genres = genres.isEmpty ? nil : genres
+        }
+        if metadata.runtimeMinutes == nil, let minutes = try document.select("[property=v\u{3a}runtime]").first() {
+            let value = try minutes.attr("content")
+            metadata.runtimeMinutes = Int(value).flatMap { $0 > 0 ? $0 : nil }
+        }
+        metadata.detailVersion = 1
         if metadata.kind == .television { metadata.showTitle = metadata.title }
         guard metadata.title?.isEmpty == false else { throw MetadataProviderError.invalidResponse }
         return metadata
+    }
+    private static func people(_ value: Any?) -> [MediaCastMember] {
+        let entries = value as? [[String: Any]] ?? (value as? [String: Any]).map { [$0] } ?? []
+        return entries.prefix(40).compactMap { entry in
+            guard let name = entry["name"] as? String, !name.isEmpty else { return nil }
+            return .init(name: name, portrait: validImage(entry["image"] as? String))
+        }
+    }
+    private static func durationMinutes(_ value: String?) -> Int? {
+        guard let value, let match = value.range(of: "^PT(?:(\\d+)H)?(?:(\\d+)M)?$", options: .regularExpression) else { return nil }
+        let duration = String(value[match].dropFirst(2))
+        let hours = duration.split(separator: "H", omittingEmptySubsequences: false)
+        let minutes = Int((hours.count == 2 ? String(hours[1]) : duration).replacingOccurrences(of: "M", with: "")) ?? 0
+        let (hourMinutes, hourOverflow) = (hours.count == 2 ? (Int(hours[0]) ?? 0) : 0).multipliedReportingOverflow(by: 60)
+        let (total, totalOverflow) = hourMinutes.addingReportingOverflow(minutes)
+        guard !hourOverflow, !totalOverflow else { return nil }
+        return total > 0 ? total : nil
     }
     private static func validImage(_ value: String?) -> String? {
         guard let value, let url = URL(string: value), url.scheme == "https", url.user == nil, url.password == nil else { return nil }
