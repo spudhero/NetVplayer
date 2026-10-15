@@ -116,7 +116,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             'cmp SHA256SUMS.txt "$existing_assets/SHA256SUMS.txt"',
             "--verify-tag",
             "--draft",
-            '--notes-file "$GITHUB_WORKSPACE/RELEASE_NOTES_${release_version}.md"',
+            '--notes-file "$GITHUB_WORKSPACE/docs/releases/${release_version}.md"',
             "appcast.xml",
             "SPARKLE_ED25519_PRIVATE_KEY",
             "generate_appcast",

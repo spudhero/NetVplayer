@@ -59,7 +59,7 @@ FongMi/TV、OK影视、影视仓、TVBox 等工具主要服务 Android 生态。
 4. 等待“设置 → 扩展支持”显示就绪。首次安装和扩展更新需要能访问 GitHub。
 5. 在“设置 → 内容来源”添加自己的配置、账号或文件位置，即可开始使用。
 
-应用会在侧栏和设置页的版本号旁提示更新，确认后在后台下载与校验，正常退出后安装。版本说明与历史请查看 [CHANGELOG](CHANGELOG.md#中文) 或 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
+应用会在侧栏和设置页的版本号旁提示更新，确认后在后台下载与校验，正常退出后安装。版本说明与历史请查看 [CHANGELOG](CHANGELOG.md#中文)、[按版本发布说明](docs/releases/README.md)或 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ### 使用
 
@@ -115,7 +115,7 @@ The project brings browsing, search, episode selection, and playback into a nati
 4. Wait for Settings → Verified Extensions to report ready. Initial preparation and extension updates require access to GitHub.
 5. Add your own configuration, accounts, or file locations under Settings → Content Sources.
 
-The app marks available updates beside its version in the sidebar and Settings. Confirm an update to download and verify it in the background; installation happens on normal exit. Release notes and history are available in the [CHANGELOG](CHANGELOG.md#english) and [GitHub Releases](https://github.com/spudhero/NetVplayer/releases).
+The app marks available updates beside its version in the sidebar and Settings. Confirm an update to download and verify it in the background; installation happens on normal exit. See the [CHANGELOG](CHANGELOG.md#english), [versioned release notes](docs/releases/README.md), and [GitHub Releases](https://github.com/spudhero/NetVplayer/releases) for release history.
 
 ### Usage
 

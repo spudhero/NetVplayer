@@ -340,6 +340,6 @@ jobs:
               --verify-tag \
               --fail-on-no-commits \
               --title "NetVplayer $release_version" \
-              --notes-file "$GITHUB_WORKSPACE/RELEASE_NOTES_${release_version}.md" \
+              --notes-file "$GITHUB_WORKSPACE/docs/releases/${release_version}.md" \
               --draft
           fi

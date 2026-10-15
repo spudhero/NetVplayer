@@ -26,6 +26,7 @@ PUBLIC_RELEASE_DOCUMENTS = {
     "docs/data/torrent-bridge-license-audit-2026-08-18.json",
     "docs/design/player-ui/assets/w700d1q75cms.jpg",
 }
+PUBLIC_RELEASE_DOCUMENT_PREFIXES = ("docs/releases/",)
 INTERNAL_PUBLICATION_PREFIXES = (
     "NetVplayer/Docs/",
     "NetVplayer/Resources/UI_Mockups/",
@@ -278,7 +279,7 @@ def exclusion_reason(path: str) -> str | None:
     if path in INTERNAL_PUBLICATION_FILES:
         return "internal-publication-artifact"
     if any(path.startswith(prefix) for prefix in INTERNAL_PUBLICATION_PREFIXES):
-        if path not in PUBLIC_RELEASE_DOCUMENTS:
+        if path not in PUBLIC_RELEASE_DOCUMENTS and not path.startswith(PUBLIC_RELEASE_DOCUMENT_PREFIXES):
             return "internal-publication-artifact"
     if is_private_provider_source(path):
         return "site-specific-swift-provider"

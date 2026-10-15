@@ -10,14 +10,14 @@ This file records user-visible release and fix history. For installation require
 - NAS 媒体库支持滚动自动分页，同一连接可批量添加多个媒体文件夹，避免重复或重叠扫描。
 - 新增 NAS 专属影视详情、演职员和文件版本展示、按季选集及精确文件续看；修复宽屏布局、横向滚动和右侧留白。
 - 电视剧优先按已确认的影视身份归并，并提供手动合并；增加系列、主演和导演整库筛选，支持交集与详情跳转。
-- 兼容旧媒体索引、观看历史和手动修正，保留 1.1.3 及此前播放修复。构建号 18，详见[发布说明](RELEASE_NOTES_1.1.4.md)。
+- 兼容旧媒体索引、观看历史和手动修正，保留 1.1.3 及此前播放修复。构建号 18，详见[发布说明](docs/releases/1.1.4.md)。
 
 ### [1.1.3](https://github.com/spudhero/NetVplayer/releases/tag/1.1.3)（2026-10-13）
 
 - 媒体类型优先使用真实源文件名、保存文件名或媒体 URL，修复显示集名隐藏 `.mp4` 后将带 AAC 等标记的视频当作音频的问题。
 - UC 原片恢复视频传输配置，避免音频限速引起的起播超时与过早自动转码；真实 AAC、FLAC 等音频继续使用音频配置。
 - 保留 1.1.2 的课堂选集、UC 智能线路 403、失败重试和网盘续播恢复修复。
-- 构建号为 17，目录扩展版本保持现有兼容版本，详见[发布说明](RELEASE_NOTES_1.1.3.md)。
+- 构建号为 17，目录扩展版本保持现有兼容版本，详见[发布说明](docs/releases/1.1.3.md)。
 
 ### [1.1.2](https://github.com/spudhero/NetVplayer/releases/tag/1.1.2)（2026-10-12）
 
@@ -26,7 +26,7 @@ This file records user-visible release and fix history. For installation require
 - 网盘恢复不再重新选中刚被拒绝的转存文件；失败重试有界，切集和换片拒绝旧任务的迟到结果。
 - 原画起播超时转备用线路时保留历史续播目标，避免回到零秒。
 - 修复内容来源快速定位在 macOS 15.6 上报告的布局断言，以及“缓存与系统”中的 TMDB 图标依赖开发机器路径的问题；该系统版本的实机复测仍待完成。
-- 构建号为 16；目录扩展版本沿用 1.1.1 发布时的版本，详见[发布说明](RELEASE_NOTES_1.1.2.md)。
+- 构建号为 16；目录扩展版本沿用 1.1.1 发布时的版本，详见[发布说明](docs/releases/1.1.2.md)。
 
 ### [1.1.1](https://github.com/spudhero/NetVplayer/releases/tag/1.1.1)（2026-10-09）
 
@@ -34,11 +34,11 @@ This file records user-visible release and fix history. For installation require
 - 修复部分网络环境下的海报连接；补齐请求总期限、取消与动态 DNS，减少重复首页请求并并行加载独立资料。
 - 修复有声内容请求头兼容、原画启播/缓冲备用线路恢复及手动切线提示，保留人工线路选择。
 - 目录扩展补齐课堂分类、筛选、分页等迁移遗漏；最终签名归档行为验收进入构建和发布门禁。
-- 同步 Java 1.1.3、JavaScript 1.1.2、Python 1.1.6、QuickJS 1.1.2；可配置 Python 保持 1.1.0。应用构建号为 15，详见[发布说明](RELEASE_NOTES_1.1.1.md)。
+- 同步 Java 1.1.3、JavaScript 1.1.2、Python 1.1.6、QuickJS 1.1.2；可配置 Python 保持 1.1.0。应用构建号为 15，详见[发布说明](docs/releases/1.1.1.md)。
 
 ### 1.1.0（2026-10-07）
 
-本次正式版本汇总以下主干变更，构建号为 14。版本概览见[发布说明](RELEASE_NOTES_1.1.0.md)。
+本次正式版本汇总以下主干变更，构建号为 14。版本概览见[发布说明](docs/releases/1.1.0.md)。
 
 #### 2026-10-07
 
@@ -185,14 +185,14 @@ This file records user-visible release and fix history. For installation require
 - Add automatic scroll pagination and batch media-folder setup under one NAS connection, preventing duplicate and overlapping scans.
 - Add dedicated NAS movie and TV details, cast, file versions, season selection, and precise file resume. Fix wide-window layout, horizontal scrolling, and the right-edge gap.
 - Merge TV entries by confirmed metadata identity, offer manual merging, and add library-wide collection, cast, and director filters with intersections and links from details.
-- Preserve existing indexes, watch history, manual corrections, and playback fixes from 1.1.3 and earlier. Application build 18; see the [release notes](RELEASE_NOTES_1.1.4.md).
+- Preserve existing indexes, watch history, manual corrections, and playback fixes from 1.1.3 and earlier. Application build 18; see the [release notes](docs/releases/1.1.4.md).
 
 ### [1.1.3](https://github.com/spudhero/NetVplayer/releases/tag/1.1.3) (2026-10-13)
 
 - Prioritize actual source filenames, saved filenames, and media URLs when classifying media. Fix videos with AAC or similar labels being treated as audio when the displayed episode title hides `.mp4`.
 - Restore the video transfer profile for UC original playback, avoiding startup timeouts and early transcoding caused by the audio profile. Preserve genuine AAC, FLAC, and other audio playback.
 - Retain the 1.1.2 fixes for classroom episodes, UC smart-play HTTP 403, bounded retries, and drive resume recovery.
-- Application build 17; existing compatible catalog extension versions remain available. See the [release notes](RELEASE_NOTES_1.1.3.md).
+- Application build 17; existing compatible catalog extension versions remain available. See the [release notes](docs/releases/1.1.3.md).
 
 ### [1.1.2](https://github.com/spudhero/NetVplayer/releases/tag/1.1.2) (2026-10-12)
 
@@ -201,7 +201,7 @@ This file records user-visible release and fix history. For installation require
 - Exclude rejected saved files from rediscovery, bound failed retries, and discard stale results after switching episodes or titles.
 - Preserve the history resume target when original-quality startup times out and switches to a fallback route.
 - Fix the Content Sources layout assertion reported on macOS 15.6 and load the TMDB attribution logo from bundled resources. Runtime verification on that OS version remains pending.
-- Application build 16; catalog extension versions remain those shipped with application 1.1.1. See the [release notes](RELEASE_NOTES_1.1.2.md).
+- Application build 16; catalog extension versions remain those shipped with application 1.1.1. See the [release notes](docs/releases/1.1.2.md).
 
 ### [1.1.1](https://github.com/spudhero/NetVplayer/releases/tag/1.1.1) (2026-10-09)
 
@@ -209,11 +209,11 @@ This file records user-visible release and fix history. For installation require
 - Recover artwork connections on affected networks with bounded requests, cancellation, and dynamic DNS. Remove duplicate home requests and load independent catalog data concurrently.
 - Fix audio request-header compatibility, bounded fallback recovery during original-quality startup/buffering, and manual route messages while retaining the user's selection.
 - Deliver classroom categories, filtering, pagination, and other catalog migration fixes; build and publication gates execute behavior checks inside the final signed archives.
-- Update Java to 1.1.3, JavaScript to 1.1.2, Python to 1.1.6, and QuickJS to 1.1.2. Configurable Python remains 1.1.0. Application build 15; see the [release notes](RELEASE_NOTES_1.1.1.md).
+- Update Java to 1.1.3, JavaScript to 1.1.2, Python to 1.1.6, and QuickJS to 1.1.2. Configurable Python remains 1.1.0. Application build 15; see the [release notes](docs/releases/1.1.1.md).
 
 ### 1.1.0 (2026-10-07)
 
-This release includes the main-branch changes below and uses build 14. See the [release notes](RELEASE_NOTES_1.1.0.md) for an overview.
+This release includes the main-branch changes below and uses build 14. See the [release notes](docs/releases/1.1.0.md) for an overview.
 
 #### 2026-10-07
 
