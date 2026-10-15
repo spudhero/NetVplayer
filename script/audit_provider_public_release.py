@@ -52,6 +52,7 @@ PUBLIC_RELEASE_DOCUMENTS = {
     "docs/data/torrent-bridge-license-audit-2026-08-18.json",
     "docs/design/player-ui/assets/w700d1q75cms.jpg",
 }
+PUBLIC_RELEASE_DOCUMENT_PREFIXES = ("docs/releases/",)
 INTERNAL_PUBLICATION_PREFIXES = (
     "NetVplayer/Docs/",
     "NetVplayer/Resources/UI_Mockups/",
@@ -157,6 +158,7 @@ def build_release_report(repo: Path) -> dict[str, Any]:
         or (
             any(path.startswith(prefix) for prefix in INTERNAL_PUBLICATION_PREFIXES)
             and path not in PUBLIC_RELEASE_DOCUMENTS
+            and not path.startswith(PUBLIC_RELEASE_DOCUMENT_PREFIXES)
         )
     ]
     binary_files = [

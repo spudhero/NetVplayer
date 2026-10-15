@@ -10,6 +10,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from audit_provider_public_boundary import build_report, serialized
 from audit_provider_public_release import build_release_report
+from export_provider_public_shell import export_public_shell
 
 
 def git(repo: Path, *arguments: str) -> str:
@@ -75,6 +76,34 @@ class ProviderPublicReleaseAuditTests(unittest.TestCase):
             report = build_release_report(public_fixture(Path(directory)))
             self.assertTrue(report["release_ready"])
             self.assertEqual(report["blocking_reasons"], [])
+
+    def test_exported_release_notes_pass_release_audit_without_internal_docs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = public_fixture(root)
+            documents = {
+                "docs/releases/2.0.0.md": "# Release 2.0.0\n",
+                "docs/releases/README.md": "# Release notes\n",
+                "docs/releases-internal/planning.md": "internal planning\n",
+                "docs/internal-notes.md": "internal notes\n",
+            }
+            for relative, content in documents.items():
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            git(source, "add", "--", ".")
+            git(source, "commit", "-m", "add release notes and internal documents")
+
+            output = root / "export"
+            export_public_shell(source, output)
+
+            for relative in ("docs/releases/2.0.0.md", "docs/releases/README.md"):
+                self.assertEqual((output / relative).read_bytes(), (source / relative).read_bytes())
+            self.assertFalse((output / "docs/releases-internal").exists())
+            self.assertFalse((output / "docs/internal-notes.md").exists())
+            report = build_release_report(output)
+            self.assertTrue(report["release_ready"], report["blocking_reasons"])
+            self.assertEqual(report["internal_publication_artifacts"], [])
 
     def test_secret_and_executable_binary_are_reported_without_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
