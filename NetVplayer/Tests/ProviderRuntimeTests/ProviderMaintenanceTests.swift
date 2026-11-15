@@ -621,7 +621,7 @@ private func waitForMaintenanceFixtureMarker(_ marker: URL) async {
         .split(whereSeparator: \.isNewline)
     #expect(pids.count == 3)
     #expect(!FileManager.default.fileExists(atPath: state.appendingPathComponent("counting-overlap").path))
-    #expect((try await manager.activeManifests()).count == 1)
+    #expect((await manager.activeManifests()).count == 1)
     await manager.shutdownAll()
 }
 

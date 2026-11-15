@@ -58,7 +58,7 @@ public final class MPVOpenGLVideoView: NSView {
     private func enableHDRSurface(development: Bool) -> Bool {
         if dolbyVisionSurface != nil { disableHDRPrototype() }
         guard hdrPrototypeSurface == nil else { return true }
-        guard let surface = NVMPVHDRSurface(frame: bounds) else { return false }
+        guard let surface = NVMPVHDRSurface(hdrFrame: bounds) else { return false }
         surface.asynchronousPresentation = !development
         surface.autoresizingMask = [.width, .height]
         addSubview(surface)

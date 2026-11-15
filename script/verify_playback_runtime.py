@@ -61,6 +61,47 @@ def require_capabilities(info, baseline=None):
                 raise RuntimeError('DASH build lost baseline ' + key + ': ' + ', '.join(sorted(missing)))
 
 
+def _ffmpeg_component(bundle):
+    return next(c for c in json.loads((bundle / 'Contents/Resources/ThirdPartyLicenses/libmpv-runtime.json').read_text())['components']
+                if c['formula'] == 'ffmpeg')
+
+
+def _verify_dash_receipt(bundle, binary, actual, component):
+    receipt = bundle / 'Contents/Resources/dash-runtime-build.json'
+    if not receipt.is_file():
+        raise RuntimeError('DASH build receipt is missing')
+    dash = json.loads(receipt.read_text())
+    if dash.get('packaged_libavformat_sha256') != actual:
+        raise RuntimeError('Playback runtime binary differs from DASH build receipt')
+    for patch in dash.get('patches', []):
+        relative = Path(patch.get('path', ''))
+        root = bundle/'Contents/Resources/ThirdPartyLicenses/libmpv/ffmpeg'
+        expected = root/patch.get('name', '')
+        path = bundle/relative
+        if relative.is_absolute() or '..' in relative.parts or path != expected:
+            raise RuntimeError('DASH source patch path is invalid')
+        if not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
+            raise RuntimeError('DASH source patch is missing')
+        if digest(path) != patch.get('sha256'):
+            raise RuntimeError('DASH source patch differs from build receipt')
+    if component.get('local_dash_build') != dash:
+        raise RuntimeError('DASH build provenance differs from license manifest')
+    record = next(x for x in component['dylibs'] if x['name'] == binary.name)
+    if record.get('packaged_sha256') != actual:
+        raise RuntimeError('DASH binary hash differs from license manifest')
+
+
+def verify_dash_bundle(bundle):
+    """Verify a build intermediate; this does not qualify a distributable runtime."""
+    bundle = Path(bundle)
+    binary = bundle / 'Contents/Frameworks/libavformat.63.dylib'
+    info = capabilities(binary)
+    require_capabilities(info)
+    actual = digest(binary)
+    _verify_dash_receipt(bundle, binary, actual, _ffmpeg_component(bundle))
+    return {'libavformat_sha256': actual, **info}
+
+
 def verify_bundle(bundle):
     bundle = Path(bundle)
     binary = bundle / 'Contents/Frameworks/libavformat.63.dylib'
@@ -70,33 +111,14 @@ def verify_bundle(bundle):
     actual = digest(binary)
     if recipe.get('binaries', {}).get(binary.name) != actual:
         raise RuntimeError('Playback runtime binary differs from Dolby build receipt')
-    component = next(c for c in json.loads((bundle / 'Contents/Resources/ThirdPartyLicenses/libmpv-runtime.json').read_text())['components']
-                     if c['formula'] == 'ffmpeg')
+    component = _ffmpeg_component(bundle)
     receipt = bundle / 'Contents/Resources/dash-runtime-build.json'
     if receipt.exists() or recipe.get('dashRuntimeBuildSHA256') or component.get('local_dash_build'):
         if not receipt.is_file():
             raise RuntimeError('DASH build receipt is missing')
-        dash = json.loads(receipt.read_text())
         if recipe.get('dashRuntimeBuildSHA256') != digest(receipt):
             raise RuntimeError('DASH receipt differs from Dolby build provenance')
-        if dash.get('packaged_libavformat_sha256') != actual:
-            raise RuntimeError('Playback runtime binary differs from DASH build receipt')
-        for patch in dash.get('patches', []):
-            relative = Path(patch.get('path', ''))
-            root = bundle/'Contents/Resources/ThirdPartyLicenses/libmpv/ffmpeg'
-            expected = root/patch.get('name', '')
-            path = bundle/relative
-            if relative.is_absolute() or '..' in relative.parts or path != expected:
-                raise RuntimeError('DASH source patch path is invalid')
-            if not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
-                raise RuntimeError('DASH source patch is missing')
-            if digest(path) != patch.get('sha256'):
-                raise RuntimeError('DASH source patch differs from build receipt')
-        if component.get('local_dash_build') != dash:
-            raise RuntimeError('DASH build provenance differs from license manifest')
-        record = next(x for x in component['dylibs'] if x['name'] == binary.name)
-        if record.get('packaged_sha256') != actual:
-            raise RuntimeError('DASH binary hash differs from license manifest')
+        _verify_dash_receipt(bundle, binary, actual, component)
     return {'libavformat_sha256': actual, **info}
 
 

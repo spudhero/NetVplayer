@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
-from verify_playback_runtime import capabilities, require_capabilities, verify_bundle
+from verify_playback_runtime import capabilities, require_capabilities, verify_bundle, verify_dash_bundle
 
 SOURCE_SHA = 'cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635'
 
@@ -46,6 +46,22 @@ def probe(args):
         print(module['cflags'])
     if any(a.startswith('--libs') for a in args):
         print(module['libs'])
+
+def finalize_provenance(baseline, destination):
+    """Preserve an existing Dolby recipe, or verify the pre-Dolby intermediate."""
+    source = baseline/'Contents/Resources/dolby-runtime-build.json'
+    if not source.exists():
+        verify_dash_bundle(destination)
+        return
+    binary = destination/'Contents/Frameworks/libavformat.63.dylib'
+    resources = destination/'Contents/Resources'
+    dolby = json.loads(source.read_text())
+    dolby['binaries'][binary.name] = sha(binary)
+    dolby['deployment'][binary.name] = ['14.0']
+    dolby['dashRuntimeBuildSHA256'] = sha(resources/'dash-runtime-build.json')
+    (resources/'dolby-runtime-build.json').write_text(json.dumps(dolby,indent=2)+'\n')
+    verify_bundle(destination)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -110,7 +126,6 @@ def main():
     resources = args.output/'Contents/Resources'
     resources.mkdir()
     shutil.copytree(args.baseline_app/'Contents/Resources/ThirdPartyLicenses', resources/'ThirdPartyLicenses')
-    shutil.copy2(args.baseline_app/'Contents/Resources/dolby-runtime-build.json', resources/'dolby-runtime-build.json')
     target = framework/'libavformat.63.dylib'
     old_sha = sha(target)
     target.chmod(0o755)
@@ -152,15 +167,9 @@ def main():
     license_path.write_text(json.dumps(license_data,indent=2)+'\n')
     with (resources/'ThirdPartyLicenses/libmpv-runtime.md').open('a') as f:
         f.write('\nFFmpeg 9.0.1 libavformat rebuilt from the pinned source archive with system libxml2 for DASH; baseline codec libraries retained. Local DASH patch preserves track selection across EOF and resets exhausted representations on seek. See dash-runtime-build.json for hashes, flags and capabilities.\n')
-    # The normal packager verifies this receipt too. A DASH binary cannot be
-    # copied over a base bundle while retaining its obsolete binary hash.
-    dolby_path = resources/'dolby-runtime-build.json'
-    dolby = json.loads(dolby_path.read_text())
-    dolby['binaries'][target.name] = sha(target)
-    dolby['deployment'][target.name] = ['14.0']
-    dolby['dashRuntimeBuildSHA256'] = sha(resources/'dash-runtime-build.json')
-    dolby_path.write_text(json.dumps(dolby,indent=2)+'\n')
-    verify_bundle(args.output)
+    # A stock licensed base precedes the Dolby build. Do not invent its future
+    # receipt; the final Dolby assembler writes and verifies that provenance.
+    finalize_provenance(args.baseline_app, args.output)
     print(json.dumps(receipt,indent=2))
 
 if __name__ == '__main__':

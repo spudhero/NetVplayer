@@ -19,7 +19,7 @@ import subprocess
 import tarfile
 import urllib.request
 import build_truehd_objects
-from verify_playback_runtime import capabilities, require_capabilities, verify_bundle
+from verify_playback_runtime import capabilities, require_capabilities, verify_bundle, verify_dash_bundle
 
 MPV_COMMIT = "99b4c12cccb4d8d3f72b41944cb6c640e2156650"
 PLACEBO_COMMIT = "0df80ae5229e8e520c0fa4e3d666098a3ffa1cbc"
@@ -244,7 +244,10 @@ def prepare_dash_runtime(base, work, openssl):
     destination = work / 'dash-runtime.app'
     builder = Path(__file__).with_name('build_dash_runtime.py')
     if destination.exists():
-        verify_bundle(destination)
+        if (destination / 'Contents/Resources/dolby-runtime-build.json').exists():
+            verify_bundle(destination)
+        else:
+            verify_dash_bundle(destination)
         receipt = json.loads((destination / 'Contents/Resources/dash-runtime-build.json').read_text())
         if (receipt['recipe_sha256'] != digest(builder) or
                 receipt['original_libavformat_sha256'] != digest(base / 'Contents/Frameworks/libavformat.63.dylib')):

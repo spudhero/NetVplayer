@@ -4,7 +4,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// Requires the owning mpv CGL context current for allocation/render/release.
 /// Product mode uses two bounded slots; AV-03 retains synchronous reference mode.
 @interface NVMPVHDRSurface : NSView
-- (nullable instancetype)initWithFrame:(NSRect)frame;
+/// Metal allocation can fail; keep this separate from NSView's nonnull initializer.
+- (nullable instancetype)initWithHDRFrame:(NSRect)frame NS_SWIFT_NAME(init(hdrFrame:));
 @property(nonatomic, readonly) int framebuffer;
 @property(nonatomic, readonly) NSDictionary<NSString *, id> *facts;
 @property(nonatomic) BOOL asynchronousPresentation;

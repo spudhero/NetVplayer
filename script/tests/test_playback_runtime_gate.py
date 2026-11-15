@@ -9,10 +9,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPT))
 import verify_playback_runtime as gate
+import build_dash_runtime as dash_builder
+import build_dolby_runtime as dolby_builder
 
 GOOD = {'avformat_major': 63, 'demuxers': ['dash', 'hls', 'mov,mp4,m4a'],
         'protocols': ['file', 'http', 'https', 'tcp', 'tls']}
@@ -101,6 +104,71 @@ const char *avio_enum_protocols(void **opaque, int output) {
     def test_native_metadata_query_and_consistent_receipts(self):
         result = gate.verify_bundle(self.bundle)
         self.assertEqual(result['demuxers'], GOOD['demuxers'])
+
+    def test_pre_dolby_intermediate_does_not_qualify_for_packaging(self):
+        (self.resources/'dolby-runtime-build.json').unlink()
+        dash_builder.finalize_provenance(self.bundle, self.bundle)
+        self.assertEqual(gate.verify_dash_bundle(self.bundle)['demuxers'], GOOD['demuxers'])
+        self.assertFalse((self.resources/'dolby-runtime-build.json').exists())
+        with self.assertRaises(FileNotFoundError):
+            gate.verify_bundle(self.bundle)
+        target = Path(self.output.name)/'unqualified.app'
+        result = subprocess.run(['bash', str(SCRIPT/'vendor_libmpv.sh'), str(target), '/unused'],
+            env=dict(os.environ, NETVPLAYER_LIBMPV_RUNTIME_BUNDLE=str(self.bundle)),
+            capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any((target/'Contents/Frameworks').iterdir()))
+
+    def test_pre_dolby_intermediate_keeps_patch_and_manifest_checks(self):
+        patch = self.add_source_patch()
+        (self.resources/'dolby-runtime-build.json').unlink()
+        patch.write_text('Changed source\n')
+        with self.assertRaisesRegex(RuntimeError, 'source patch differs'):
+            dash_builder.finalize_provenance(self.bundle, self.bundle)
+        patch.write_text('Synthetic source patch\n')
+        self.manifest['components'][0]['dylibs'][0]['packaged_sha256'] = '0'*64
+        self.write('ThirdPartyLicenses/libmpv-runtime.json', self.manifest)
+        with self.assertRaisesRegex(RuntimeError, 'license manifest'):
+            gate.verify_dash_bundle(self.bundle)
+
+    def test_dash_rebuild_updates_existing_dolby_provenance_without_mutating_baseline(self):
+        self.dolby['deployment'] = {self.binary.name: ['14.0']}
+        self.write('dolby-runtime-build.json', self.dolby)
+        original = (self.resources/'dolby-runtime-build.json').read_bytes()
+        target = Path(self.output.name)/'rebuilt.app'
+        shutil.copytree(self.bundle, target)
+        receipt = {**self.receipt, 'rebuild': True}
+        resources = target/'Contents/Resources'
+        (resources/'dash-runtime-build.json').write_text(json.dumps(receipt))
+        manifest = json.loads(json.dumps(self.manifest))
+        manifest['components'][0]['local_dash_build'] = receipt
+        (resources/'ThirdPartyLicenses/libmpv-runtime.json').write_text(json.dumps(manifest))
+        dash_builder.finalize_provenance(self.bundle, target)
+        gate.verify_bundle(target)
+        self.assertEqual((self.resources/'dolby-runtime-build.json').read_bytes(), original)
+        self.assertNotEqual((resources/'dolby-runtime-build.json').read_bytes(), original)
+
+    def test_cached_pre_dolby_intermediate_is_rechecked(self):
+        work = Path(self.output.name)/'work'
+        destination = work/'dash-runtime.app'
+        shutil.copytree(self.bundle, destination)
+        resources = destination/'Contents/Resources'
+        (resources/'dolby-runtime-build.json').unlink()
+        receipt = {**self.receipt, 'recipe_sha256': gate.digest(SCRIPT/'build_dash_runtime.py'),
+                   'original_libavformat_sha256': gate.digest(self.binary)}
+        (resources/'dash-runtime-build.json').write_text(json.dumps(receipt))
+        manifest = json.loads(json.dumps(self.manifest))
+        manifest['components'][0]['local_dash_build'] = receipt
+        (resources/'ThirdPartyLicenses/libmpv-runtime.json').write_text(json.dumps(manifest))
+        stock = {**GOOD, 'demuxers': ['hls', 'mov,mp4,m4a']}
+        with mock.patch.object(dolby_builder, 'capabilities', return_value=stock):
+            self.assertEqual(dolby_builder.prepare_dash_runtime(self.bundle, work, Path('/unused')), destination)
+            receipt['original_libavformat_sha256'] = '0'*64
+            (resources/'dash-runtime-build.json').write_text(json.dumps(receipt))
+            manifest['components'][0]['local_dash_build'] = receipt
+            (resources/'ThirdPartyLicenses/libmpv-runtime.json').write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(RuntimeError, 'input changed'):
+                dolby_builder.prepare_dash_runtime(self.bundle, work, Path('/unused'))
 
     def add_source_patch(self):
         path = self.licenses/'libmpv/ffmpeg/fix.patch'

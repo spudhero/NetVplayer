@@ -40,7 +40,7 @@
 @synthesize asynchronousPresentation = _asynchronousPresentation;
 @synthesize maximumLinearComponent = _maximumLinearComponent;
 
-- (instancetype)initWithFrame:(NSRect)frame {
+- (instancetype)initWithHDRFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (!self) return nil;
     _device = MTLCreateSystemDefaultDevice();

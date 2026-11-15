@@ -84,6 +84,15 @@ python3 script/build_dash_runtime.py \
 python3 script/verify_playback_runtime.py --bundle /path/to/NEW-dash-runtime.app
 ```
 
+The final verification command above requires an already qualified Dolby base.
+When the complete Dolby recipe starts from a licensed stock runtime, its earlier
+DASH step verifies the new binary, source patches and FFmpeg license record as
+a build intermediate. It does not invent a Dolby receipt. The later Dolby
+assembler creates the linked receipt and runs the full shipping gate; an
+intermediate alone is still rejected by the application packager. Cached DASH
+intermediates must also match the builder, original binary and remaining base
+dependencies before reuse.
+
 An already qualified Dolby base can also use the empty default output path
 `NetVplayer/.build/dolby-runtime/runtime.app` for this rebuild. The resulting Dolby
 and DASH receipts are retained there; the normal application build then needs no

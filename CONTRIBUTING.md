@@ -126,3 +126,7 @@ opt-out, and the sniffer's bounded fire-and-forget JavaScript poll. Those calls
 retain their current migration, privacy, and session-lifetime behavior.
 Keep task completion awaits when discarding their result; spell the discard as
 `_ = await task.value` so cleanup retains its ordering.
+Keep a failable Metal surface initializer separate from NSView's nonnull
+`initWithFrame:` contract; callers must retain the nil fallback. Remove `try`
+from nonthrowing actor calls even inside Testing macros, whose diagnostics can
+otherwise appear only at the macro expansion rather than the source call.
