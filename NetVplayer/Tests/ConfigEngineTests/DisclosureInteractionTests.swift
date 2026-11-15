@@ -171,24 +171,27 @@ struct DisclosureInteractionTests {
     func click(_ point: CGPoint) async throws {
         let local = CGPoint(x: point.x, y: view.isFlipped ? point.y : view.bounds.height - point.y)
         let location = view.convert(local, to: nil)
+        var target = view.hitTest(view.convert(local, to: view.superview))
+        while let candidate = target {
+            if let control = candidate as? NSControl,
+               control is NSButton || control.cell is NSButtonCell {
+                // Preserve coordinate hit-testing, then activate the native
+                // control without entering an interactive mouse tracking loop.
+                control.performClick(nil)
+                try await settle()
+                return
+            }
+            if candidate === view { break }
+            target = candidate.superview
+        }
         func event(_ type: NSEvent.EventType) throws -> NSEvent {
             try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                 context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
         }
-        let down = try event(.leftMouseDown)
-        let up = try event(.leftMouseUp)
-        // NSButton may synchronously track mouseDown until it dequeues mouseUp.
-        // Queue the release before entering that nested event loop.
-        NSApplication.shared.postEvent(up, atStart: true)
-        window.sendEvent(down)
-        // Gesture-based views can return without a tracking loop. Deliver the
-        // release ourselves only if the button did not already consume it.
-        if let pending = NSApplication.shared.nextEvent(matching: .leftMouseUp,
-            until: Date(), inMode: .default, dequeue: true) {
-            if pending === up { window.sendEvent(pending) }
-            else { NSApplication.shared.postEvent(pending, atStart: true) }
-        }
+        // SwiftUI gesture surfaces do not run NSCell's tracking loop.
+        window.sendEvent(try event(.leftMouseDown))
+        window.sendEvent(try event(.leftMouseUp))
         try await settle()
     }
     func capture(_ url: URL) throws {

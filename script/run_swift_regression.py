@@ -5,6 +5,7 @@ import argparse
 import os
 from pathlib import Path
 import selectors
+import re
 import signal
 import subprocess
 import sys
@@ -34,6 +35,8 @@ def sample_children(root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--idle-timeout", type=float, default=300)
+    parser.add_argument("--require-summary", action="store_true",
+                        help="Reject success unless every Swift Testing run completed")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -43,17 +46,36 @@ def main():
     selector = selectors.DefaultSelector()
     selector.register(child.stdout, selectors.EVENT_READ)
     last_output = time.monotonic()
+    pending = b""
+    started = completed = 0
+
+    def observe(line):
+        nonlocal started, completed
+        line = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', line)
+        started += int(b'Test run started.' in line)
+        completed += int(re.search(rb'Test run with [0-9,]+ tests? passed', line) is not None)
     try:
         while True:
             for key, _ in selector.select(timeout=min(1, args.idle_timeout)):
                 data = os.read(key.fd, 65536)
                 if not data:
                     selector.unregister(key.fd)
+                    if pending:
+                        observe(pending)
+                        pending = b""
                     continue
                 sys.stdout.buffer.write(data)
                 sys.stdout.buffer.flush()
                 last_output = time.monotonic()
+                pending += data
+                lines = pending.split(b"\n")
+                pending = lines.pop()
+                for line in lines:
+                    observe(line)
             if child.poll() is not None and not selector.get_map():
+                if child.returncode == 0 and args.require_summary and (started == 0 or completed != started):
+                    print(f"Swift Testing did not finish: {started} runs started, {completed} completed.", flush=True)
+                    return 125
                 return child.returncode
             if time.monotonic() - last_output >= args.idle_timeout:
                 print("\nRegression stalled: collecting owned test process stacks.", flush=True)

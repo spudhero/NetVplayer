@@ -60,6 +60,7 @@ on:
       - "script/test_prepare_embedded_quickjs_runtime.py"
       - "script/test_provider_public_shell.py"
       - "script/run_swift_regression.py"
+      - "script/test_run_swift_regression.py"
       - "script/test_provider_*.py"
       - "script/validate_provider_*.py"
       - "script/validate_*_runtime.py"
@@ -143,9 +144,12 @@ jobs:
       - name: Run public Provider gate
         run: python3 script/test_provider_public_shell.py --gson-jar "$NETVPLAYER_GSON_JAR"
 
+      - name: Verify the CI regression runner
+        run: python3 -m unittest script/test_run_swift_regression.py
+
       - name: Run serial SwiftPM regression
         run: >-
-          python3 script/run_swift_regression.py --
+          python3 script/run_swift_regression.py --require-summary --
           swift test --package-path NetVplayer --disable-sandbox --no-parallel
 
       - name: Verify signed sandbox home isolation

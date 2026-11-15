@@ -40,6 +40,8 @@ integration as disabled and still runs the audit ownership and status contracts.
 CI runs the serial suite through `script/run_swift_regression.py`; five minutes
 without output collects owned test process stacks and fails the run, preserving
 the evidence needed to diagnose a stall.
+It also requires a completion summary for every Swift Testing run: an early zero
+exit is a failed gate, even if earlier tests and XCTest suites passed.
 
 The signed sandbox home-isolation integration requires the real macOS account
 home: sandbox home-relative entitlements cannot use a temporary `HOME`. Run it
