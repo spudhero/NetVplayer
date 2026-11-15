@@ -171,11 +171,23 @@ struct DisclosureInteractionTests {
     func click(_ point: CGPoint) async throws {
         let local = CGPoint(x: point.x, y: view.isFlipped ? point.y : view.bounds.height - point.y)
         let location = view.convert(local, to: nil)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                 context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-            window.sendEvent(event)
+        }
+        let down = try event(.leftMouseDown)
+        let up = try event(.leftMouseUp)
+        // NSButton may synchronously track mouseDown until it dequeues mouseUp.
+        // Queue the release before entering that nested event loop.
+        NSApplication.shared.postEvent(up, atStart: true)
+        window.sendEvent(down)
+        // Gesture-based views can return without a tracking loop. Deliver the
+        // release ourselves only if the button did not already consume it.
+        if let pending = NSApplication.shared.nextEvent(matching: .leftMouseUp,
+            until: Date(), inMode: .default, dequeue: true) {
+            if pending === up { window.sendEvent(pending) }
+            else { NSApplication.shared.postEvent(pending, atStart: true) }
         }
         try await settle()
     }

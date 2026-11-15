@@ -75,6 +75,10 @@ same verified assets manually from `main`, with the application version as its
 repository owner must have created an empty unpublished draft for that version.
 Preparation only uploads to that draft; it creates no Git tag and publishes no
 release. Record the draft's source commit and asset digests before approval.
+When the official tag points to that exact commit, the tag workflow compares the
+successful preparation run's original artifact with every draft asset and reuses
+those bytes. It fails on a changed asset instead of rebuilding a reviewed package.
+The original workflow artifact is retained for 14 days.
 
 Public releases also require the project's TMDB application credential. Follow
 [TMDB setup](TMDB_SETUP.md) to apply and configure the repository Secret. The

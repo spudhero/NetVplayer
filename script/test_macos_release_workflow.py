@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import plistlib
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -46,6 +47,10 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("git push ", self.workflow)
         self.assertNotIn("--draft=false", self.workflow)
         self.assertNotIn("GITHUB_REF_NAME", self.workflow)
+        self.assertIn("--commit \"$GITHUB_SHA\" --event workflow_dispatch", self.workflow)
+        self.assertIn("if: needs.prepared-draft.outputs.reuse != 'true'", self.workflow)
+        self.assertIn("Prepared asset bytes differ", self.workflow)
+        self.assertIn('NetVplayer-${{ env.RELEASE_VERSION }}-release-assets', self.workflow)
 
     def test_draft_staging_executes_only_the_authorized_write(self) -> None:
         stage = self.workflow.split("- name: Stage verified GitHub Release draft", 1)[1]
@@ -90,6 +95,30 @@ fi
                         if write == "release create":
                             self.assertIn("--draft", writes[0])
                             self.assertIn("--verify-tag", writes[0])
+
+    def test_prepared_asset_comparison_rejects_changed_or_missing_bytes(self) -> None:
+        marker = 'python3 - "$original" "$draft" "$RELEASE_VERSION" <<\'PY\'\n'
+        script = textwrap.dedent(self.workflow.split(marker, 1)[1].split("          PY\n", 1)[0])
+        with tempfile.TemporaryDirectory() as folder:
+            original, draft = Path(folder) / "original", Path(folder) / "draft"
+            original.mkdir()
+            draft.mkdir()
+            names = ["NetVplayer-2.0.0-macos-arm64.zip", "appcast.xml",
+                     "NetVplayer.build-artifacts.json", "NetVplayer.cdx.json",
+                     "NetVplayer.spdx.json", "SHA256SUMS.txt"]
+            for name in names:
+                (original / name).write_bytes(name.encode())
+                (draft / name).write_bytes(name.encode())
+            command = [sys.executable, "-c", script, str(original), str(draft), "2.0.0"]
+            self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            (draft / "appcast.xml").write_bytes(b"changed")
+            changed = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(changed.returncode, 0)
+            self.assertIn("Prepared asset bytes differ", changed.stderr)
+            (draft / "appcast.xml").unlink()
+            missing = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("Prepared asset set differs", missing.stderr)
 
     def test_release_verifies_pinned_libmpv_on_the_oldest_supported_macos(self) -> None:
         required = (

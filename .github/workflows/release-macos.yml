@@ -23,7 +23,85 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepared-draft:
+    runs-on: macos-14
+    outputs:
+      reuse: ${{ steps.prepared.outputs.reuse }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify an existing prepared draft without rebuilding
+        id: prepared
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          prepared_run="$(gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow release-macos.yml --commit "$GITHUB_SHA" --event workflow_dispatch \
+            --limit 20 --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion == "success")][0].databaseId // ""')"
+          if [[ -z "$prepared_run" ]]; then
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 script/validate_macos_release_version.py --repo . --tag "$RELEASE_VERSION" \
+            --info-plist NetVplayer/Sources/NetVplayerApp/Info.plist
+          python3 script/validate_publication_identity.py --history-only --owner spudhero
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          python3 script/audit_provider_public_release.py --repo .
+          draft_state="$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,author --jq '[.isDraft, .author.login] | @tsv')"
+          [[ "$draft_state" == $'true\t'"$GITHUB_REPOSITORY_OWNER" ]]
+          python3 - <<'PY'
+          import shutil
+          if shutil.disk_usage('.').free < 8_000_000_000:
+              raise SystemExit('Draft verification requires at least 8 GB available')
+          PY
+          original="$RUNNER_TEMP/prepared-original"
+          draft="$RUNNER_TEMP/prepared-draft"
+          gh run download "$prepared_run" --repo "$GITHUB_REPOSITORY" \
+            --name "NetVplayer-${RELEASE_VERSION}-release-assets" --dir "$original"
+          gh release download "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --dir "$draft"
+          (cd "$original" && shasum -a 256 --check SHA256SUMS.txt)
+          (cd "$draft" && shasum -a 256 --check SHA256SUMS.txt)
+          python3 - "$original" "$draft" "$RELEASE_VERSION" <<'PY'
+          import hashlib
+          from pathlib import Path
+          import sys
+          original, draft = map(Path, sys.argv[1:3])
+          expected = {f'NetVplayer-{sys.argv[3]}-macos-arm64.zip', 'appcast.xml',
+                      'NetVplayer.build-artifacts.json', 'NetVplayer.cdx.json',
+                      'NetVplayer.spdx.json', 'SHA256SUMS.txt'}
+          for folder in (original, draft):
+              if {p.name for p in folder.iterdir()} != expected:
+                  raise SystemExit('Prepared asset set differs')
+          for name in sorted(expected):
+              def digest(path):
+                  with path.open('rb') as source:
+                      return hashlib.file_digest(source, 'sha256').hexdigest()
+              if digest(original / name) != digest(draft / name):
+                  raise SystemExit(f'Prepared asset bytes differ: {name}')
+          print('Prepared draft matches the successful run for this exact source commit.')
+          PY
+          echo "reuse=true" >> "$GITHUB_OUTPUT"
+
   libmpv-runtime:
+    needs: prepared-draft
+    if: needs.prepared-draft.outputs.reuse != 'true'
     runs-on: macos-14
     steps:
       - name: Check out release source
@@ -350,7 +428,7 @@ jobs:
       - name: Upload verified workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: NetVplayer-${{ github.ref_name }}-release-assets
+          name: NetVplayer-${{ env.RELEASE_VERSION }}-release-assets
           path: ${{ steps.package.outputs.asset-output }}
           if-no-files-found: error
           retention-days: 14
