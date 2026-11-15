@@ -69,6 +69,13 @@ the tag triggers the release workflow, which creates a draft only after the pack
 and re-extracted application passes architecture, version, signature, SBOM,
 checksum, and source-free checks. Publishing that reviewed draft is a separate step.
 
+Before fixing the official tag, the `Release macOS app` workflow can prepare the
+same verified assets manually from `main`, with the application version as its
+`version` input. The exact commit must already pass the public gate, and the
+repository owner must have created an empty unpublished draft for that version.
+Preparation only uploads to that draft; it creates no Git tag and publishes no
+release. Record the draft's source commit and asset digests before approval.
+
 Public releases also require the project's TMDB application credential. Follow
 [TMDB setup](TMDB_SETUP.md) to apply and configure the repository Secret. The
 release workflow verifies online movie/TV metadata before packaging and checks
