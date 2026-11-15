@@ -42,7 +42,12 @@ def main():
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if args.idle_timeout <= 0 or not command:
         parser.error("a positive idle timeout and command are required")
-    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    environment = dict(os.environ)
+    if sys.platform == "darwin":
+        # Foundation otherwise buffers stdout in a pipe, hiding legitimate progress.
+        environment["NSUnbufferedIO"] = "YES"
+    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             start_new_session=True, env=environment)
     selector = selectors.DefaultSelector()
     selector.register(child.stdout, selectors.EVENT_READ)
     last_output = time.monotonic()

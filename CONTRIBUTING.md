@@ -109,3 +109,7 @@ verified exit. Use `stopOwnedFixtureProcess` for these fixtures; unbounded
 `Process.waitUntilExit()` can pump a nested run loop and stall the main actor.
 The real-process contracts cover graceful exit, ignored SIGTERM, isolation of
 a separate child and repeated cleanup.
+
+On macOS the regression runner sets `NSUnbufferedIO=YES` for its child so
+Foundation stdout reaches the idle watchdog promptly. The 300-second idle
+deadline and the requirement for every started run's completion remain intact.

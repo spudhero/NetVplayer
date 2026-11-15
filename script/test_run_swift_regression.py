@@ -1,7 +1,9 @@
 from pathlib import Path
+import os
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 
 RUNNER = Path(__file__).with_name("run_swift_regression.py")
@@ -14,6 +16,14 @@ class SwiftRegressionRunnerTests(unittest.TestCase):
             command.append("--require-summary")
         return subprocess.run(command + ["--", sys.executable, "-c", code],
                               capture_output=True, text=True, timeout=15)
+
+    def test_foundation_progress_is_unbuffered_without_losing_inherited_environment(self):
+        with patch.dict(os.environ, {"NSUnbufferedIO": "NO", "NETVPLAYER_RUNNER_SENTINEL": "retained"}):
+            result = self.run_child('import os; print(os.environ["NSUnbufferedIO"]); '
+                                    'print(os.environ["NETVPLAYER_RUNNER_SENTINEL"])', summary=False)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        expected = "YES" if sys.platform == "darwin" else "NO"
+        self.assertEqual(result.stdout.splitlines(), [expected, "retained"])
 
     def test_non_swift_commands_keep_their_exit_status(self):
         self.assertEqual(self.run_child('print("normal")', summary=False).returncode, 0)
