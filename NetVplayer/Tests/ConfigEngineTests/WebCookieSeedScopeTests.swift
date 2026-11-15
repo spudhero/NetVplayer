@@ -161,15 +161,15 @@ class SeedBrowser: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         result = message.body as? String
     }
-    func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+    func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust,
               let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate], let leaf = chain.first,
-              SecCertificateCopyData(leaf) as Data == certificate else { completionHandler(.cancelAuthenticationChallenge,nil);return }
+              SecCertificateCopyData(leaf) as Data == certificate else { return (.cancelAuthenticationChallenge, nil) }
         SecTrustSetAnchorCertificates(trust, [leaf] as CFArray)
         SecTrustSetAnchorCertificatesOnly(trust, true)
-        guard SecTrustEvaluateWithError(trust, nil) else { completionHandler(.cancelAuthenticationChallenge,nil);return }
-        completionHandler(.useCredential,URLCredential(trust: trust))
+        guard SecTrustEvaluateWithError(trust, nil) else { return (.cancelAuthenticationChallenge, nil) }
+        return (.useCredential, URLCredential(trust: trust))
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) { result = String(describing: error) }
 }
