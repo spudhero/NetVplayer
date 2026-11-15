@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import os
 import plistlib
 import subprocess
@@ -53,6 +54,48 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('NetVplayer-${{ env.RELEASE_VERSION }}-release-assets', self.workflow)
         self.assertIn("verify_prepared:", self.workflow)
         self.assertIn("verification requires a successful original preparation", self.workflow)
+
+    def test_public_gate_wait_requires_the_same_commit_to_finish_successfully(self) -> None:
+        start = self.workflow.index("          public_gate_deadline=")
+        end = self.workflow.index('          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then', start)
+        shell = "set -euo pipefail\n" + textwrap.dedent(self.workflow[start:end])
+        fake_gh = '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+record = pathlib.Path(os.environ["CASE_RECORD"])
+calls = record.read_text().splitlines() if record.exists() else []
+with record.open("a") as stream:
+    stream.write(json.dumps(sys.argv[1:]) + "\\n")
+mode = os.environ["CASE_MODE"]
+if mode == "wait-success" and not calls:
+    print("in_progress\\t")
+elif mode in ("success", "wait-success"):
+    print("completed\\tsuccess")
+elif mode == "timeout":
+    print("queued\\t")
+elif mode == "missing":
+    print("")
+else:
+    print("completed\\t" + mode)
+'''
+        for mode in ("success", "wait-success", "failure", "cancelled", "missing", "timeout"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for name, source in (("gh", fake_gh), ("sleep", "#!/bin/sh\nexit 0\n")):
+                    path = root / name
+                    path.write_text(source)
+                    path.chmod(0o755)
+                record = root / "calls.jsonl"
+                env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                           CASE_MODE=mode, CASE_RECORD=str(record), GITHUB_SHA="fixture-sha",
+                           GITHUB_REPOSITORY="spudhero/NetVplayer")
+                command = shell.replace("SECONDS + 1800", "SECONDS - 1") if mode == "timeout" else shell
+                result = subprocess.run(["bash", "-c", command], env=env, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode == 0, mode in ("success", "wait-success"), result.stderr)
+                calls = [json.loads(line) for line in record.read_text().splitlines()]
+                self.assertEqual(len(calls), 2 if mode == "wait-success" else 1)
+                for arguments in calls:
+                    self.assertEqual(arguments[arguments.index("--commit") + 1], "fixture-sha")
+                    self.assertEqual(arguments[arguments.index("--workflow") + 1], "provider-public-shell.yml")
 
     def test_draft_staging_executes_only_the_authorized_write(self) -> None:
         stage = self.workflow.split("- name: Stage verified GitHub Release draft", 1)[1]
@@ -149,10 +192,10 @@ else:
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, expected)
 
-    def test_release_verifies_pinned_libmpv_on_the_oldest_supported_macos(self) -> None:
+    def test_release_verifies_pinned_libmpv_on_supported_runner_and_checks_macos14_minimum(self) -> None:
         required = (
             "libmpv-runtime:",
-            "runs-on: macos-14",
+            "runs-on: macos-15",
             "gh release download 1.1.2 --repo spudhero/NetVplayer",
             "e03ebba79d6b396f837eca1f93462be69f99f0a3ef58d1f2d0b5ea1592d669fb",
             "shasum -a 256 --check",
@@ -167,6 +210,7 @@ else:
             self.assertIn(fragment, self.workflow)
         self.assertIn("needs: libmpv-runtime", self.workflow)
         self.assertNotIn("runs-on: macos-14-arm64", self.workflow)
+        self.assertNotIn("runs-on: macos-14\n", self.workflow)
         self.assertEqual(self.workflow.count("run: brew install mpv"), 1)
         self.assertNotIn("script/vendor_libmpv.sh", self.workflow)
 

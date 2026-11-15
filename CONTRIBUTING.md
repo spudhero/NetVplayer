@@ -73,8 +73,10 @@ checksum, and source-free checks. Publishing that reviewed draft is a separate s
 
 Before fixing the official tag, the `Release macOS app` workflow can prepare the
 same verified assets manually from `main`, with the application version as its
-`version` input. The exact commit must already pass the public gate, and the
+`version` input. The exact commit must pass the public gate before packaging, and the
 repository owner must have created an empty unpublished draft for that version.
+Preparation may wait up to 30 minutes for an active gate on that same commit;
+a failed, cancelled, missing or overdue gate prevents packaging.
 Preparation only uploads to that draft; it creates no Git tag and publishes no
 release. Record the draft's source commit and asset digests before approval.
 When the official tag points to that exact commit, the tag workflow compares the
@@ -84,6 +86,11 @@ The original workflow artifact is retained for 14 days.
 Before creating the tag, run the same workflow with `verify_prepared=true` to
 exercise that comparison. This mode requires a successful original preparation
 and skips all build and upload jobs after matching the draft.
+
+Preparation and pinned-runtime transfer use the supported `macos-15` runner.
+The runtime and extracted application retain independent Mach-O checks for a
+maximum deployment target of macOS 14.0; these checks do not claim a macOS 14
+hardware acceptance run.
 
 Public releases also require the project's TMDB application credential. Follow
 [TMDB setup](TMDB_SETUP.md) to apply and configure the repository Secret. The

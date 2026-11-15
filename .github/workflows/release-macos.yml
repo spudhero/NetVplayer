@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   prepared-draft:
-    runs-on: macos-14
+    runs-on: macos-15
     outputs:
       reuse: ${{ steps.prepared.outputs.reuse }}
     steps:
@@ -128,7 +128,7 @@ jobs:
   libmpv-runtime:
     needs: prepared-draft
     if: needs.prepared-draft.outputs.reuse != 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Check out release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -252,17 +252,27 @@ jobs:
             echo "error: release tag must point to a commit on main" >&2
             exit 1
           fi
-          public_gate_conclusion="$(gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow provider-public-shell.yml \
-            --commit "$GITHUB_SHA" \
-            --limit 1 \
-            --json conclusion \
-            --jq '.[0].conclusion // ""')"
-          if [[ "$public_gate_conclusion" != "success" ]]; then
+          public_gate_deadline=$((SECONDS + 1800))
+          while true; do
+            public_gate_record="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow provider-public-shell.yml \
+              --commit "$GITHUB_SHA" \
+              --limit 1 \
+              --json status,conclusion \
+              --jq '.[0] | [.status, .conclusion] | @tsv')"
+            read -r public_gate_status public_gate_conclusion <<< "$public_gate_record"
+            if [[ "$public_gate_status" == "completed" && "$public_gate_conclusion" == "success" ]]; then
+              break
+            fi
+            if [[ "$public_gate_status" =~ ^(queued|in_progress|pending|requested|waiting)$ && "$SECONDS" -lt "$public_gate_deadline" ]]; then
+              echo "Waiting for the same-commit Provider public shell: $public_gate_status"
+              sleep 30
+              continue
+            fi
             echo "error: Provider public shell must pass for $GITHUB_SHA before release" >&2
             exit 1
-          fi
+          done
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             draft_state="$(gh release view "$release_version" --repo "$GITHUB_REPOSITORY" \
               --json isDraft,author,assets --jq '[.isDraft, .author.login, (.assets | length)] | @tsv')"
