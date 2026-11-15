@@ -79,6 +79,9 @@ When the official tag points to that exact commit, the tag workflow compares the
 successful preparation run's original artifact with every draft asset and reuses
 those bytes. It fails on a changed asset instead of rebuilding a reviewed package.
 The original workflow artifact is retained for 14 days.
+Before creating the tag, run the same workflow with `verify_prepared=true` to
+exercise that comparison. This mode requires a successful original preparation
+and skips all build and upload jobs after matching the draft.
 
 Public releases also require the project's TMDB application credential. Follow
 [TMDB setup](TMDB_SETUP.md) to apply and configure the repository Secret. The

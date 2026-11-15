@@ -51,6 +51,8 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("if: needs.prepared-draft.outputs.reuse != 'true'", self.workflow)
         self.assertIn("Prepared asset bytes differ", self.workflow)
         self.assertIn('NetVplayer-${{ env.RELEASE_VERSION }}-release-assets', self.workflow)
+        self.assertIn("verify_prepared:", self.workflow)
+        self.assertIn("verification requires a successful original preparation", self.workflow)
 
     def test_draft_staging_executes_only_the_authorized_write(self) -> None:
         stage = self.workflow.split("- name: Stage verified GitHub Release draft", 1)[1]
@@ -119,6 +121,33 @@ fi
             missing = subprocess.run(command, capture_output=True, text=True)
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn("Prepared asset set differs", missing.stderr)
+
+    def test_prepared_run_selection_skips_validation_runs_without_artifacts(self) -> None:
+        selection = 'prepared_runs=' + self.workflow.split('prepared_runs=', 1)[1].split(
+            '          if [[ -z "$prepared_run"', 1)[0]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            gh = root / "gh"
+            gh.write_text('''#!/usr/bin/env python3
+import os, sys
+if sys.argv[1:3] == ['run', 'list']:
+    print('42\\n41')
+elif sys.argv[1] == 'api':
+    if '/41/artifacts' in sys.argv[2] and os.environ['MOCK_ARTIFACT_PRESENT'] == '1':
+        print('NetVplayer-2.0.0-release-assets')
+else:
+    raise SystemExit(2)
+''')
+            gh.chmod(0o700)
+            for present, expected in [("1", "41"), ("0", "")]:
+                env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
+                       "MOCK_ARTIFACT_PRESENT": present, "GITHUB_SHA": "fixture-commit",
+                       "GITHUB_REPOSITORY": "spudhero/NetVplayer", "RELEASE_VERSION": "2.0.0"}
+                result = subprocess.run(["bash", "-c", 'set -euo pipefail\n' + selection
+                                         + '\nprintf "%s" "$prepared_run"'], env=env,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
 
     def test_release_verifies_pinned_libmpv_on_the_oldest_supported_macos(self) -> None:
         required = (

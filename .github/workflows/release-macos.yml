@@ -7,6 +7,11 @@ on:
         description: "Prepare an unpublished application draft from main"
         required: true
         type: string
+      verify_prepared:
+        description: "Only verify the existing draft against its original successful preparation"
+        required: false
+        default: false
+        type: boolean
   push:
     tags:
       - "[0-9]*.[0-9]*.[0-9]*"
@@ -43,17 +48,38 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFY_PREPARED: ${{ inputs.verify_prepared && '1' || '0' }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" != "push" && "$VERIFY_PREPARED" != "1" ]]; then
             echo "reuse=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          prepared_run="$(gh run list --repo "$GITHUB_REPOSITORY" \
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "error: prepared draft verification must run from main" >&2
+            exit 1
+          fi
+          prepared_runs="$(gh run list --repo "$GITHUB_REPOSITORY" \
             --workflow release-macos.yml --commit "$GITHUB_SHA" --event workflow_dispatch \
             --limit 20 --json databaseId,conclusion \
-            --jq '[.[] | select(.conclusion == "success")][0].databaseId // ""')"
+            --jq '.[] | select(.conclusion == "success") | .databaseId')"
+          prepared_run=""
+          for candidate in $prepared_runs; do
+            names="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts" \
+              --jq '.artifacts[] | select(.expired == false) | .name')"
+            while IFS= read -r name; do
+              if [[ "$name" == "NetVplayer-${RELEASE_VERSION}-release-assets" ]]; then
+                prepared_run="$candidate"
+                break
+              fi
+            done <<< "$names"
+            if [[ -n "$prepared_run" ]]; then break; fi
+          done
           if [[ -z "$prepared_run" ]]; then
+            if [[ "$VERIFY_PREPARED" == "1" || -n "$prepared_runs" ]]; then
+              echo "error: verification requires a successful original preparation" >&2
+              exit 1
+            fi
             echo "reuse=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
