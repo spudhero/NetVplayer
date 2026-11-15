@@ -37,7 +37,8 @@ struct AndroidRuntimeRealComponentAcceptanceTests {
             do { try await operation(); Issue.record("Unexpected component admission: \(name)"); throw URLError(.badServerResponse) }
             catch let error as URLError where error.code == .badServerResponse { throw error }
             catch { try record(name, ["error_type": String(reflecting: type(of: error))]) }
-            try #require(try selection() == before)
+            let after = try selection()
+            try #require(after == before)
         }
 
         // A live parent listener makes EPERM/EACCES distinguish offline denial

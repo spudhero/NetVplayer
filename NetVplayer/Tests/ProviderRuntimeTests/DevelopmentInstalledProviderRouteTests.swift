@@ -132,7 +132,7 @@ import Testing
         let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: android.state, registry: registry, arguments: [])
         try await registration.register(runtime: runtime, sites: [site])
         #expect(await registration.isRegistered(site: site))
-        let selected = try #require(await registry.nativeProvider(for: site) as? DevelopmentAndroidSiteProvider)
+        _ = try #require(await registry.nativeProvider(for: site) as? DevelopmentAndroidSiteProvider)
         await registration.shutdownAll()
     }
 }

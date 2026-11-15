@@ -99,8 +99,8 @@ struct CloudDirectoryClientTests {
             return .init(entries: [], updatedCredential: .cookie(provider: .quark, value: "renewed-\(number)"))
         }
         let first = try fixture.client(listing: listing), second = try fixture.client(listing: listing)
-        async let a = first.connect()
-        async let b = second.connect()
+        async let a: Void = first.connect()
+        async let b: Void = second.connect()
         _ = try await (a, b)
         #expect(await calls.values == ["account-one", "renewed-1"])
         #expect(fixture.preferences.quarkCookie == "renewed-2")

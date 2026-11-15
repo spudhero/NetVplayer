@@ -85,7 +85,7 @@ struct DriveMappingVerificationTests {
             }
         } catch let failure as DriveServiceFailure { #expect(failure.reason == .mappingUnconfirmed) }
         do {
-            try await DriveRequestRecovery.withBudget(background: true) {
+            _ = try await DriveRequestRecovery.withBudget(background: true) {
                 try await DriveMappingVerification.target(record: record, provider: .quark, store: reopened) {
                     Issue.record("background verification started remote target lookup")
                 }

@@ -108,7 +108,7 @@ public actor DoubanMetadataProvider: MetadataProvider {
         let document = try SwiftSoup.parse(String(decoding: data, as: UTF8.self))
         var metadata = MediaMetadata(doubanID: id)
         if let script = try document.select("script[type=application/ld+json]").first(),
-           let jsonData = try script.data().data(using: .utf8),
+           let jsonData = script.data().data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
             metadata.title = json["name"] as? String; metadata.plot = json["description"] as? String
             metadata.poster = validImage(json["image"] as? String)

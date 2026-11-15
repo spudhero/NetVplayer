@@ -82,7 +82,7 @@ func developmentAndroidReplayRequiresSameCloudShareFileAndSubtitleAcrossRefresh(
     var selection = try JSONDecoder().decode(DevelopmentAndroidReplayAudit.Selection.self,
         from: Data(#"{"vodID":"fixed-share","flag":"original-line","fileID":"file-100"}"#.utf8))
     #expect(selection.episodeIndex(in: [Episode(name: "same ID without stable identity", url: try json(original))]) == nil)
-    selection.episodeIdentitySHA256 = try #require(DevelopmentAndroidReplayAudit.Selection.stableIdentitySHA256(for: json(original)))
+    selection.episodeIdentitySHA256 = DevelopmentAndroidReplayAudit.Selection.stableIdentitySHA256(for: try json(original))
     var refreshed = original
     for key in baidu ? ["seKey"] : ["sToken", "share_fid_token"] { refreshed[key] = "refreshed-session" }
     let episode = Episode(name: "same file", url: try json(refreshed))

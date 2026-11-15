@@ -267,7 +267,7 @@ import Testing
         await #expect(throws: ProviderErrorPayload.self) {
             try await registration.proxyResponse(parameters: parameters)
         }
-        let logs = try FileManager.default.enumerator(at: fixture.state, includingPropertiesForKeys: nil)?.allObjects
+        let logs = FileManager.default.enumerator(at: fixture.state, includingPropertiesForKeys: nil)?.allObjects
             .compactMap { $0 as? URL }.filter { $0.lastPathComponent == "operations.jsonl" } ?? []
         let proxyCalls = try logs.flatMap { try String(contentsOf: $0, encoding: .utf8).split(separator: "\n") }
             .filter { $0.contains("\"operation\": \"proxy\"") }

@@ -30,8 +30,8 @@ struct WKXHRIntrinsicSnapshotTests {
         try #require(page["status"] as? Int == 200 && page["responseIdentity"] as? Bool == true)
         try #require(page["sendReturnedUndefined"] as? Bool == true)
         try #require(browser.sink.completed.count == 1 && browser.sink.maxChunk <= OriginalResponseSink.chunkLimit)
-        let cookie = try await browser.web.evaluateJavaScript("document.cookie")
-        try #require(cookie as? String == "")
+        let cookie = try #require(try await browser.web.evaluateJavaScript("document.cookie") as? String)
+        try #require(cookie == "")
         try browser.sink.snapshot(to: fixture.root.appendingPathComponent(label + ".capture.json"), extra: [
             "page": page, "hardened": hardened, "attack": label, "mediaRequests": rows.count,
             "pageDocumentCookie": cookie, "arbitraryPageAttestation": false, "wholeResponseBackpressure": false])

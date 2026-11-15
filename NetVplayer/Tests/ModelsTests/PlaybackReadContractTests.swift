@@ -117,7 +117,7 @@ private func contractWait(_ predicate: () async -> Bool) async throws {
     for task in tasks { _ = await task.result }
     #expect(budget.reservedBytes == 0 && budget.waitingReadCount == 0)
     do {
-        try await budget.withRead(bytes: 13) { Issue.record("Over-budget speculation ran") }
+        _ = try await budget.withRead(bytes: 13) { Issue.record("Over-budget speculation ran") }
         Issue.record("Oversized speculative range was admitted")
     } catch { #expect((error as? URLError)?.code == .dataLengthExceedsMaximum) }
 }

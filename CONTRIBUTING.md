@@ -118,3 +118,9 @@ Playback state-machine fixtures that submit through `playSpecHandler` must
 isolate their simulated state from the real engine's asynchronous stop reset.
 Use the production refresh budget and assert the loading phase before sending
 EOF; a shortened deadline must not expire during unrelated playback setup.
+
+Diagnostic JSON must contain concrete numbers or strings: resolve optional
+values before mixing them into `[String: Any]`. Existing platform compatibility
+notices cover noninteractive legacy Keychain reads, the explicit Sentry app-hang
+opt-out, and the sniffer's bounded fire-and-forget JavaScript poll. Those calls
+retain their current migration, privacy, and session-lifetime behavior.

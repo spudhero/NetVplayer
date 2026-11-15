@@ -130,8 +130,8 @@ public enum MPVVideoOutputProbe {
                 report["PGSLinearWhite"] = white; report["PGSLinearGrey"] = grey
                 report["productSurface"] = surface.facts
                 report["activeDisplay"] = ["name": window.screen?.localizedName ?? "unknown",
-                    "currentHeadroom": window.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1,
-                    "potentialHeadroom": window.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1,
+                    "currentHeadroom": Double(window.screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1),
+                    "potentialHeadroom": Double(window.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1),
                     "windowNumber": window.windowNumber, "backingScale": window.backingScaleFactor,
                     "viewBackingPixels": [view.convertToBacking(view.bounds).width, view.convertToBacking(view.bounds).height]]
                 if requireProductHDR {

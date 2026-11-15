@@ -1933,7 +1933,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             let code = nv_mpv_command5_async(activeContext, Self.firstSubtitleReplyUserdata,
                 "sub-add", source, "auto", title, sub.lang)
             if code < 0 {
-                withLock { preparedSubtitleSources.removeValue(forKey: sub.id) }
+                _ = withLock { preparedSubtitleSources.removeValue(forKey: sub.id) }
                 DiagnosticLog.write("[MPV_SUBTITLE_ERROR] attachment failed")
                 return
             }
