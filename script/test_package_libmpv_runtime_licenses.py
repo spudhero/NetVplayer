@@ -87,16 +87,29 @@ class LibmpvRuntimeLicenseTests(unittest.TestCase):
             executable = app / "Contents/MacOS/NetVplayerApp"
             executable.parent.mkdir(parents=True)
             executable.write_bytes(b"executable")
+            # This fixture verifies copying and invocation of the independent
+            # playback probe. Its fake dylib cannot implement real media APIs.
+            scripts = root / "scripts"
+            scripts.mkdir()
+            vendor = scripts / "vendor_libmpv.sh"
+            vendor.write_text((Path(__file__).resolve().parent / vendor.name).read_text())
+            probe_receipt = root / "probe.json"
+            (scripts / "verify_playback_runtime.py").write_text(
+                "import json,sys\nfrom pathlib import Path\n"
+                + f"assert sys.argv[1:] == {['--bundle', str(runtime)]!r}\n"
+                + f"Path({str(probe_receipt)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+            )
             environment = dict(os.environ)
             environment["NETVPLAYER_LIBMPV_RUNTIME_BUNDLE"] = str(runtime)
             subprocess.run(
-                ["bash", str(Path(__file__).resolve().parent / "vendor_libmpv.sh"), str(app), str(executable)],
+                ["bash", str(vendor), str(app), str(executable)],
                 check=True,
                 capture_output=True,
                 text=True,
                 env=environment,
             )
 
+            self.assertEqual(json.loads(probe_receipt.read_text()), ["--bundle", str(runtime)])
             output_licenses = app / "Contents/Resources/ThirdPartyLicenses"
             self.assertEqual((output_licenses / "libmpv-runtime.json").read_text(), "{}\n")
             self.assertEqual((output_licenses / "libmpv-runtime.md").read_text(), "notices\n")

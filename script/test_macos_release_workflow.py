@@ -154,8 +154,8 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertEqual(info["CFBundleShortVersionString"], "2.0.0")
-        self.assertEqual(info["CFBundleVersion"], "49")
-        self.assertIn("**NetVplayer 2.0.0 (build 49)**", readme)
+        self.assertRegex(info["CFBundleVersion"], r"^[1-9][0-9]*$")
+        self.assertIn(f"**NetVplayer 2.0.0 (build {info['CFBundleVersion']})**", readme)
         self.assertIn("| Development application | 2.0.0 (unreleased) |", readme)
         self.assertIn("NetVplayer 1.1.4", readme)
         self.assertIn("**NetVplayer 1.1.4 (build 18)**", readme)

@@ -21,7 +21,7 @@
 
 ![NetVplayer running on macOS](website/assets/home-aurora.webp)
 
-主干开发版本 / Main development version: **NetVplayer 2.0.0 (build 49)**，尚未发布 / unreleased. 功能变化与已知限制见 [2.0.0 开发版说明](docs/releases/2.0.0.md)。
+主干开发版本 / Main development version: **NetVplayer 2.0.0 (build 50)**，尚未发布 / unreleased. 功能变化与已知限制见 [2.0.0 开发版说明](docs/releases/2.0.0.md)。
 
 发布基线 / Release baseline: **NetVplayer 1.1.4 (build 18)**.
 
