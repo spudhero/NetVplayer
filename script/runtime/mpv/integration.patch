@@ -1,0 +1,1353 @@
+diff --git a/audio/decode/ad_spdif.c b/audio/decode/ad_spdif.c
+index 2c0c8d296..3646be304 100644
+--- a/audio/decode/ad_spdif.c
++++ b/audio/decode/ad_spdif.c
+@@ -36,6 +36,11 @@
+ #include "filters/filter_internal.h"
+ #include "options/options.h"
+ 
++#include "config.h"
++#if HAVE_COREAUDIO
++#include "audio/out/coreaudio_hdmi.h"
++#endif
++
+ #define OUTBUF_SIZE 65536
+ 
+ struct spdifContext {
+@@ -51,6 +56,7 @@ struct spdifContext {
+     struct mp_aframe *fmt;
+     int              sstride;
+     struct mp_aframe_pool *pool;
++    struct mp_filter *fallback_handler;
+ 
+     struct mp_decoder public;
+ };
+@@ -252,7 +258,7 @@ static int init_filter(struct mp_filter *da)
+     }
+     case AV_CODEC_ID_EAC3:
+         sample_format                   = AF_FORMAT_S_EAC3;
+-        samplerate                      = 192000;
++        samplerate                      = c_rate > 0 ? c_rate * 4 : 192000;
+         num_channels                    = 2;
+         break;
+     case AV_CODEC_ID_MP3:
+@@ -262,7 +268,10 @@ static int init_filter(struct mp_filter *da)
+         break;
+     case AV_CODEC_ID_TRUEHD:
+         sample_format                   = AF_FORMAT_S_TRUEHD;
+-        samplerate                      = 192000;
++        // MAT preserves the source sample-rate family. A 44.1k-family source
++        // cannot use the qualified 768k two-word HDMI carrier.
++        samplerate                      = c_rate == 44100 || c_rate == 88200 ||
++                                          c_rate == 176400 ? 176400 : 192000;
+         num_channels                    = 8;
+         break;
+     default:
+@@ -300,6 +309,10 @@ static void ad_spdif_process(struct mp_filter *da)
+ {
+     struct spdifContext *spdif_ctx = da->priv;
+ 
++    // The wrapper must replace this decoder and replay the retained packet.
++    if (spdif_ctx->public.spdif_fallback_packet)
++        return;
++
+     if (!mp_pin_can_transfer_data(da->ppins[1], da->ppins[0]))
+         return;
+ 
+@@ -340,6 +353,22 @@ static void ad_spdif_process(struct mp_filter *da)
+         goto done;
+     }
+ 
++#if HAVE_COREAUDIO
++    if (mp_aframe_get_format(spdif_ctx->fmt) == AF_FORMAT_S_DTSHD &&
++        !nv_ca_hdmi_dtshd_payload_matches(spdif_ctx->out_buffer,
++            spdif_ctx->out_buffer_len, spdif_ctx->avpkt->data,
++            spdif_ctx->avpkt->size))
++    {
++        MP_ERR(da, "DTS-HD packing changed the original packet; refusing core-only output.\n");
++        spdif_ctx->public.spdif_fallback_packet = talloc_steal(da, mpkt);
++        mpkt = NULL;
++        // Only this recoverable integrity failure is handled by the wrapper.
++        // Other mux/init failures retain their normal upward propagation.
++        mp_filter_set_error_handler(da, spdif_ctx->fallback_handler);
++        goto done;
++    }
++#endif
++
+     out = mp_aframe_new_ref(spdif_ctx->fmt);
+     int samples = spdif_ctx->out_buffer_len / spdif_ctx->sstride;
+     if (mp_aframe_pool_allocate(spdif_ctx->pool, out, samples) < 0) {
+@@ -444,6 +473,7 @@ static struct mp_decoder *create(struct mp_filter *parent,
+     spdif_ctx->codec = codec;
+     spdif_ctx->pool = mp_aframe_pool_create(spdif_ctx);
+     spdif_ctx->public.f = da;
++    spdif_ctx->fallback_handler = parent;
+ 
+     if (strcmp(decoder, "spdif_dts_hd") == 0)
+         spdif_ctx->use_dts_hd = true;
+diff --git a/audio/out/ao.c b/audio/out/ao.c
+index 4e5e9e3df..a3b2de46e 100644
+--- a/audio/out/ao.c
++++ b/audio/out/ao.c
+@@ -307,7 +307,18 @@ struct ao *ao_init_best(struct mpv_global *global,
+     bool forced_dev = false;
+     char *pref_ao, *pref_dev;
+     split_ao_device(tmp, opts->audio_device, &pref_ao, &pref_dev);
+-    if (!ao_num && pref_ao) {
++    bool native_device_alias = pref_ao && pref_dev &&
++                               !strcmp(pref_ao, "netvplayer");
++    if (!ao_num && native_device_alias) {
++        // This is a device UID shared by the native Apple backends, not an AO.
++        // Keep negotiation available even before an explicit AO list is set.
++        const char *native_drivers[] = {
++            "coreaudio_exclusive", "avfoundation", "coreaudio",
++        };
++        for (int n = 0; n < MP_ARRAY_SIZE(native_drivers); n++)
++            MP_TARRAY_APPEND(tmp, ao_list, ao_num,
++                (struct m_obj_settings){.name = (char *)native_drivers[n]});
++    } else if (!ao_num && pref_ao) {
+         // Reuse the autoselection code
+         MP_TARRAY_APPEND(tmp, ao_list, ao_num,
+             (struct m_obj_settings){.name = pref_ao});
+@@ -342,7 +353,10 @@ struct ao *ao_init_best(struct mpv_global *global,
+         bool probing = n + 1 != ao_num;
+         mp_verbose(log, "Trying audio driver '%s'\n", entry->name);
+         char *dev = NULL;
+-        if (pref_ao && pref_dev && strcmp(entry->name, pref_ao) == 0) {
++        bool native_device = native_device_alias &&
++            (!strcmp(entry->name, "avfoundation") || !strcmp(entry->name, "coreaudio") ||
++             !strcmp(entry->name, "coreaudio_exclusive"));
++        if (pref_ao && pref_dev && (!strcmp(entry->name, pref_ao) || native_device)) {
+             dev = pref_dev;
+             mp_verbose(log, "Using preferred device '%s'\n", dev);
+         }
+@@ -384,6 +398,13 @@ void ao_request_reload(struct ao *ao)
+     ao_add_events(ao, AO_EVENT_RELOAD);
+ }
+ 
++// A compressed sink rejected data after initialization. Preserve the selected
++// track and let the player perform a synchronized decoder/clock transition.
++void ao_request_pcm_fallback(struct ao *ao)
++{
++    ao_add_events(ao, AO_EVENT_COMPRESSED_FAILED);
++}
++
+ // Notify the player that the device list changed. Fully thread-safe.
+ void ao_hotplug_event(struct ao *ao)
+ {
+diff --git a/audio/out/ao.h b/audio/out/ao.h
+index ce044fdc4..2907793cc 100644
+--- a/audio/out/ao.h
++++ b/audio/out/ao.h
+@@ -34,6 +34,15 @@ enum aocontrol {
+     AOCONTROL_SET_MUTE,
+     // Has char* as argument, which contains the desired stream title.
+     AOCONTROL_UPDATE_STREAM_TITLE,
++    AOCONTROL_GET_NATIVE_AUDIO_STATUS,
++};
++
++struct ao_native_audio_status {
++    int rate, channels, renderer_state;
++    bool joc, spatial_allowed;
++    bool muted;
++    float volume;
++    int64_t packets, payload_bytes, generation;
+ };
+ 
+ // If set, then the queued audio data is the last. Note that after a while, new
+@@ -43,6 +52,7 @@ enum aocontrol {
+ enum {
+     AO_EVENT_RELOAD = 1,
+     AO_EVENT_HOTPLUG = 2,
++    AO_EVENT_COMPRESSED_FAILED = 4,
+ };
+ 
+ enum {
+@@ -105,6 +115,7 @@ struct mp_async_queue;
+ struct mp_async_queue *ao_get_queue(struct ao *ao);
+ int ao_query_and_reset_events(struct ao *ao, int events);
+ void ao_request_reload(struct ao *ao);
++void ao_request_pcm_fallback(struct ao *ao);
+ void ao_hotplug_event(struct ao *ao);
+ 
+ struct ao_hotplug;
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 09f3ef002..d65768890 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -15,6 +15,7 @@
+  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include <stdatomic.h>
+ #include "ao.h"
+ #include "audio/format.h"
+ #include "audio/out/ao_coreaudio_chmap.h"
+@@ -24,6 +25,7 @@
+ #include "internal.h"
+ #include "osdep/timer.h"
+ #include "ta/ta_talloc.h"
++#include "avfoundation_eac3.h"
+ 
+ #import <AVFoundation/AVFoundation.h>
+ #import <Foundation/Foundation.h>
+@@ -36,6 +38,7 @@ @interface AVObserver : NSObject {
+     struct ao *ao;
+ }
+ - (void)handleRestartNotification:(NSNotification*)notification;
++- (void)invalidate;
+ @end
+ 
+ struct priv {
+@@ -45,6 +48,15 @@ - (void)handleRestartNotification:(NSNotification*)notification;
+     CMAudioFormatDescriptionRef format_description;
+     AVObserver *observer;
+     int64_t end_time_av;
++    bool compressed_eac3;
++    uint8_t burst[NV_EAC3_BURST_BYTES];
++    int burst_bytes;
++    atomic_uint_fast64_t compressed_packets, compressed_bytes, generation;
++    atomic_int source_rate, source_channels;
++    atomic_bool joc;
++
++    bool reload_requested;
++
+ };
+ 
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+@@ -58,9 +70,101 @@ static CMTime CMTimeFromNanoseconds(int64_t time)
+     return CMTimeMake(time, 1000000000);
+ }
+ 
++// Shares mpv's AO clock, pause/seek lifecycle and selected demux stream.
++// A compressed sample is never sent to an ordinary PCM hardware buffer.
++static void compressed_error(struct ao *ao, const char *reason)
++{
++    struct priv *p = ao->priv;
++    [p->renderer stopRequestingMediaData];
++    if (!p->reload_requested) {
++        p->reload_requested = true;
++        MP_ERR(ao, "Native EAC3 output failed: %s\n", reason);
++        ao_request_pcm_fallback(ao);
++    }
++}
++
++static void feed_eac3(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    if (p->reload_requested)
++        return;
++    if (p->renderer.status == AVQueuedSampleBufferRenderingStatusFailed) {
++        compressed_error(ao, "system decoder rejected the compressed stream");
++        return;
++    }
++    int64_t now_av = CMTimeGetNanoseconds([p->synchronizer currentTime]);
++    int64_t end_av = MPMAX(p->end_time_av, now_av);
++    int request = (NV_EAC3_BURST_BYTES - p->burst_bytes) / ao->sstride;
++    int64_t duration = CMTimeGetNanoseconds(CMTimeMake(NV_EAC3_BURST_FRAMES, ao->samplerate));
++    void *data[] = {p->burst + p->burst_bytes};
++    bool eof = false;
++    int count = ao_read_data(ao, data, request,
++        end_av - now_av + mp_time_ns() + duration, &eof, false, true);
++    p->burst_bytes += count * ao->sstride;
++    if (p->burst_bytes < NV_EAC3_BURST_BYTES) {
++        if (eof) {
++            if (p->burst_bytes)
++                MP_WARN(ao, "Discarded incomplete final EAC3 burst.\n");
++            p->burst_bytes = 0;
++            [p->renderer stopRequestingMediaData];
++            ao_stop_streaming(ao);
++        }
++        return;
++    }
++    struct nv_eac3_packet packet;
++    bool valid = nv_eac3_unpack(p->burst, sizeof(p->burst), &packet);
++    p->burst_bytes = 0;
++    if (!valid || packet.rate * 4 != ao->samplerate) {
++        compressed_error(ao, "invalid IEC 61937 EAC3 packet or clock rate");
++        return;
++    }
++    if (!p->format_description) {
++        bool joc = false;
++        p->format_description = nv_eac3_format(&packet, &joc);
++        atomic_store(&p->joc, joc);
++        if (!p->format_description) {
++            compressed_error(ao, "cannot construct original EAC3 format description");
++            return;
++        }
++        const AudioStreamBasicDescription *asbd = CMAudioFormatDescriptionGetStreamBasicDescription(p->format_description);
++        atomic_store(&p->source_rate, asbd->mSampleRate);
++        atomic_store(&p->source_channels, asbd->mChannelsPerFrame);
++        MP_INFO(ao, "Native EAC3 renderer: %.0f Hz, %u channels; original compressed payload retained.\n",
++                asbd->mSampleRate, asbd->mChannelsPerFrame);
++    }
++    CMBlockBufferRef block = NULL;
++    CMSampleBufferRef sample = NULL;
++    OSStatus err = CMBlockBufferCreateWithMemoryBlock(NULL, NULL, packet.size,
++        NULL, NULL, 0, packet.size, 0, &block);
++    if (err == noErr)
++        err = CMBlockBufferReplaceDataBytes(packet.data, block, 0, packet.size);
++    AudioStreamPacketDescription desc = {
++        .mStartOffset = 0, .mVariableFramesInPacket = packet.frames,
++        .mDataByteSize = (UInt32)packet.size,
++    };
++    if (err == noErr)
++        err = CMAudioSampleBufferCreateReadyWithPacketDescriptions(NULL, block,
++            p->format_description, 1, CMTimeFromNanoseconds(end_av), &desc, &sample);
++    if (err == noErr) {
++        [p->renderer enqueueSampleBuffer:sample];
++        p->end_time_av = end_av + CMTimeGetNanoseconds(CMTimeMake(packet.frames, packet.rate));
++        p->compressed_packets++;
++        p->compressed_bytes += packet.size;
++        if (p->compressed_packets == 1 || p->compressed_packets % 300 == 0)
++            MP_INFO(ao, "Native EAC3 enqueued packets=%llu end=%.3f status=%ld\n",
++                (unsigned long long)p->compressed_packets, p->end_time_av / 1e9,
++                (long)p->renderer.status);
++    } else {
++        compressed_error(ao, "cannot enqueue compressed sample");
++    }
++    if (sample) CFRelease(sample);
++    if (block) CFRelease(block);
++}
++
+ static void feed(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
++    if (p->compressed_eac3) { feed_eac3(ao); return; }
+     int samplerate = ao->samplerate;
+     int sstride = ao->sstride;
+ 
+@@ -145,6 +249,8 @@ static void start(struct ao *ao)
+     struct priv *p = ao->priv;
+ 
+     p->end_time_av = -1;
++    p->burst_bytes = 0;
++    p->reload_requested = false;
+     [p->synchronizer setRate:1];
+     [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
+         feed(ao);
+@@ -159,6 +265,8 @@ static void stop(struct ao *ao)
+         [p->renderer stopRequestingMediaData];
+         [p->renderer flush];
+         [p->synchronizer setRate:0];
++        p->burst_bytes = 0;
++        p->generation++;
+     });
+ }
+ 
+@@ -180,6 +288,24 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
+     struct priv *p = ao->priv;
+ 
+     switch (cmd) {
++    case AOCONTROL_GET_NATIVE_AUDIO_STATUS: {
++        if (!p->compressed_eac3)
++            return CONTROL_UNKNOWN;
++        struct ao_native_audio_status *status = arg;
++        *status = (struct ao_native_audio_status) {
++            .rate = atomic_load(&p->source_rate), .channels = atomic_load(&p->source_channels),
++            .joc = atomic_load(&p->joc), .renderer_state = p->renderer.status,
++            .spatial_allowed = p->renderer.allowedAudioSpatializationFormats != 0,
++            .muted = p->renderer.isMuted,
++            .volume = p->renderer.volume,
++            .packets = atomic_load(&p->compressed_packets),
++            .payload_bytes = atomic_load(&p->compressed_bytes),
++            .generation = atomic_load(&p->generation),
++        };
++        if (status->renderer_state == AVQueuedSampleBufferRenderingStatusFailed)
++            ao_request_pcm_fallback(ao);
++        return CONTROL_OK;
++    }
+     case AOCONTROL_GET_MUTE:
+         *(bool*)arg = [p->renderer isMuted];
+         return CONTROL_OK;
+@@ -206,12 +332,18 @@ - (instancetype)initWithAO:(struct ao*)_ao {
+     return self;
+ }
+ - (void)handleRestartNotification:(NSNotification*)notification {
++    @synchronized(self) {
++    if (!ao)
++        return;
+     char *name = cfstr_get_cstr((CFStringRef)notification.name);
+-    MP_WARN(ao, "restarting due to system notification; this will cause desync\n");
++    MP_VERBOSE(ao, "Audio output configuration changed; requesting synchronized reload.\n");
+     MP_VERBOSE(ao, "notification name: %s\n", name);
+     talloc_free(name);
+-    stop(ao);
+-    start(ao);
++    ao_request_reload(ao);
++    }
++}
++- (void)invalidate {
++    @synchronized(self) { ao = NULL; }
+ }
+ @end
+ 
+@@ -219,6 +351,12 @@ static int init(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+     AudioChannelLayout *layout = NULL;
++    atomic_init(&p->compressed_packets, 0);
++    atomic_init(&p->compressed_bytes, 0);
++    atomic_init(&p->generation, 0);
++    atomic_init(&p->source_rate, 0);
++    atomic_init(&p->source_channels, 0);
++    atomic_init(&p->joc, false);
+ 
+ #if TARGET_OS_IPHONE
+     AVAudioSession *instance = AVAudioSession.sharedInstance;
+@@ -250,7 +388,9 @@ static int init(struct ao *ao)
+     }
+ 
+     if (ao->device && ao->device[0]) {
+-        [p->renderer setAudioOutputDeviceUniqueID:(NSString*)cfstr_from_cstr(ao->device)];
++        CFStringRef uid = cfstr_from_cstr(ao->device);
++        [p->renderer setAudioOutputDeviceUniqueID:(NSString*)uid];
++        CFRelease(uid);
+     }
+ 
+     [p->synchronizer addRenderer:p->renderer];
+@@ -260,7 +400,8 @@ static int init(struct ao *ao)
+     }
+ #endif
+ 
+-    if (af_fmt_is_spdif(ao->format)) {
++    p->compressed_eac3 = ao->format == AF_FORMAT_S_EAC3;
++    if (af_fmt_is_spdif(ao->format) && !p->compressed_eac3) {
+         MP_FATAL(ao, "avfoundation does not support SPDIF\n");
+ #if HAVE_COREAUDIO
+         MP_FATAL(ao, "please use coreaudio_exclusive instead\n");
+@@ -268,6 +409,22 @@ static int init(struct ao *ao)
+         goto error;
+     }
+ 
++    if (p->compressed_eac3) {
++        // The PCM gain stage cannot alter compressed packets. Keep a new sink
++        // silent until audio_update_volume applies the session's controls.
++        p->renderer.muted = YES;
++        p->renderer.volume = 0;
++        if (ao->channels.num != 2 ||
++            (ao->samplerate != 192000 && ao->samplerate != 176400 &&
++             ao->samplerate != 128000 && ao->samplerate != 96000 &&
++             ao->samplerate != 88200 && ao->samplerate != 64000))
++            goto error;
++        p->renderer.allowedAudioSpatializationFormats = AVAudioSpatializationFormatMonoStereoAndMultichannel;
++        // Cookie and actual channel layout are derived from the first original
++        // compressed packet. Never describe the IEC carrier as decoded audio.
++        goto configured;
++    }
++
+     // AVSampleBufferAudioRenderer only supports interleaved formats
+     ao->format = af_fmt_from_planar(ao->format);
+     if (af_fmt_is_planar(ao->format)) {
+@@ -298,6 +455,7 @@ static int init(struct ao *ao)
+     talloc_free(layout);
+     layout = NULL;
+ 
++configured:
+     // AVSampleBufferAudioRenderer read ahead aggressively
+     ao->device_buffer = ao->samplerate * 2;
+ 
+@@ -333,14 +491,15 @@ static void uninit(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+ 
++    [[NSNotificationCenter defaultCenter] removeObserver:p->observer];
++    [p->observer invalidate];
+     stop(ao);
+ 
+     [p->renderer release];
+     [p->synchronizer release];
+     dispatch_release(p->queue);
+-    CFRelease(p->format_description);
++    if (p->format_description) CFRelease(p->format_description);
+ 
+-    [[NSNotificationCenter defaultCenter] removeObserver:p->observer];
+     [p->observer release];
+ 
+ #if TARGET_OS_IPHONE
+diff --git a/audio/out/ao_coreaudio.c b/audio/out/ao_coreaudio.c
+index 4b4bf1d48..d52cc7568 100644
+--- a/audio/out/ao_coreaudio.c
++++ b/audio/out/ao_coreaudio.c
+@@ -15,6 +15,7 @@
+  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include <math.h>
+ #include <CoreAudio/HostTime.h>
+ #include <libavutil/mathematics.h>
+ 
+@@ -142,6 +143,31 @@ static void reinit_latency(struct ao *ao);
+ static bool register_hotplug_cb(struct ao *ao);
+ static void unregister_hotplug_cb(struct ao *ao);
+ 
++static void restore_physical_format(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    if (!p->original_asbd.mFormatID)
++        return;
++
++    if (ca_change_physical_format_sync(ao, p->original_asbd_stream,
++                                       p->original_asbd)) {
++        p->original_asbd = (AudioStreamBasicDescription){0};
++        p->original_asbd_stream = 0;
++    } else {
++        // Keep the original snapshot so a later cleanup can retry. A failed
++        // format write may still have changed part of the device state.
++        MP_WARN(ao, "could not restore physical stream format\n");
++    }
++}
++
++static void cleanup_init_failure(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    if (p->hotplug_cb_registration_times)
++        unregister_hotplug_cb(ao);
++    restore_physical_format(ao);
++}
++
+ static bool reinit_device(struct ao *ao) {
+     struct priv *p = ao->priv;
+ 
+@@ -196,9 +222,34 @@ static int init(struct ao *ao)
+     return CONTROL_OK;
+ 
+ coreaudio_error:
++    // ao_uninit() only calls a driver's uninit after init succeeded. A format
++    // change precedes channel-map/AudioUnit setup, so unwind it here as well.
++    cleanup_init_failure(ao);
+     return CONTROL_ERROR;
+ }
+ 
++static bool pcm_physical_candidate(const AudioStreamBasicDescription *requested,
++                                   const AudioStreamRangedDescription *ranged,
++                                   AudioStreamBasicDescription *candidate)
++{
++    *candidate = ranged->mFormat;
++    // This shared AO carries decoded PCM. Encoded formats are negotiated only
++    // by the separate strict compressed AO, never by this best-effort switch.
++    if (candidate->mFormatID != kAudioFormatLinearPCM ||
++        !candidate->mChannelsPerFrame ||
++        candidate->mChannelsPerFrame > MP_NUM_CHANNELS)
++        return false;
++
++    double min = ranged->mSampleRateRange.mMinimum;
++    double max = ranged->mSampleRateRange.mMaximum;
++    if (isfinite(min) && isfinite(max) && min > 0 && max >= min) {
++        // Some devices describe a continuous range with a zero or arbitrary
++        // nominal rate. Choose a supported rate from the range explicitly.
++        candidate->mSampleRate = MPCLAMP(requested->mSampleRate, min, max);
++    }
++    return isfinite(candidate->mSampleRate) && candidate->mSampleRate > 0;
++}
++
+ static void init_physical_format(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+@@ -245,30 +296,37 @@ static void init_physical_format(struct ao *ao)
+         AudioStreamBasicDescription best_asbd = {0};
+ 
+         for (int j = 0; j < n_formats; j++) {
+-            AudioStreamBasicDescription *stream_asbd = &formats[j].mFormat;
++            AudioStreamBasicDescription candidate;
++            if (!pcm_physical_candidate(&asbd, &formats[j], &candidate))
++                continue;
+ 
+-            ca_print_asbd(ao, "- ", stream_asbd);
++            ca_print_asbd(ao, "- ", &candidate);
+ 
+             if (!best_asbd.mFormatID || ca_asbd_is_better(&asbd, &best_asbd,
+-                                                          stream_asbd))
+-                best_asbd = *stream_asbd;
++                                                          &candidate))
++                best_asbd = candidate;
+         }
+ 
+         if (best_asbd.mFormatID) {
+-            p->original_asbd_stream = streams[i];
+-            err = CA_GET(p->original_asbd_stream,
++            AudioStreamBasicDescription original = {0};
++            err = CA_GET(streams[i],
+                          kAudioStreamPropertyPhysicalFormat,
+-                         &p->original_asbd);
+-            CHECK_CA_WARN("could not get current physical stream format");
+-
+-            if (ca_asbd_equals(&p->original_asbd, &best_asbd)) {
++                         &original);
++            if (!CHECK_CA_WARN("could not get current physical stream format"))
++                continue; // Never write a format without a rollback snapshot.
++            if (!original.mFormatID || !isfinite(original.mSampleRate) ||
++                original.mSampleRate <= 0 || !original.mChannelsPerFrame)
++                continue;
++
++            if (ca_asbd_equals(&original, &best_asbd)) {
+                 MP_VERBOSE(ao, "Requested format already set, not changing.\n");
+-                p->original_asbd.mFormatID = 0;
+                 break;
+             }
+ 
++            p->original_asbd_stream = streams[i];
++            p->original_asbd = original;
+             if (!ca_change_physical_format_sync(ao, streams[i], best_asbd))
+-                p->original_asbd = (AudioStreamBasicDescription){0};
++                restore_physical_format(ao);
+             break;
+         }
+     }
+@@ -445,14 +503,8 @@ static void uninit(struct ao *ao)
+     AudioUnitUninitialize(p->audio_unit);
+     AudioComponentInstanceDispose(p->audio_unit);
+ 
+-    if (p->original_asbd.mFormatID) {
+-        OSStatus err = CA_SET(p->original_asbd_stream,
+-                              kAudioStreamPropertyPhysicalFormat,
+-                              &p->original_asbd);
+-        CHECK_CA_WARN("could not restore physical stream format");
+-    }
+-
+     unregister_hotplug_cb(ao);
++    restore_physical_format(ao);
+ }
+ 
+ static OSStatus hotplug_cb(AudioObjectID id, UInt32 naddr,
+@@ -494,10 +546,13 @@ static bool register_hotplug_cb(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+ 
+-    if (p->hotplug_cb_registration_times++)
++    if (p->hotplug_cb_registration_times) {
++        p->hotplug_cb_registration_times++;
+         return true;
++    }
+ 
+     OSStatus err = noErr;
++    int registered = 0;
+     for (int i = 0; i < MP_ARRAY_SIZE(hotplug_properties); i++) {
+         AudioObjectPropertyAddress addr = {
+             hotplug_properties[i],
+@@ -512,11 +567,23 @@ static bool register_hotplug_cb(struct ao *ao)
+             MP_ERR(ao, "failed to set device listener %s (%s)", c1, c2);
+             goto coreaudio_error;
+         }
++        registered++;
+     }
+ 
++    p->hotplug_cb_registration_times = 1;
+     return true;
+ 
+ coreaudio_error:
++    // A later listener can fail after an earlier registration succeeded.
++    for (int i = 0; i < registered; i++) {
++        AudioObjectPropertyAddress addr = {
++            hotplug_properties[i],
++            kAudioObjectPropertyScopeGlobal,
++            kAudioObjectPropertyElementMain
++        };
++        AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &addr,
++                                          hotplug_cb, (void *)ao);
++    }
+     return false;
+ }
+ 
+@@ -524,7 +591,7 @@ static void unregister_hotplug_cb(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+ 
+-    if (--p->hotplug_cb_registration_times)
++    if (!p->hotplug_cb_registration_times || --p->hotplug_cb_registration_times)
+         return;
+ 
+     OSStatus err = noErr;
+@@ -565,7 +632,8 @@ const struct ao_driver audio_out_coreaudio = {
+         }
+     },
+     .options = (const struct m_option[]){
+-        {"change-physical-format", OPT_BOOL(change_physical_format)},
++        {"change-physical-format", OPT_BOOL(change_physical_format),
++            .flags = UPDATE_AUDIO},
+         {0}
+     },
+     .options_prefix = "coreaudio",
+diff --git a/audio/out/ao_coreaudio_chmap.c b/audio/out/ao_coreaudio_chmap.c
+index 2c6131f13..eff2573cb 100644
+--- a/audio/out/ao_coreaudio_chmap.c
++++ b/audio/out/ao_coreaudio_chmap.c
+@@ -47,6 +47,10 @@ static const int speaker_map[][2] = {
+     // unofficial extensions
+     { kAudioChannelLabel_RearSurroundLeft,     MP_SPEAKER_ID_SDL  },
+     { kAudioChannelLabel_RearSurroundRight,    MP_SPEAKER_ID_SDR  },
++    { kAudioChannelLabel_LeftTopRear,         MP_SPEAKER_ID_TBL  },
++    { kAudioChannelLabel_RightTopRear,        MP_SPEAKER_ID_TBR  },
++    { kAudioChannelLabel_LeftTopMiddle,       MP_SPEAKER_ID_TSL  },
++    { kAudioChannelLabel_RightTopMiddle,      MP_SPEAKER_ID_TSR  },
+     { kAudioChannelLabel_LeftWide,             MP_SPEAKER_ID_WL   },
+     { kAudioChannelLabel_RightWide,            MP_SPEAKER_ID_WR   },
+     { kAudioChannelLabel_LFE2,                 MP_SPEAKER_ID_LFE2 },
+diff --git a/audio/out/ao_coreaudio_exclusive.c b/audio/out/ao_coreaudio_exclusive.c
+index 6dac7c0c0..d7ed9e714 100644
+--- a/audio/out/ao_coreaudio_exclusive.c
++++ b/audio/out/ao_coreaudio_exclusive.c
+@@ -50,6 +50,7 @@
+ #include "audio/out/ao_coreaudio_chmap.h"
+ #include "audio/out/ao_coreaudio_properties.h"
+ #include "audio/out/ao_coreaudio_utils.h"
++#include "audio/out/coreaudio_hdmi.h"
+ #include "osdep/mac/compat.h"
+ 
+ struct priv {
+@@ -59,6 +60,9 @@ struct priv {
+     AudioDeviceID device;   // selected device
+ 
+     bool paused;
++    bool spdif_only;
++    bool truehd_mat;
++    bool dtshd_hbr;
+ 
+     // audio render callback
+     AudioDeviceIOProcID render_cb;
+@@ -98,7 +102,9 @@ static OSStatus property_listener_cb(
+     AudioStreamBasicDescription f;
+     OSErr err = CA_GET(p->stream, kAudioStreamPropertyVirtualFormat, &f);
+     CHECK_CA_WARN("could not get stream format");
+-    if (err != noErr || !ca_asbd_equals(&p->stream_asbd, &f)) {
++    if (err != noErr || (p->spdif_only
++            ? !nv_ca_hdmi_asbd_equal(&p->stream_asbd, &f)
++            : !ca_asbd_equals(&p->stream_asbd, &f))) {
+         if (atomic_compare_exchange_strong(&p->reload_requested,
+                                            &(bool){false}, true))
+         {
+@@ -173,16 +179,28 @@ static OSStatus render_cb_compressed(
+     int requested    = buf.mDataByteSize;
+     int sstride      = p->spdif_hack ? 4 * ao->channels.num : ao->sstride;
+ 
+-    int pseudo_frames = requested / sstride;
++    // The carrier can expose two HAL words per frame for eight logical words.
++    // ao_read_data must keep the decoder's logical stride and clock units.
++    int pseudo_frames = p->spdif_only
++        ? nv_ca_hdmi_logical_frames(ao->sstride, requested)
++        : requested / sstride;
+ 
+     // we expect the callback to read full frames, which are aligned accordingly
+-    if (pseudo_frames * sstride != requested) {
++    if (pseudo_frames < 0 || pseudo_frames * sstride != requested) {
+         MP_ERR(ao, "Unsupported unaligned read of %d bytes.\n", requested);
++        if (p->spdif_only) {
++            memset(buf.mData, 0, requested);
++            ao_request_pcm_fallback(ao);
++            return noErr;
++        }
+         return kAudioHardwareUnspecifiedError;
+     }
+ 
+     int64_t end = mp_time_ns();
+-    end += p->hw_latency_ns + ca_get_latency(ts)
++    // The output timestamp describes presentation, unlike the current IO time.
++    int64_t output_latency = out_ts && (out_ts->mFlags & kAudioTimeStampHostTimeValid)
++        ? ca_get_latency(out_ts) : 0;
++    end += p->hw_latency_ns + output_latency
+         + ca_frames_to_ns(ao, pseudo_frames);
+ 
+     ao_read_data(ao, &buf.mData, pseudo_frames, end, NULL, true, true);
+@@ -193,6 +211,31 @@ static OSStatus render_cb_compressed(
+     return noErr;
+ }
+ 
++static int find_best_format(struct ao *ao, AudioStreamBasicDescription *out_fmt);
++
++static int hdmi_rank(struct ao *ao, const AudioStreamBasicDescription *f)
++{
++    struct priv *p = ao->priv;
++    enum nv_ca_hdmi_codec codec = NV_CA_HDMI_LEGACY;
++    if (ao->format == AF_FORMAT_S_EAC3) {
++        codec = NV_CA_HDMI_EAC3;
++    } else if (ao->format == AF_FORMAT_S_TRUEHD) {
++        // mtct is a private driver ID. Qualify this exact transport only in
++        // an explicit TrueHD MAT test; mtc+ and other MAT modes stay rejected.
++        if (!p->truehd_mat)
++            return 0;
++        codec = NV_CA_HDMI_TRUEHD;
++    } else if (ao->format == AF_FORMAT_S_DTSHD) {
++        // Only full MA's logical 192k x 8 geometry has receiver evidence.
++        // nv_ca_hdmi_rank rejects HRA's 192k x 2 and every other private ID.
++        if (!p->dtshd_hbr)
++            return 0;
++        codec = NV_CA_HDMI_DTSHD_MA;
++    }
++    return nv_ca_hdmi_rank(codec, ao->samplerate, ao->channels.num,
++                          ao->channels.num * af_fmt_to_bytes(ao->format), f);
++}
++
+ // Apparently, audio devices can have multiple sub-streams. It's not clear to
+ // me what devices with multiple streams actually do. So only select the first
+ // one that fulfills some minimum requirements.
+@@ -219,6 +262,18 @@ static int select_stream(struct ao *ao)
+             continue;
+         }
+ 
++        if (p->spdif_only) {
++            // New HDMI IDs need codec-specific selection; the global AC3
++            // recognizer cannot establish their payload compatibility.
++            p->stream = streams[i];
++            AudioStreamBasicDescription candidate;
++            if (find_best_format(ao, &candidate) == 0) {
++                p->stream_idx = i;
++                break;
++            }
++            continue;
++        }
++
+         if (af_fmt_is_pcm(ao->format) || p->spdif_hack ||
+             ca_stream_supports_compressed(ao, streams[i]))
+         {
+@@ -265,6 +320,12 @@ static int find_best_format(struct ao *ao, AudioStreamBasicDescription *out_fmt)
+         AudioStreamBasicDescription *stream_asbd = &formats[j].mFormat;
+ 
+         ca_print_asbd(ao, "- ", stream_asbd);
++        if (p->spdif_only) {
++            int rank = hdmi_rank(ao, stream_asbd);
++            if (rank && rank > hdmi_rank(ao, out_fmt))
++                *out_fmt = *stream_asbd;
++            continue;
++        }
+ 
+         if (!out_fmt->mFormatID || ca_asbd_is_better(&asbd, out_fmt, stream_asbd))
+             *out_fmt = *stream_asbd;
+@@ -282,13 +343,62 @@ coreaudio_error:
+     return -1;
+ }
+ 
++// Latency properties use the verified carrier frame rate, not mpv's logical
++// 192k x 8 transport rate. They must remain separate for mtct's 768k x 2 ASBD.
++static bool hdmi_carrier_latency_ns(struct ao *ao, int64_t *latency_ns)
++{
++    struct priv *p = ao->priv;
++    uint64_t frames = 0;
++    const uint32_t selectors[] = {
++        kAudioDevicePropertyLatency,
++        kAudioDevicePropertyBufferFrameSize,
++        kAudioDevicePropertySafetyOffset,
++    };
++    for (int n = 0; n < MP_ARRAY_SIZE(selectors); n++) {
++        uint32_t count = 0;
++        OSStatus err = CA_GET_O(p->device, selectors[n], &count);
++        if (err != noErr) {
++            MP_ERR(ao, "Cannot verify HDMI carrier latency property %s.\n",
++                   mp_tag_str(selectors[n]));
++            return false;
++        }
++        frames += count;
++    }
++    uint32_t stream_frames = 0;
++    OSStatus err = CA_GET(p->stream, kAudioStreamPropertyLatency, &stream_frames);
++    if (err != noErr) {
++        MP_ERR(ao, "Cannot verify HDMI stream latency.\n");
++        return false;
++    }
++    frames += stream_frames;
++    *latency_ns = nv_ca_hdmi_carrier_frames_to_ns(frames, &p->stream_asbd);
++    return *latency_ns >= 0;
++}
++
+ static int init(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+     int original_format = ao->format;
++    if (p->spdif_only) {
++        p->spdif_hack = false;
++        if (!af_fmt_is_spdif(ao->format))
++            return CONTROL_ERROR;
++    }
+ 
+     OSStatus err = ca_select_device(ao, ao->device, &p->device);
+     CHECK_CA_ERROR_L(coreaudio_error_nounlock, "failed to select device");
++    if (p->spdif_only) {
++        uint32_t transport = 0;
++        err = CA_GET(p->device, kAudioDevicePropertyTransportType, &transport);
++        if (err != noErr || (transport != kAudioDeviceTransportTypeHDMI &&
++                            transport != kAudioDeviceTransportTypeDisplayPort))
++            return CONTROL_ERROR;
++        AudioStreamBasicDescription candidate;
++        // Check the advertised compressed carrier before changing device state.
++        if (select_stream(ao) < 0 || find_best_format(ao, &candidate) < 0)
++            return CONTROL_ERROR;
++        p->stream_idx = -1;
++    }
+ 
+     ao->format = af_fmt_from_planar(ao->format);
+ 
+@@ -318,6 +428,8 @@ static int init(struct ao *ao)
+ 
+     err = ca_lock_device(p->device, &p->hog_pid);
+     CHECK_CA_WARN("failed to set hogmode");
++    if (p->spdif_only && (err != noErr || p->hog_pid != getpid()))
++        goto coreaudio_error;
+ 
+     err = ca_disable_mixing(ao, p->device, &p->changed_mixing);
+     CHECK_CA_WARN("failed to disable mixing");
+@@ -335,7 +447,32 @@ static int init(struct ao *ao)
+ 
+     // Even if changing the physical format fails, we can try using the current
+     // virtual format.
+-    ca_change_physical_format_sync(ao, p->stream, hwfmt);
++    bool changed_format = ca_change_physical_format_sync(ao, p->stream, hwfmt);
++    if (p->spdif_only) {
++        AudioStreamBasicDescription actual = {0};
++        err = CA_GET(p->stream, kAudioStreamPropertyPhysicalFormat, &actual);
++        if (!changed_format || err != noErr ||
++            !hdmi_rank(ao, &actual) || !nv_ca_hdmi_asbd_equal(&hwfmt, &actual)) {
++            MP_ERR(ao, "HDMI compressed carrier could not be verified.\n");
++            goto coreaudio_error;
++        }
++        err = CA_GET(p->stream, kAudioStreamPropertyVirtualFormat, &p->stream_asbd);
++        if (err != noErr || !nv_ca_hdmi_asbd_equal(&actual, &p->stream_asbd)) {
++            MP_ERR(ao, "HDMI virtual transport differs from encoded physical carrier.\n");
++            goto coreaudio_error;
++        }
++        // CoreAudio's FourCC uses big-endian character order.
++        char carrier[] = {(char)(actual.mFormatID >> 24),
++                          (char)(actual.mFormatID >> 16),
++                          (char)(actual.mFormatID >> 8),
++                          (char)actual.mFormatID, 0};
++        MP_INFO(ao, "Verified HDMI compressed carrier: %s, %.0f Hz, %u channels, %u bytes/frame.\n",
++                carrier, actual.mSampleRate,
++                actual.mChannelsPerFrame, actual.mBytesPerFrame);
++        // Keep the decoder's logical SPDIF format and byte clock. These are
++        // transport samples, not a speaker layout to remap or resample.
++        goto setup_io;
++    }
+ 
+     if (!ca_init_chmap(ao, p->device))
+         goto coreaudio_error;
+@@ -388,7 +525,14 @@ static int init(struct ao *ao)
+         MP_WARN(ao, "Using spdif passthrough hack. This could produce noise.\n");
+     }
+ 
+-    p->hw_latency_ns = ca_get_device_latency_ns(ao, p->device);
++setup_io:
++    if (p->spdif_only && (ao->format == AF_FORMAT_S_TRUEHD ||
++                         ao->format == AF_FORMAT_S_DTSHD)) {
++        if (!hdmi_carrier_latency_ns(ao, &p->hw_latency_ns))
++            goto coreaudio_error;
++    } else {
++        p->hw_latency_ns = ca_get_device_latency_ns(ao, p->device);
++    }
+     MP_VERBOSE(ao, "base latency: %lld nanoseconds\n", p->hw_latency_ns);
+ 
+     err = enable_property_listener(ao, true);
+@@ -403,6 +547,9 @@ static int init(struct ao *ao)
+     return CONTROL_TRUE;
+ 
+ coreaudio_error:
++    if (p->original_asbd.mFormatID)
++        ca_change_physical_format_sync(ao, p->stream, p->original_asbd);
++    ca_enable_mixing(ao, p->device, p->changed_mixing);
+     err = enable_property_listener(ao, false);
+     CHECK_CA_WARN("can't remove format change listener");
+     err = ca_unlock_device(p->device, &p->hog_pid);
+@@ -474,6 +621,9 @@ const struct ao_driver audio_out_coreaudio_exclusive = {
+     },
+     .options = (const struct m_option[]){
+         {"spdif-hack", OPT_BOOL(spdif_hack)},
++        {"spdif-only", OPT_BOOL(spdif_only)},
++        {"truehd-mat", OPT_BOOL(truehd_mat)},
++        {"dtshd-hbr", OPT_BOOL(dtshd_hbr)},
+         {0}
+     },
+     .options_prefix = "coreaudio",
+diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
+index 2137b4b0d..29e3d0aac 100644
+--- a/filters/f_decoder_wrapper.c
++++ b/filters/f_decoder_wrapper.c
+@@ -102,6 +102,7 @@ struct dec_wrapper_opts {
+     char *audio_decoders;
+     char *video_decoders;
+     char *audio_spdif;
++    int truehd_objects;
+     struct dec_queue_opts *vdec_queue_opts;
+     struct dec_queue_opts *adec_queue_opts;
+     int64_t video_reverse_size;
+@@ -124,6 +125,8 @@ const struct m_sub_options dec_wrapper_conf = {
+         {"audio-spdif", OPT_STRING(audio_spdif),
+             .flags = UPDATE_AD,
+             .help = decoder_list_help},
++        {"netvplayer-truehd-objects", OPT_CHOICE(truehd_objects,
++            {"off", 0}, {"7.1.4", 1}, {"binaural", 2}, {"tracked", 3}), .flags = UPDATE_AD},
+         {"video-rotate", OPT_CHOICE(video_rotate, {"no", -1}),
+             .flags = UPDATE_IMGPAR, M_RANGE(0, 359)},
+         {"video-aspect-override", OPT_ASPECT(movie_aspect),
+@@ -202,6 +205,7 @@ struct priv {
+     double start, end;
+     struct demux_packet *new_segment;
+     struct mp_frame packet;
++    struct mp_frame spdif_pending_packet;
+     bool packet_fed, preroll_discard;
+ 
+     size_t reverse_queue_byte_size;
+@@ -320,6 +324,7 @@ static void reset_decoder(struct priv *p)
+     p->has_broken_decoded_pts = 0;
+     p->packets_without_output = 0;
+     mp_frame_unref(&p->packet);
++    mp_frame_unref(&p->spdif_pending_packet);
+     p->packet_fed = false;
+     p->preroll_discard = false;
+     talloc_free(p->new_segment);
+@@ -445,6 +450,14 @@ static bool reinit_decoder(struct priv *p)
+         bool try_spdif = p->try_spdif;
+         mp_mutex_unlock(&p->cache_lock);
+ 
++#if HAVE_NETVPLAYER_ATMOS
++        if (p->opts->truehd_objects && p->codec->codec && !strcmp(p->codec->codec, "truehd")) {
++            const char *names[] = {NULL, "truehd_objects_714", "truehd_objects_binaural", "truehd_objects_tracked"};
++            driver = &ad_truehd_objects;
++            list = talloc_zero(NULL, struct mp_decoder_list);
++            mp_add_decoder(list, "truehd", names[p->opts->truehd_objects], "TrueHD objects / application spatial renderer");
++        } else
++#endif
+         if (try_spdif && p->codec->codec) {
+             struct mp_decoder_list *spdif =
+                 select_spdif_codec(p->codec->codec, p->opts->audio_spdif);
+@@ -927,6 +940,11 @@ static void feed_packet(struct priv *p)
+     if (p->decoded_coverart.type)
+         return;
+ 
++    if (!p->packet.type && p->spdif_pending_packet.type) {
++        p->packet = p->spdif_pending_packet;
++        p->spdif_pending_packet = MP_NO_FRAME;
++    }
++
+     if (!p->packet.type && !p->new_segment) {
+         p->packet = mp_pin_out_read(p->demux);
+         if (!p->packet.type)
+@@ -1159,6 +1177,38 @@ static void decf_process(struct mp_filter *f)
+     if (m_config_cache_update(p->opt_cache))
+         update_queue_config(p);
+ 
++    if (p->decoder && p->decoder->spdif_fallback_packet) {
++        // A failed DTS-HD packing operation must not drop one packet and then
++        // continue passthrough. Retain its original bytes/PTS, turn off SPDIF
++        // for this wrapper, and decode that packet exactly once as PCM.
++        struct demux_packet *retry =
++            talloc_steal(p, p->decoder->spdif_fallback_packet);
++        p->decoder->spdif_fallback_packet = NULL;
++        struct mp_frame pending = p->packet;
++        p->packet = MP_NO_FRAME;
++        struct demux_packet *new_segment = p->new_segment;
++        p->new_segment = NULL;
++        double start = p->start, end = p->end, start_pts = p->start_pts;
++
++        mp_mutex_lock(&p->cache_lock);
++        p->try_spdif = false;
++        mp_mutex_unlock(&p->cache_lock);
++        MP_WARN(p, "DTS-HD integrity failure; falling back to PCM and replaying the original packet.\n");
++        bool ok = reinit_decoder(p);
++        p->start = start;
++        p->end = end;
++        p->start_pts = start_pts;
++        p->new_segment = new_segment;
++        if (!ok) {
++            talloc_free(retry);
++            mp_frame_unref(&pending);
++            mp_filter_internal_mark_failed(f);
++            return;
++        }
++        p->packet = MAKE_FRAME(MP_FRAME_PACKET, retry);
++        p->spdif_pending_packet = pending;
++    }
++
+     feed_packet(p);
+     read_frame(p);
+ }
+diff --git a/filters/f_decoder_wrapper.h b/filters/f_decoder_wrapper.h
+index a352dc0c4..52db165ac 100644
+--- a/filters/f_decoder_wrapper.h
++++ b/filters/f_decoder_wrapper.h
+@@ -75,6 +75,7 @@ enum dec_ctrl {
+     // framedrop mode: 0=none, 1=standard, 2=hrseek
+     VDCTRL_SET_FRAMEDROP,
+     VDCTRL_CHECK_FORCED_EOF,
++    ADCTRL_GET_OBJECT_AUDIO_STATUS,
+ };
+ 
+ int mp_decoder_wrapper_control(struct mp_decoder_wrapper *d,
+@@ -94,6 +95,10 @@ struct mp_decoder {
+ 
+     // Can be set by decoder impl. on init for "special" functionality.
+     int (*control)(struct mp_filter *f, enum dec_ctrl cmd, void *arg);
++
++    // Set only by the SPDIF integrity guard. Owned by f until the wrapper
++    // takes it for one-time replay through a normal PCM decoder.
++    struct demux_packet *spdif_fallback_packet;
+ };
+ 
+ struct mp_decoder_fns {
+@@ -106,6 +111,7 @@ struct mp_decoder_fns {
+ extern const struct mp_decoder_fns vd_lavc;
+ extern const struct mp_decoder_fns ad_lavc;
+ extern const struct mp_decoder_fns ad_spdif;
++extern const struct mp_decoder_fns ad_truehd_objects;
+ 
+ // Convenience wrapper for lavc based decoders. Treat lavc_state as private;
+ // init to all-0 on init and resets.
+diff --git a/filters/f_swresample.c b/filters/f_swresample.c
+index 56ff62d37..c7b2797fa 100644
+--- a/filters/f_swresample.c
++++ b/filters/f_swresample.c
+@@ -218,7 +218,12 @@ static bool configure_lavrr(struct priv *p, bool verbose)
+ 
+     AVChannelLayout in_layout, out_layout;
+     mp_chmap_to_av_layout_custom(&in_layout, &map_in);
+-    mp_chmap_to_av_layout(&out_layout, &out_lavc);
++    // out_lavc's mask is only an index placeholder for unknown channels. For
++    // seven channels it is 0x7f, an asymmetric layout swresample cannot remix.
++    // Preserve UNSPEC on both sides of the no-remix path instead of exposing
++    // that placeholder as a speaker layout.
++    mp_chmap_to_av_layout(&out_layout,
++                         mp_chmap_is_unknown(&map_out) ? &map_out : &out_lavc);
+     av_opt_set_chlayout(p->avrctx, "in_chlayout",  &in_layout, 0);
+     av_opt_set_chlayout(p->avrctx, "out_chlayout", &out_layout, 0);
+     av_channel_layout_uninit(&in_layout);
+@@ -228,6 +233,17 @@ static bool configure_lavrr(struct priv *p, bool verbose)
+     av_opt_set_int(p->avrctx, "in_sample_fmt",      in_samplefmt, 0);
+     av_opt_set_int(p->avrctx, "out_sample_fmt",     out_samplefmtp, 0);
+ 
++    // Unknown channel positions cannot authorize a spatial remix. When the
++    // counts differ, retain/truncate plane indices and zero extra channels.
++    // Equal counts use matching UNSPEC layouts and need no rematrix.
++    if (mp_chmap_is_unknown(&map_in) && map_in.num != map_out.num) {
++        double matrix[MP_NUM_CHANNELS * MP_NUM_CHANNELS] = {0};
++        for (int n = 0; n < MPMIN(map_in.num, map_out.num); n++)
++            matrix[n * map_in.num + n] = 1;
++        if (swr_set_matrix(p->avrctx, matrix, map_in.num) < 0)
++            goto error;
++    }
++
+     AVChannelLayout fake_layout;
+     av_channel_layout_default(&fake_layout, map_out.num);
+     av_opt_set_chlayout(p->avrctx_out, "in_chlayout", &fake_layout, 0);
+diff --git a/meson.build b/meson.build
+index a3435b255..63e8f5435 100644
+--- a/meson.build
++++ b/meson.build
+@@ -236,6 +236,7 @@ sources = files(
+     'video/out/gpu/hwdec.c',
+     'video/out/gpu/lcms.c',
+     'video/out/gpu/libmpv_gpu.c',
++    'video/out/libmpv_placebo.c',
+     'video/out/gpu/osd.c',
+     'video/out/gpu/ra.c',
+     'video/out/gpu/shader_cache.c',
+@@ -848,6 +849,14 @@ if features['avfoundation']
+     sources += files('audio/out/ao_avfoundation.m')
+ endif
+ 
++truehd_atmos = dependency('truehd-atmos', required: false)
++features += {'netvplayer-atmos': avfoundation.found() and truehd_atmos.found()}
++if features['netvplayer-atmos']
++    dependencies += [truehd_atmos, dependency('appleframeworks', modules: ['CoreMotion'])]
++    sources += files('audio/decode/ad_truehd_objects.c', 'audio/decode/atmos_render.c',
++                     'audio/decode/atmos_binaural.m')
++endif
++
+ coreaudio = dependency('appleframeworks', modules: ['CoreFoundation', 'CoreAudio',
+                        'AudioUnit', 'AudioToolbox'], required: get_option('coreaudio'))
+ features += {'coreaudio': coreaudio.found()}
+diff --git a/player/audio.c b/player/audio.c
+index b3e975dd2..1823bbd4a 100644
+--- a/player/audio.c
++++ b/player/audio.c
+@@ -191,6 +191,16 @@ void audio_update_volume(struct MPContext *mpctx)
+ 
+     float gain = audio_get_gain(mpctx);
+     ao_set_gain(ao_c->ao, gain);
++    // Original compressed packets bypass PCM sample gain. AVFoundation owns
++    // the decoded samples, so apply the same gain curve at that private sink.
++    // Never change a physical device's volume or compressed HDMI carrier.
++    struct ao_native_audio_status native;
++    if (ao_control(ao_c->ao, AOCONTROL_GET_NATIVE_AUDIO_STATUS, &native) == CONTROL_OK) {
++        float volume = MPCLAMP(gain, 0, 1) * 100;
++        bool muted = mpctx->opts->softvol_mute;
++        ao_control(ao_c->ao, AOCONTROL_SET_VOLUME, &volume);
++        ao_control(ao_c->ao, AOCONTROL_SET_MUTE, &muted);
++    }
+ }
+ 
+ // Call this if opts->playback_speed or mpctx->speed_factor_* change.
+@@ -866,11 +876,34 @@ void audio_start_ao(struct MPContext *mpctx)
+     mp_wakeup_core(mpctx);
+ }
+ 
++static void fallback_compressed_audio(struct MPContext *mpctx)
++{
++    struct ao_chain *chain = mpctx->ao_chain;
++    if (!chain || !chain->track || !chain->track->dec || !chain->spdif_passthrough)
++        return;
++    MP_WARN(mpctx, "Compressed audio sink failed; restoring synchronized PCM output.\n");
++    ao_reset(mpctx->ao);
++    uninit_audio_out(mpctx);
++    chain->spdif_passthrough = false;
++    chain->spdif_failed = true;
++    mp_decoder_wrapper_set_spdif_flag(chain->track->dec, false);
++    if (!mp_decoder_wrapper_reinit(chain->track->dec)) {
++        error_on_track(mpctx, chain->track);
++        return;
++    }
++    reinit_audio_filters(mpctx);
++    reset_audio_state(mpctx);
++    mp_output_chain_reset_harder(chain->filter);
++    mp_wakeup_core(mpctx);
++}
++
+ void fill_audio_out_buffers(struct MPContext *mpctx)
+ {
+     struct MPOpts *opts = mpctx->opts;
+ 
+-    if (mpctx->ao && ao_query_and_reset_events(mpctx->ao, AO_EVENT_RELOAD))
++    if (mpctx->ao && ao_query_and_reset_events(mpctx->ao, AO_EVENT_COMPRESSED_FAILED))
++        fallback_compressed_audio(mpctx);
++    else if (mpctx->ao && ao_query_and_reset_events(mpctx->ao, AO_EVENT_RELOAD))
+         reload_audio_output(mpctx);
+ 
+     update_throttle(mpctx);
+diff --git a/player/client.c b/player/client.c
+index 61c998dbb..7bf8d14d9 100644
+--- a/player/client.c
++++ b/player/client.c
+@@ -2247,3 +2247,22 @@ bool mp_streamcb_lookup(struct mpv_global *g, const char *protocol,
+     mp_mutex_unlock(&clients->lock);
+     return found;
+ }
++
++// NetVplayer's optional ABI: high 32 bits are the contract version.
++// Audio capabilities describe implemented transports, not connected hardware.
++MPV_EXPORT uint64_t mpv_netvplayer_runtime_capabilities(void);
++MPV_EXPORT uint64_t mpv_netvplayer_runtime_capabilities(void)
++{
++    uint64_t result = (UINT64_C(1) << 32) | 3;
++#if HAVE_AVFOUNDATION
++    result |= 16;
++#endif
++#if HAVE_COREAUDIO
++    // Strict compressed transports, restorable PCM rate follow, DTS-HD HBR.
++    result |= 32 | 64 | 128 | 256;
++#endif
++#if HAVE_NETVPLAYER_ATMOS
++    result |= 512;
++#endif
++    return result;
++}
+diff --git a/player/command.c b/player/command.c
+index be8e88579..17049c8fe 100644
+--- a/player/command.c
++++ b/player/command.c
+@@ -1971,6 +1971,58 @@ static int mp_property_audio_out_params(void *ctx, struct m_property *prop,
+     return r;
+ }
+ 
++static int mp_property_netvplayer_audio(void *ctx, struct m_property *prop,
++                                        int action, void *arg)
++{
++    MPContext *mpctx = ctx;
++    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
++    if (valid != M_PROPERTY_VALID)
++        return valid;
++    struct ao_native_audio_status status;
++    if (!mpctx->ao || ao_control(mpctx->ao, AOCONTROL_GET_NATIVE_AUDIO_STATUS, &status) != CONTROL_OK)
++        return M_PROPERTY_UNAVAILABLE;
++    struct m_sub_property props[] = {
++        {"samplerate", SUB_PROP_INT(status.rate)},
++        {"channels", SUB_PROP_INT(status.channels)},
++        {"renderer-state", SUB_PROP_INT(status.renderer_state)},
++        {"joc", SUB_PROP_BOOL(status.joc)},
++        {"spatial-allowed", SUB_PROP_BOOL(status.spatial_allowed)},
++        {"renderer-muted", SUB_PROP_BOOL(status.muted)},
++        {"renderer-volume", SUB_PROP_FLOAT(status.volume)},
++        {"packets", SUB_PROP_INT64(status.packets)},
++        {"payload-bytes", SUB_PROP_INT64(status.payload_bytes)},
++        {"generation", SUB_PROP_INT64(status.generation)},
++        {0}
++    };
++    return m_property_read_sub(props, action, arg);
++}
++
++#if HAVE_NETVPLAYER_ATMOS
++#include "audio/decode/ad_truehd_objects.h"
++static int mp_property_netvplayer_objects(void *ctx, struct m_property *prop, int action, void *arg)
++{
++    MPContext *mpctx = ctx;
++    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
++    if (valid != M_PROPERTY_VALID) return valid;
++    struct track *track = mpctx->current_track[0][STREAM_AUDIO];
++    struct nv_object_audio_status s;
++    if (!track || !track->dec || mp_decoder_wrapper_control(track->dec, ADCTRL_GET_OBJECT_AUDIO_STATUS, &s) != CONTROL_OK)
++        return M_PROPERTY_UNAVAILABLE;
++    struct m_sub_property props[] = {
++        {"mode", SUB_PROP_INT(s.mode)}, {"samplerate", SUB_PROP_INT(s.rate)},
++        {"presentation", SUB_PROP_INT(s.presentation)}, {"elements", SUB_PROP_INT(s.elements)},
++        {"has-objects", SUB_PROP_BOOL(s.has_objects)}, {"metadata-seen", SUB_PROP_BOOL(s.metadata_seen)},
++        {"frames", SUB_PROP_INT64(s.frames)}, {"object-blocks", SUB_PROP_INT64(s.object_blocks)},
++        {"metadata-updates", SUB_PROP_INT64(s.metadata_updates)}, {"fallback-blocks", SUB_PROP_INT64(s.fallback_blocks)},
++        {"decode-errors", SUB_PROP_INT64(s.decode_errors)}, {"sync-errors", SUB_PROP_INT64(s.sync_errors)},
++        {"metadata-errors", SUB_PROP_INT64(s.metadata_errors)}, {"binaural-frames", SUB_PROP_INT64(s.binaural_frames)},
++        {"tracking-requested", SUB_PROP_BOOL(s.tracking_requested)}, {"tracking-active", SUB_PROP_BOOL(s.tracking_active)},
++        {"poses", SUB_PROP_INT64(s.poses)}, {"pose-age", SUB_PROP_DOUBLE(s.pose_age)}, {0}
++    };
++    return m_property_read_sub(props, action, arg);
++}
++#endif
++
+ static struct track* track_next(struct MPContext *mpctx, enum stream_type type,
+                                 int direction, struct track *track)
+ {
+@@ -4695,6 +4747,10 @@ static const struct m_property mp_properties_base[] = {
+     M_PROPERTY_ALIAS("audio-codec", "current-tracks/audio/codec-desc"),
+     {"audio-params", mp_property_audio_params},
+     {"audio-out-params", mp_property_audio_out_params},
++    {"netvplayer-audio", mp_property_netvplayer_audio},
++#if HAVE_NETVPLAYER_ATMOS
++    {"netvplayer-object-audio", mp_property_netvplayer_objects},
++#endif
+     {"aid", mp_property_switch_track, .priv = (void *)(const int[]){0, STREAM_AUDIO}},
+     {"audio-device", mp_property_audio_device},
+     {"audio-device-list", mp_property_audio_devices},
+diff --git a/video/out/libmpv.h b/video/out/libmpv.h
+index 02efefb10..0bc75f93d 100644
+--- a/video/out/libmpv.h
++++ b/video/out/libmpv.h
+@@ -48,6 +48,8 @@ struct render_backend_fns {
+     bool (*check_format)(struct render_backend *ctx, int imgfmt);
+     // Implementation of mpv_render_context_set_parameter(). Optional.
+     int (*set_parameter)(struct render_backend *ctx, mpv_render_param param);
++    // Optional thread-safe backend telemetry; no GPU operations.
++    int (*get_info)(struct render_backend *ctx, mpv_render_param param);
+     // Like vo_driver.reconfig().
+     void (*reconfig)(struct render_backend *ctx, struct mp_image_params *params);
+     // Like VOCTRL_RESET.
+@@ -81,3 +83,4 @@ struct render_backend_fns {
+ 
+ extern const struct render_backend_fns render_backend_gpu;
+ extern const struct render_backend_fns render_backend_sw;
++extern const struct render_backend_fns render_backend_libplacebo;
+diff --git a/video/out/vo_libmpv.c b/video/out/vo_libmpv.c
+index a91016df4..8397738c4 100644
+--- a/video/out/vo_libmpv.c
++++ b/video/out/vo_libmpv.c
+@@ -113,6 +113,7 @@ struct mpv_render_context {
+ 
+ const struct render_backend_fns *render_backends[] = {
+     &render_backend_gpu,
++    &render_backend_libplacebo,
+     &render_backend_sw,
+     NULL
+ };
+@@ -478,7 +479,10 @@ int mpv_render_context_get_info(mpv_render_context *ctx,
+         res = 0;
+         break;
+     }
+-    default:;
++    default:
++        if (ctx->renderer->fns->get_info)
++            res = ctx->renderer->fns->get_info(ctx->renderer, param);
++        break;
+     }
+ 
+     mp_mutex_unlock(&ctx->lock);

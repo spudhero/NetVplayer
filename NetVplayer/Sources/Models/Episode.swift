@@ -40,6 +40,36 @@ public struct Episode: Codable, Identifiable, Sendable {
         self.series = series
     }
 
+    /// The shipped FongMi Flag.setEpisodes contract, before any playback action.
+    /// Bare entries and empty labels receive their original one-based ordinal;
+    /// IDs remain byte-for-byte strings, including whitespace and extra dollars.
+    public static func parseOriginalAndroid(from text: String) -> [Episode] {
+        var entries = text.components(separatedBy: "#")
+        if text.contains("#") {
+            // Java String.split(regex) discards trailing empty fields.
+            while entries.last == "" { entries.removeLast() }
+        }
+        // Java String.equals compares exact content, while Swift String equality
+        // also equates canonically equivalent Unicode spellings.
+        var seen: [Data: Set<Data>] = [:]
+        var episodes: [Episode] = []
+        for (index, item) in entries.enumerated() {
+            let parts = item.split(separator: "$", maxSplits: 1, omittingEmptySubsequences: false)
+            let fallback = String(format: "%02d", index + 1)
+            let name = parts.count > 1 && !parts[0].isEmpty
+                ? originalAndroidTrim(String(parts[0])) : fallback
+            let url = parts.count > 1 ? String(parts[1]) : item
+            if seen[Data(name.utf8), default: []].insert(Data(url.utf8)).inserted {
+                episodes.append(Episode(name: name, url: url))
+            }
+        }
+        return episodes
+    }
+
+    static func originalAndroidTrim(_ value: String) -> String {
+        value.trimmingCharacters(in: CharacterSet(charactersIn: "\u{0}"..."\u{20}"))
+    }
+
     /// 从 "集名$url#集名$url" 格式解析
     public static func parse(from text: String) -> [Episode] {
         guard !text.isEmpty else { return [] }

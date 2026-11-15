@@ -59,6 +59,13 @@ import ProviderSDK
     #expect(AppState.transientPreparationRetryDelayNanoseconds(for: retryable, attempt: 0) == 500_000_000)
     #expect(AppState.transientPreparationRetryDelayNanoseconds(for: retryable, attempt: 1) == nil)
     #expect(AppState.transientPreparationRetryDelayNanoseconds(for: terminal, attempt: 0) == nil)
+    let disconnectedSDK = ProviderErrorPayload(code: "android_sdk_media_disconnected", message: "connection closed", retryable: true)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: disconnectedSDK, attempt: 0) == 500_000_000)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: disconnectedSDK, attempt: 1) == nil)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: ProviderInteractionError.timedOut, attempt: 0) == nil)
+    #expect(AppState.transientPreparationRetryDelayNanoseconds(for: ProviderInteractionError.canceled, attempt: 0) == nil)
+    #expect(UserFacingErrorPresenter.message(for: ProviderInteractionError.timedOut, context: .playback)
+        .contains("扫码或交互等待超时"))
     #expect(AppState.transientPreparationRetryDelayNanoseconds(for: staleSavedRecord, attempt: 0) == 500_000_000)
     #expect(AppState.transientPreparationRetryDelayNanoseconds(for: staleSavedRecord, attempt: 1) == nil)
     #expect(DriveEngineError.invalidatesSavedRecord(staleSavedRecord, provider: .uc))
@@ -631,7 +638,7 @@ import ProviderSDK
     original = DrivePlaybackRoutePolicy.preparedSpec(original)
     var window = DrivePlaybackStallWindow()
     #expect(window.threshold(for: original, at: 0) == 8)
-    #expect(MPVPlayerEngine.localStreamStartupTimeout(for: original) == 8)
+    #expect(MPVPlayerEngine.localStreamStartupTimeout(for: original) == 60)
     #expect(!MPVPlayerEngine.shouldCancelStartupWatchdogAfterDuration(for: original, seconds: 2891))
     #expect(MPVPlayerEngine.shouldFireLocalStreamStartupWatchdog(
         spec: original, playbackStarted: false,
@@ -669,6 +676,26 @@ import ProviderSDK
     window.record(duration: 0.2, at: 80)
     window.record(duration: .nan, at: 81)
     #expect(window.threshold(for: original, at: 82) == 8)
+}
+
+@Test(arguments: [DriveProvider.ali, .uc, .quark, .baidu, .p115, .pikpak])
+func testAutomaticOriginalStartupGraceIsSeparateFromPlaybackStall(_ provider: DriveProvider) {
+    let original = DrivePlaybackCandidate(id: "original", providerRoute: DrivePlaybackRoute.originalDownload,
+        kind: .original, transport: .localRangeProxy, url: "https://media.example.test/original.mkv")
+    let smart = DrivePlaybackCandidate(id: "smart", providerRoute: DrivePlaybackRoute.personalTranscode,
+        kind: .transcode, transport: .hlsRelay, url: "https://media.example.test/smart.m3u8")
+    var spec = PlaySpec(url: original.url)
+    spec.drivePlaybackPlan = DrivePlaybackPlan(provider: provider,
+        asset: .init(provider: provider, sourceFileID: "file"), candidates: [original, smart])
+    spec = DrivePlaybackRoutePolicy.preparedSpec(spec)
+
+    // Header/tail reads have their startup deadline, even after localization.
+    // Once playing, an unusable original can still fall back after a stall.
+    for url in [original.url, "http://localhost:9978/stream?id=original"] {
+        spec.url = url
+        #expect(MPVPlayerEngine.localStreamStartupTimeout(for: spec) == (provider == .ali ? 60 : 8))
+        #expect(MPVPlaybackActivityPolicy.cacheStallThreshold(for: spec) == 8)
+    }
 }
 
 @Test func testMPVEndFileStateRejectsEventsFromReplacedPlayback() {

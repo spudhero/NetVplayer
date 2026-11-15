@@ -17,8 +17,10 @@ struct BuildRunPackagingTests {
             contentsOf: packageRoot.appendingPathComponent("script/build_and_run.sh"), encoding: .utf8
         )
 
-        #expect(info["CFBundleShortVersionString"] as? String == "1.1.4")
-        #expect(info["CFBundleVersion"] as? String == "18")
+        let version = try #require(info["CFBundleShortVersionString"] as? String)
+        let build = try #require(info["CFBundleVersion"] as? String)
+        #expect(version.range(of: "^[0-9]+\\.[0-9]+\\.[0-9]+$", options: .regularExpression) != nil)
+        #expect(build.range(of: "^[1-9][0-9]*$", options: .regularExpression) != nil)
         #expect(info["SUFeedURL"] as? String == "https://github.com/spudhero/NetVplayer/releases/latest/download/appcast.xml")
         #expect(info["SURequireSignedFeed"] as? Bool == true)
         #expect(info["SUVerifyUpdateBeforeExtraction"] as? Bool == true)
@@ -358,6 +360,10 @@ struct BuildRunPackagingTests {
             contentsOf: packageRoot.appendingPathComponent("Sources/NetVplayerApp/NetVplayerApp.swift"),
             encoding: .utf8
         )
+        let startupSource = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/NetVplayerApp/AppStartupCoordinator.swift"),
+            encoding: .utf8
+        )
         let issueForm = try String(
             contentsOf: repositoryRoot.appendingPathComponent(".github/ISSUE_TEMPLATE/user-feedback.yml"),
             encoding: .utf8
@@ -373,16 +379,21 @@ struct BuildRunPackagingTests {
         #expect(buildScript.contains("APP_DIAGNOSTIC_LOG=\"$HOME/Library/Logs/NetVplayer/current.log\""))
         #expect(buildScript.contains("tail -F \"$LOG_FILE\" \"$APP_DIAGNOSTIC_LOG\""))
         #expect(appSource.contains("Button(L10n.text(\"报告问题…\"))"))
-        #expect(appSource.contains("if visualRegressionConfiguration == nil"))
-        let visualGuardRange = try #require(appSource.range(of: "if visualRegressionConfiguration == nil"))
+        // Startup owns diagnostics after the lightweight recovery refactor.
+        // Visual captures must still skip logging, before any runtime is built.
+        let visualGuardRange = try #require(startupSource.range(of: "guard visual == nil && !isolatedAudit else"))
         let diagnosticStartRange = try #require(
-            appSource.range(of: "DiagnosticLog.beginSession()", range: visualGuardRange.upperBound..<appSource.endIndex)
+            startupSource.range(of: "DiagnosticLog.beginSession()", range: visualGuardRange.upperBound..<startupSource.endIndex)
         )
-        let stateObjectRange = try #require(
-            appSource.range(of: "_appState = StateObject", range: diagnosticStartRange.upperBound..<appSource.endIndex)
+        let runtimeFactoryRange = try #require(
+            startupSource.range(of: "factory: { choice in", range: diagnosticStartRange.upperBound..<startupSource.endIndex)
         )
+        let runtimeRange = try #require(startupSource.range(of: "let state = AppState(",
+            range: runtimeFactoryRange.upperBound..<startupSource.endIndex))
+        #expect(appSource.contains("_startup = StateObject(wrappedValue: startup)"))
         #expect(visualGuardRange.lowerBound < diagnosticStartRange.lowerBound)
-        #expect(diagnosticStartRange.lowerBound < stateObjectRange.lowerBound)
+        #expect(diagnosticStartRange.lowerBound < runtimeFactoryRange.lowerBound)
+        #expect(runtimeFactoryRange.lowerBound < runtimeRange.lowerBound)
         for identifier in ["category", "problem", "steps", "expected", "actual", "reproduction", "public_source", "attachment", "diagnostics", "privacy"] {
             #expect(issueForm.contains("id: \(identifier)"))
         }

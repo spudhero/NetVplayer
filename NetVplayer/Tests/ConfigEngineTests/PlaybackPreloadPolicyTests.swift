@@ -8,6 +8,7 @@ import Models
 private actor FakeThunderDownloadRuntime: ThunderDownloadRuntime {
     let data: Data
     let delay: Duration
+    private(set) var calls = 0
 
     init(data: Data, delay: Duration = .zero) {
         self.data = data
@@ -18,6 +19,7 @@ private actor FakeThunderDownloadRuntime: ThunderDownloadRuntime {
         _ request: ThunderDownloadRequest,
         configuration _: ThunderDownloadConfiguration
     ) async throws -> ThunderDownloadResult {
+        calls += 1
         if delay > .zero {
             try await Task.sleep(for: delay)
         }
@@ -27,6 +29,34 @@ private actor FakeThunderDownloadRuntime: ThunderDownloadRuntime {
             downloadedBytes: Int64(data.count)
         )
     }
+}
+
+@Test func thunderWholeFilePreloadRespectsByteBudgetAndReadGeneration() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("sdk-budget-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let library = root.appendingPathComponent("libdk.dylib"); try Data().write(to: library)
+    let configuration = ThunderDownloadConfiguration(appID: "fixture", loginToken: "fixture", libraryURL: library,
+        configDirectory: root.appendingPathComponent("state"), cacheDirectory: root.appendingPathComponent("cache"))
+    let runtime = FakeThunderDownloadRuntime(data: Data("media".utf8), delay: .seconds(10))
+    let cache = ThunderNextEpisodeCache(runtime: runtime, configurationProvider: { configuration })
+    var spec = PlaySpec(url: "https://fixture.example/movie.mp4", contentLength: PlaybackTransferProfile.backgroundByteLimit + 1,
+        metadata: [DrivePlaybackMetadataKey.provider: DriveProvider.uc.rawValue,
+                   DrivePlaybackMetadataKey.route: DrivePlaybackRoute.ucOriginalProxy])
+    #expect(await cache.prepare(spec) == nil)
+    #expect(await runtime.calls == 0)
+    let session = PlaybackReadSession(); spec.readSession = session; spec.contentLength = 5
+    let source = spec
+    let task = Task { await cache.prepare(source) }
+    for _ in 0..<200 {
+        if await runtime.calls == 1 { break }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(await runtime.calls == 1)
+    session.advance()
+    #expect(await task.value == nil)
+    #expect(PlaybackBackgroundBudget.shared.reservedBytes == 0)
+    #expect((try? FileManager.default.contentsOfDirectory(atPath: configuration.cacheDirectory.path).isEmpty) == true)
 }
 
 private final class ThunderRuntimeFactoryProbe: @unchecked Sendable {

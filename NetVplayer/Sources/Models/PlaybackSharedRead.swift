@@ -12,9 +12,11 @@ public final class PlaybackSharedRead<Value: Sendable>: @unchecked Sendable {
     private var waiters: [UUID: Waiter] = [:]
     private var cancelledWaiters: Set<UUID> = []
     private let task: Task<Value, Error>
+    private let priority: PlaybackReadPriority?
 
-    public init(task: Task<Value, Error>) {
+    public init(task: Task<Value, Error>, priority: PlaybackReadPriority? = nil) {
         self.task = task
+        self.priority = priority
         Task { [weak self] in
             let result = await task.result
             self?.complete(result)
@@ -24,12 +26,14 @@ public final class PlaybackSharedRead<Value: Sendable>: @unchecked Sendable {
     public var hasForegroundReaders: Bool {
         lock.withLock { waiters.values.contains { Self.isForeground($0.phase) } }
     }
+    public var hasReaders: Bool { lock.withLock { !waiters.isEmpty } }
 
     public var isCancelled: Bool {
         lock.withLock { if case .failure(let error) = result { return error is CancellationError }; return false }
     }
 
     public func value(phase: PlaybackTransferPhase = .playback) async throws -> Value {
+        if Self.isForeground(phase) { priority?.promote() }
         let id = UUID()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()

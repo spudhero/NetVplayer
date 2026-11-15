@@ -188,6 +188,31 @@ actor CatalogRepository {
     }
 
     private func store(_ result: Models.Result, for key: PageKey) {
+        if case .category = key.base.kind, result.androidCategoryPayload != nil {
+            // A newly received original first page starts a new list. A later
+            // response can also reduce the advertised bound; do not replay or
+            // refill pages which the current original pager would never request.
+            let lastPage: Int?
+            if key.page == 1 { lastPage = 1 }
+            else if result.pagecount != 0 { lastPage = max(key.page, result.pagecount) }
+            else { lastPage = nil }
+            if let lastPage {
+                for old in entries.keys.filter({ $0.base == key.base && $0.page > lastPage }) { entries[old] = nil }
+                for old in inFlight.keys.filter({ $0.base == key.base && $0.page > lastPage }) {
+                    inFlight.removeValue(forKey: old)?.task.cancel()
+                }
+            }
+        }
+        if case .category = key.base.kind, result.androidCategoryPayload != nil, result.list.isEmpty {
+            // An empty refreshed first page supersedes every old page. A later
+            // empty page is retryable under original y40 semantics, not a cached
+            // successful page that should advance the next request.
+            for old in entries.keys.filter({ $0.base == key.base && $0.page >= key.page }) { entries[old] = nil }
+            for old in inFlight.keys.filter({ $0.base == key.base && $0.page > key.page }) {
+                inFlight.removeValue(forKey: old)?.task.cancel()
+            }
+            if key.page > 1 { return }
+        }
         accessSerial &+= 1
         entries[key] = Entry(result: result, storedAt: now(), lastAccess: accessSerial)
         if entries.count > maximumPages,

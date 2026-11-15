@@ -26,12 +26,16 @@ public actor ProviderPackageStore {
     private let verifier: ProviderManifestVerifier
     private let fileManager: FileManager
     private let maintenance: ProviderMaintenance
+    private let stateDirectoryRootURL: URL?
+    private let isolatedSandboxSession = UUID().uuidString.lowercased()
 
-    public init(rootURL: URL, verifier: ProviderManifestVerifier, fileManager: FileManager = .default) {
+    public init(rootURL: URL, verifier: ProviderManifestVerifier, fileManager: FileManager = .default,
+                stateDirectoryRootURL: URL? = nil) {
         self.rootURL = rootURL
         self.verifier = verifier
         self.fileManager = fileManager
         self.maintenance = ProviderMaintenance(root: rootURL)
+        self.stateDirectoryRootURL = stateDirectoryRootURL
     }
 
     public func isDisabled() -> Bool {
@@ -194,16 +198,28 @@ public actor ProviderPackageStore {
         return try JSONDecoder().decode(SignedProviderManifest.self, from: Data(contentsOf: url))
     }
 
-    public func stateDirectory(providerID: String) throws -> URL {
+    public func stateDirectory(providerID: String, sandboxed: Bool = false) throws -> URL {
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
         guard !providerID.isEmpty, providerID.rangeOfCharacter(from: allowed.inverted) == nil else {
             throw ProviderPackageStoreError.invalidProviderIdentifier(providerID)
         }
-        let stateRoot = rootURL.appendingPathComponent(".state", isDirectory: true)
+        // A signed sandbox can write only within its existing provider-scoped
+        // entitlement. Audit state uses a fresh child there, never the user's
+        // ordinary state files or a wider entitlement for the output directory.
+        let isolatedSandbox = sandboxed && stateDirectoryRootURL != nil
+        let stateRoot = isolatedSandbox ? rootURL.appendingPathComponent(".state", isDirectory: true)
+            : (stateDirectoryRootURL ?? rootURL.appendingPathComponent(".state", isDirectory: true))
         let providerState = stateRoot.appendingPathComponent(providerID, isDirectory: true)
-        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: stateRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
         try preparePrivateStateDirectory(stateRoot)
         try preparePrivateStateDirectory(providerState)
+        if isolatedSandbox {
+            let audits = providerState.appendingPathComponent(".audit", isDirectory: true)
+            let session = audits.appendingPathComponent(isolatedSandboxSession, isDirectory: true)
+            try preparePrivateStateDirectory(audits)
+            try preparePrivateStateDirectory(session)
+            return session
+        }
         return providerState
     }
 

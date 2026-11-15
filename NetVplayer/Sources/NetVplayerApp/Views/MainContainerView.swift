@@ -100,6 +100,28 @@ struct MainContainerView: View {
                 .preferredColorScheme(palette.preferredColorScheme)
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            if !appState.isPlayerPresented && (appState.driveTaskStorageFailed || appState.driveTaskSummaries.contains(where: \.canContinue)) {
+                HStack {
+                    Label(L10n.text("上次转存未完成，请手动核对"), systemImage: "clock.arrow.circlepath")
+                    Spacer()
+                    Button(L10n.text("查看转存记录")) { appState.showsDriveTaskRecovery = true }
+                }
+                .font(.callout).padding(12).background(.regularMaterial)
+            }
+        }
+        .sheet(isPresented: $appState.showsDriveTaskRecovery, onDismiss: { appState.finishTaskSheetDismissal() }) {
+            DriveTaskRecoveryView().environmentObject(appState)
+        }
+        #if DEBUG
+        .overlay {
+            if let state = StartupRecoveryProbe.current?.scanState, let service = state.catalog.services.first {
+                FileServiceBrowserView(state: state, service: service)
+                    .padding(20).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(palette.background)
+            }
+        }
+        #endif
         .environment(\.locale, L10n.locale)
         .environment(\.appThemePalette, palette)
         .sheet(item: Binding(
@@ -161,6 +183,7 @@ struct MainContainerView: View {
     private func stopPlaybackForWindowClose() {
         guard appState.isPlayerPresented else { return }
         appState.saveCurrentPlaybackProgress()
+        guard !PlayerPictureInPicture.vod.isPresented else { return }
         appState.cleanupDrivePlaybackIfNeeded(spec: appState.playerState.currentSpec)
         MPVPlayerEngine.vod.stop()
         DiagnosticLog.write("[VOD_PLAYER_EXIT] action=window-close")
@@ -204,7 +227,7 @@ struct LivePlayerWindowView: View {
     }
 
     private func cleanupPlaybackIfNeeded() {
-        guard appState.isLivePlayerPresented else { return }
+        guard appState.isLivePlayerPresented, !PlayerPictureInPicture.live.isPresented else { return }
         MPVPlayerEngine.live.stop()
         appState.liveError = nil
         appState.dismissLivePlayer()

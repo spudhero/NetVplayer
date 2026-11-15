@@ -26,6 +26,7 @@ __pycache__/
 
 # Local design tooling / generated review exports
 .od-skills/
+.od-frames/
 /critique.json
 /image.png
 /netvplayer-*.html

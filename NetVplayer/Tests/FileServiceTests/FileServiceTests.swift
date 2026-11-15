@@ -5,7 +5,6 @@ import Storage
 import FileServiceEngine
 import ProxyServer
 import SpiderEngine
-import MediaLibraryEngine
 
 @Suite("File services", .serialized)
 struct FileServiceTests {

@@ -3,6 +3,8 @@ import Testing
 import Models
 import Storage
 import FileServiceEngine
+import MediaLibraryEngine
+import CSQLite
 @testable import NetVplayerApp
 
 @Suite("File services view state", .serialized)
@@ -28,6 +30,113 @@ struct FileServicesStateTests {
         #expect(state.mediaLoading == false)
         #expect(state.directoryError == nil); #expect(state.error == nil)
     }
+
+    @Test(arguments: [true, false])
+    func reopenedIndexRemainsBrowsableUntilExplicitRefresh(hasSuccessfulScan: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let media = directory.appendingPathComponent("media")
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        try Data().write(to: media.appendingPathComponent("Original (2024).mkv"))
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let preferences = UserPreferences(defaults: defaults, credentialStore: MemoryCredentialStore())
+        let store = FileServiceStore(storage: StorageManager(storageDirectory: directory.appendingPathComponent("state")), preferences: preferences)
+        let service = FileServiceConfiguration(name: "Offline-capable library", kind: .local)
+        let library = MediaLibraryConfiguration(serviceID: service.id, name: "Movies", metadataSource: .local)
+        try store.save(.init(services: [service], libraries: [library]))
+        try store.saveBookmark(media.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil), for: service.id)
+        let runtime = FileServiceRuntime(store: store)
+        let client = try await runtime.client(for: service.id)
+        let url = directory.appendingPathComponent("index.sqlite")
+        let initialIndex = MediaIndex(url: url)
+        await MediaLibraryScanner(index: initialIndex).scan(library, client: client)
+        let original = try #require(try await initialIndex.records(libraryID: library.id).first)
+        try await initialIndex.applyCorrection(.init(reference: original.reference, fields: .init(title: "Saved title")))
+
+        // A cold index may have an old successful scan, or only a partial/failed scan.
+        // Neither state makes browsing permission to enumerate the source again.
+        let oldDate = Date().addingTimeInterval(-3 * 24 * 60 * 60)
+        var database: OpaquePointer?
+        try #require(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK)
+        defer { sqlite3_close(database) }
+        let dateValue = hasSuccessfulScan ? String(oldDate.timeIntervalSince1970) : "NULL"
+        try #require(sqlite3_exec(database, "UPDATE scan_state SET last_success=\(dateValue)", nil, nil, nil) == SQLITE_OK)
+        try Data().write(to: media.appendingPathComponent("Added while closed (2025).mkv"))
+
+        let reopened = MediaIndex(url: url)
+        let scanner = MediaLibraryScanner(index: reopened)
+        let refreshed = LibraryScanRecorder()
+        let state = FileServicesState(index: reopened, store: store, runtime: runtime,
+            startLibraryScan: {
+                await scanner.scan($0, client: client)
+                await refreshed.append($0.id)
+            })
+        state.selectService(service.id); await state.waitForMediaLoad()
+        #expect(state.mode == .library && !state.busy)
+        #expect(state.mediaRecords.count == 1 && state.mediaRecords.first?.metadata.title == "Saved title")
+        #expect(state.mediaError == nil && state.directoryError == nil)
+        #expect(await refreshed.ids.isEmpty)
+        #expect(await scanner.currentProgress(libraryID: library.id) == nil)
+        let previousScan = try await reopened.lastSuccessfulScan(libraryID: library.id)
+        if hasSuccessfulScan {
+            #expect(try #require(previousScan).timeIntervalSince(oldDate).magnitude < 0.001)
+        } else { #expect(previousScan == nil) }
+
+        state.refreshCurrentView()
+        for _ in 0..<400 {
+            if await refreshed.ids == [library.id] { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await refreshed.ids == [library.id])
+        state.loadMedia(); await state.waitForMediaLoad()
+        #expect(state.mediaRecords.count == 2)
+        #expect(state.mediaRecords.contains { $0.metadata.title == "Saved title" })
+        #expect(try await reopened.lastSuccessfulScan(libraryID: library.id)! > oldDate)
+        await runtime.invalidate(serviceID: service.id)
+    }
+    @Test(arguments: ["interrupted", "expired", "cancelled", "changed"])
+    func checkpointStartupAndOrdinarySwitchingNeverStartAScan(phase: String) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("msc05-state-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileServiceStore(storage: StorageManager(storageDirectory: directory.appendingPathComponent("state")),
+            preferences: UserPreferences(defaults: UserDefaults(suiteName: UUID().uuidString)!, credentialStore: MemoryCredentialStore()))
+        let service = FileServiceConfiguration(name: "Offline fixture", kind: .webDAV, address: "https://unreachable.invalid")
+        let library = MediaLibraryConfiguration(serviceID: service.id, name: "Unfinished", metadataSource: .local)
+        let otherService = FileServiceConfiguration(name: "Other offline fixture", kind: .smb, address: "smb://unreachable.invalid", share: "Share")
+        let otherLibrary = MediaLibraryConfiguration(serviceID: otherService.id, name: "Other")
+        var catalog = FileServiceCatalog(services: [service, otherService], libraries: [library, otherLibrary])
+        try store.save(catalog)
+        let url = directory.appendingPathComponent("index.sqlite"), index = MediaIndex(url: directory.appendingPathComponent("index.sqlite"))
+        let ref = try FileResourceReference(serviceID: service.id, libraryID: library.id, path: "/Saved.mkv")
+        var record = MediaRecord(reference: ref, entry: .init(path: ref.path, name: "Saved.mkv", isDirectory: false), groupKey: "saved", filenameMetadata: .init(title: "Saved"))
+        record.correction = .init(reference: ref, fields: .init(title: "Manual title"))
+        try await index.upsert(record, scanID: UUID())
+        let revision = try MediaLibraryScanner.configurationRevision(library, store: store)
+        let date = phase == "expired" ? Date().addingTimeInterval(-MediaScanCheckpoint.retention - 10) : Date()
+        _ = try await index.beginScanCheckpoint(library: library, revision: revision, request: .rescan, runID: UUID(), now: date)
+        if phase == "cancelled" { try await index.interruptScanCheckpoint(libraryID: library.id, phase: .cancelled) }
+        if phase == "changed" { catalog.services[0].rootPath = "/new"; try store.save(catalog) }
+        let saved = try await index.scanCheckpoint(libraryID: library.id)
+        let requests = LibraryScanRecorder()
+        let reopened = MediaIndex(url: url), scanner = MediaLibraryScanner(index: reopened, store: store)
+        let state = FileServicesState(index: reopened, store: store,
+            startLibraryScan: { await requests.append($0.id) }, scanner: scanner)
+        state.selectService(service.id); await state.waitForMediaLoad()
+        #expect(state.mediaRecords.first?.metadata.title == "Manual title")
+        #expect(state.selectedScanCheckpoint?.id == saved?.id)
+        let checkpoint = try #require(state.selectedScanCheckpoint)
+        #expect(state.canContinueScan(checkpoint) == (phase == "interrupted"))
+        state.selectService(otherService.id); await state.waitForMediaLoad()
+        state.selectService(service.id); await state.waitForMediaLoad()
+        state.loadMedia(); await state.waitForMediaLoad()
+        #expect(await requests.ids.isEmpty)
+        #expect(await scanner.currentProgress(libraryID: library.id) == nil)
+        #expect(await scanner.currentProgress(libraryID: otherLibrary.id) == nil)
+        #expect(try await reopened.scanCheckpoint(libraryID: library.id) == saved)
+        #expect(try await reopened.lastSuccessfulScan(libraryID: library.id) == nil)
+        #expect(!state.busy && !state.isRefreshing)
+    }
+
     @Test func automaticPagingCoalescesRequestsAndStopsAtExactEnd() async throws {
         let fixture = try await makeIndexFixture(count: 200)
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

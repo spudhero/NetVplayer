@@ -1387,94 +1387,6 @@ private struct WebDAVItem: Sendable {
     let isDirectory: Bool
     let size: Int64
     let modified: Date?
-
-    static func parse(data: Data, basePath: String) -> [WebDAVItem] {
-        let responses = WebDAVXMLParser.parse(data: data)
-        let base = normalizedPath(basePath)
-        return responses.compactMap { block in
-            let href = block.href.removingPercentEncoding ?? block.href
-            guard !href.isEmpty else { return nil }
-            let path = normalizedPath(URL(string: href)?.path ?? href)
-            guard path != base && path != base.ensureTrailingSlash() else { return nil }
-            let name = path.split(separator: "/").last.map(String.init) ?? path
-            return WebDAVItem(
-                name: name,
-                path: path,
-                isDirectory: block.isDirectory,
-                size: block.size,
-                modified: block.modified
-            )
-        }
-    }
-}
-
-private final class WebDAVXMLParser: NSObject, XMLParserDelegate {
-    struct Response {
-        var href: String = ""
-        var isDirectory: Bool = false
-        var size: Int64 = 0
-        var modified: Date?
-    }
-
-    private var responses: [Response] = []
-    private var current: Response?
-    private var currentElement = ""
-    private var text = ""
-
-    static func parse(data: Data) -> [Response] {
-        let delegate = WebDAVXMLParser()
-        let parser = XMLParser(data: data)
-        parser.delegate = delegate
-        _ = parser.parse()
-        return delegate.responses
-    }
-
-    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
-        let name = localName(qName ?? elementName)
-        currentElement = name
-        text = ""
-        if name == "response" {
-            current = Response()
-        } else if name == "collection" {
-            current?.isDirectory = true
-        }
-    }
-
-    func parser(_ parser: XMLParser, foundCharacters string: String) {
-        text += string
-    }
-
-    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
-        let name = localName(qName ?? elementName)
-        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch name {
-        case "href":
-            current?.href = value
-        case "getcontentlength":
-            current?.size = Int64(value) ?? 0
-        case "getlastmodified":
-            current?.modified = Self.httpDateFormatter.date(from: value)
-        case "response":
-            if let current { responses.append(current) }
-            current = nil
-        default:
-            break
-        }
-        currentElement = ""
-        text = ""
-    }
-
-    private func localName(_ value: String) -> String {
-        value.split(separator: ":").last.map(String.init) ?? value
-    }
-
-    private static let httpDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        return formatter
-    }()
 }
 
 private func isReadableResource(_ value: String) -> Bool {
@@ -1642,13 +1554,5 @@ private extension String {
 
     func appendingPathComponent(_ path: String) -> String {
         ensureTrailingSlash() + path.dropFirstSlash()
-    }
-
-    func removingHTMLTags() -> String {
-        replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

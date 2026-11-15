@@ -2,7 +2,87 @@
 
 This file records user-visible release and fix history. For installation requirements and current usage, see the [README](README.md).
 
+- 本地开发版新增入口源解析方式：“自动选择 / Mac 适配优先 / Android 原版优先”，重启生效并显示实际后端；不同路径的历史标识隔离保存。Android 原版仍为实验能力，已记录独立对齐计划与未通过项目，未作为正式发布。
+
 ## 中文
+
+### 未发布
+
+- 修复默认自动选择模式下混合视频源配置被整体判为组件格式无效的问题；正常来源继续注册，失败来源显示具体组件原因。修复包构建号为 **2.0.0（20）**。
+- 主干应用版本提升为 **2.0.0（构建号 19）**，完整整合原版运行时、OV91 十项改进与最新 UI 优化。详见[2.0.0 说明](docs/releases/2.0.0.md)，既有真实服务与硬件验收缺口保留。
+- 设置搜索、在线资料匹配、直播缓存、搜索续页与节目单任务状态完成布局优化；补齐审计偏好隔离和测试夹具有界清理。
+
+- 修复 Android Provider 兼容模式下易听歌词加载失败的问题；接入歌词本地代理，并自动启用缺少语言标签的明确歌词字幕。开发安装版已抽测同步显示及连续切歌。
+- 修复百度网盘文件名包含 `+` 时获取播放地址失败的问题，正确保留查询路径中的加号；同一已保存文件的取链与画面解码通过。
+- 修复垂直滚动组件在布局期间同步更新状态的问题，覆盖播放器内弹幕设置、选集与音轨面板；已通过布局重入回归，现场偶发无响应的完整触发组合仍待长播复验。
+
+- 增加夸克、UC、阿里、百度、115 个人目录接入，选择多个文件夹后加入媒体库，复用海报、详情及原片 Range 播放；补齐分页、账号绑定和合法凭据刷新。真实网盘验收待完成。
+
+- 增加极影视 Emby 兼容服务与飞牛影视 v1 客户端，支持媒体库海报、详情、剧集、原始文件 Range、外挂字幕及进度同步；飞牛每次读取刷新签名。独立模拟服务与原生播放验证通过，真实 NAS 及完整播放窗口截图仍待验。
+
+- 统一近期新增设置的界面层级与主题：音频／色彩常用参数优先，TrueHD 和系统杜比视界归入实验功能并就近说明条件；Plex 令牌标为必填并修正失效提示；SFTP 按测试、核对指纹、填写后连接引导，本地拖放反馈适配深浅主题。
+- 增加主窗口与点播播放页的本地媒体拖放入口，松开后播放首个有效文件，其余文件保留在待打开列表；启动恢复期间只暂存文件。相关导入与队列回归通过，鼠标跨窗口拖放仍待人工复核。
+- 改善海报与演员头像的缓存复用：页面重建优先显示已缓存图片，减少细微尺寸变化引起的重复解码，并预取附近海报与演员图片，减少滚动时短暂转圈。
+- 修复 Dolby 格式标识在安装后仍查找开发目录资源的问题，优先使用应用内资源，避免详情页资源读取阻塞。
+- 增加 Plex 原始文件客户端，支持访问令牌、媒体库海报、详情、文件版本、外挂字幕和观看进度同步；当前不含 Plex PIN 登录或服务器转码。
+- 增加 FTP／SFTP 文件服务、文件浏览与媒体库扫描，复用范围读取播放、字幕和进度保存；SFTP 使用密码和 SSH 主机指纹校验，运行库随应用打包。
+- 修复 WebDAV 子目录补斜杠重定向丢失认证导致扫描失败的问题；同源请求保留认证，跨源仍拒绝。WebDAV、Alist、OpenList、Plex、FTP、SFTP 的本地实服海报／详情／播放与跳转证据已归档；设置表单、FTPS 与外网长播未计通过。
+- 修复播放 TrueHD 影片时切换音频输出设备后持续显示“确认中”且无声的问题；在当前会话重新同步解码器并恢复可用 PCM 输出，保留播放进度、暂停、音轨及音量偏好。
+- 修复部分远端分块播放在缓存不足时误停当前影片预读的问题；保留预读并发／内存限额和拥塞退避，章节预览等辅助读取继续让行。
+- 修复普通播放器窗口在暂停或播放结束后反复发布相同小窗状态、导致界面持续刷新和高 CPU 的问题；合并重复 HDR 显示器查询，并避免窗口位置不变时重复写入偏好。
+- 补齐夸克、UC、阿里和 115 的旧转存记录验证迁移，修复同类播放拦截；在当前账号核对原个人文件后绑定，验证不充分时保留旧记录且不重复转存。
+- 增加 HDR Vivid 单窗口 PQ／HLG 逐帧动态映射，支持 SDR／浮点 HDR、截图与章节预览；按实际映射结果显示状态，异常元数据回退基础画面。尚未提供电视原生 HDR Vivid／Dolby Vision 信号输出。
+- 修复百度网盘旧转存记录因缺少账号绑定而无法播放的问题；只在当前账号核对原个人文件 ID、路径、大小与指纹后迁移，不按同名猜测或自动重新转存。
+- 恢复播放器音量弹层的竖向滑条，保留静音与音箱／播放器调音功能。
+- 修复公开源码导出误删通用 Emby／Jellyfin 适配器导致应用无法编译的问题。
+- 播放器小窗入口恢复熟悉的画中画图标，名称简化为“小窗”，恢复普通窗口使用配对图标。
+- 修复网盘账号重新进入设置后一直显示“尚未验证”的误导提示，保留与当前凭据绑定的成功验证记录；悬浮小窗缩至约 480 点宽，自动贴合画幅并保守识别文件内黑边，画幅扩展或恢复大窗时撤销临时裁剪。
+- 对齐播放器底栏的图标、名称和状态行，补齐片头／片尾名称；点播和直播统一为“悬浮小窗”，直接缩小并置顶当前窗口，可取消置顶或恢复原尺寸，去掉重复的画中画入口。
+- 增加经严格 HDMI 格式读回校验的 DD+／TrueHD Atmos 和完整 DTS-HD MA 直通；自动／开启／关闭策略统一到音频输出入口，区分完整 HD、DTS 核心与 PCM，HD 扩展丢失时重放原包并恢复 PCM。指定 Mac／Sony eARC 链路已实测，DTS:X 对象识别仍待验。
+- 修复部分七声道 DTS 音轨无声及无法保持选中的问题，保留 FFmpeg 未指定布局并避免伪造扬声器位置。
+- HDR 默认跟随系统，避免每次进出影片主动切换整个桌面；可明确选择临时 HDR 并在结束后恢复。杜比视界使用当前可用 HDR／SDR 映射，临时模式仍可能因 HDMI 重新同步短暂黑屏。
+- PCM 采样率可跟随设备或片源，切换后读回实际频率并在停止时恢复；片源频率、码流逻辑频率和设备传输频率分别显示。
+- 原码输出时显示“音箱调音”，避免无效百分比和静音反馈；可明确切换 PCM 使用播放器音量。简化实际格式胶囊、统一音视频策略与详情，将设备及映射参数收进高级设置。
+- NAS／本地媒体库在启动和重启后直接读取已保存的索引，不再因超过 24 小时而自动遍历全部目录；手动刷新、新建／编辑库及主动恢复 NAS 配置备份仍可更新索引。
+- 修复 Emby／Jellyfin 原始文件因分段重建连接而频繁缓冲的问题，复用连接并使用有界的较大分段。
+- 默认主字幕统一优先中文、无中文时选英语，内嵌和外挂共同参与；保留手选、关闭、历史恢复与副字幕独立状态。
+- 修复关闭旧式鉴权的 Jellyfin 服务登录后媒体库、图片及原始文件无法访问的问题；使用标准 Authorization 令牌并保留旧服务兼容。
+- 点播播放器主界面新增金色 Dolby Vision／HDR 实际状态、PCM／系统处理／原码状态与约四秒提示；点击标识可查看实际输出、片源和设备，未确认的 Atmos 接收端效果不会显示为已启用。
+- 修复部分 TrueHD 压缩输出被系统拒绝后持续加载的问题：确认无音频后端时在当前会话自动恢复 PCM，保留暂停、位置、音轨及输出偏好。
+- 扩大播放技术详情、设置说明、检查报告、资源分组和文件信息的折叠点击区域，标题、留白及卡片内边距均可操作；展开内容的按钮和文字选择保持独立。
+- Emby／Jellyfin 多文件详情支持选择版本和直接播放该版本，主播放与历史恢复保留选择；字节读取、字幕、章节及进度上报对应所选文件，版本失效时提示重新选择。
+- 明确区分媒体服务器已保存、已登录、失效与离线状态，保留并显示用户名，按需重新登录；Emby／Jellyfin 详情与 NAS 统一，展示服务器评分、演职员、时长、文件／轨道信息和分季选集。
+- 统一播放信息、色彩、音频、对白、字幕翻译／识别、媒体服务器账号和显示测试图八个界面：分层呈现实际状态，任务按三步组织，统一主题、提示和恢复入口；补齐浅色、窄窗及前后对照图册。
+- 增加 Apple 本机文本字幕翻译、部分／完整覆盖缓存及原文／译文／双语导出；支持本地 SUP 图片字幕识别、macOS 26+ WAV 语音识别和继续翻译，完整覆盖后开放结果导出。
+- 增加 Emby／Jellyfin 原始文件客户端，支持独立账号、库／分页／搜索／剧集、轨道／字幕／章节及观看进度同步；CloudDrive2 路径映射尚未接入。
+- 增加 libbluray VFS 蓝光正片选择与播放；HDMV 菜单和 BD-J 仍处于研究／规划范围。
+- 分层显示 DSD 片源速率、解码 PCM、引擎输出和系统设备格式；DoP／Native DSD 仍未启用。
+
+- 修复 Emby／Jellyfin 文件夹误入影片详情并长时间加载的问题，增加逐层分页浏览、路径返回和鉴权海报；保留剧集选集行为。
+
+- 修复 Emby 账号连接后会话检查报错、无法加载媒体库的问题，按 Emby 用户 ID 校验会话；Jellyfin 保持既有接口。
+
+- 改善章节预览、下一集预热与播放读取的协调：重叠范围复用、seek／停止取消过期读取，避免取消预览误关仍在播放的资源。诊断增加起播／seek 首帧与再缓冲数值；点播再缓冲实验默认关闭。
+
+- 修复部分单 gamma 显示 ICC 下视频近黑区域与 macOS 原生色彩转换不一致的问题；播放使用原生响应生成的内存配置，保留系统 ICC、现有色调映射和窗口色彩标签。
+
+- 增加“显示测试图与指引”：窗口菜单及点播／直播色彩设置可打开灰阶、近黑、高光和色块图，并说明系统 ICC 与应用映射的作用范围。此工具用于目视检查，尚未提供专业校准、iPhone 测量或 ICC／LUT 导入。
+
+- 播放信息增加显示模式刷新率，并明确应用未切换系统刷新率、QMS 完整链路未验证。新增仅供开发验收的七档固定刷新率时序探针；系统模式、宿主提交与真实面板／HDMI 协商分别记录。
+
+- 播放信息分别显示音频编码／profile、输出请求、实际 PCM／原生压缩格式与接收端状态。E-AC-3／JOC 接入 Apple 原生渲染，变速或 PCM 处理时协调回退；HDMI／DP 仅在格式、独占和读回均符合时尝试，JOC／Atmos 片源标记不代表物理接收端或对象效果已验证。
+
+- 增加默认关闭的“对白清晰度”与三档强度、一键恢复：多声道优先保留中央，立体声使用均衡和动态压缩。点播／直播共享偏好；不支持的布局、已有来源滤镜或压缩直通会保留原处理并说明原因。切换淡出淡入，不改变音量设置；此功能不分离人声与音乐。
+
+- 增加自动／立体声／最多 5.1／7.1 的 PCM 输出偏好与实体设备选择，分别显示片源、实际输出声道和设备采样率；未知布局安全降混，设备不可用时回退或暂停提示。虚拟／聚合设备暂受限，实体多声道与热插拔完整验收仍待完成。
+
+- 内嵌 Dolby Vision P5／P8 动态重建与 P7 FEL 增强层合成，同一会话支持 SDR／FP16 EDR 和正确的章节预览；缺少必需元数据／增强层时仍阻止错误颜色。分别显示元数据、实际重建与输出，电视 DV 信号未据此宣称支持。保留换片后外挂字幕正确加载的修复。
+
+- 增加开发专用的 4K60／AV1 持续验收记录器，区分实际软硬解、供数停顿、解码／渲染掉帧及资源趋势；短片与完整持续验收分别记录，HDR 性能仍受实屏前置条件限制。
+- 增加自动／SDR 映射／HDR（设备支持时）输出偏好；自动模式在片源和屏幕允许时启用 FP16 Metal EDR，受限时说明原因并回退 SDR。显示变化、窗口移除和睡眠清除旧状态；本机 HDR 长测不替代所有显示器或系统版本验收。
+- 按当前显示器色彩配置显示 SDR 视频，明确 HDR10／HLG 到 SDR 的默认映射；点播和直播支持选择映射算法、参考峰值及恢复默认，并显示实际运行时色彩状态。
+- 新增点播和直播的播放信息，分别显示片源参数、实际硬件／软件解码、SDR／HDR 输出和实际音频路径，并支持脱敏诊断复制与导出。
+- 修复选择“直连”后首次普通请求、流式读取和文件下载仍可能继承系统代理的问题；已创建的客户端也会在后续请求中应用该模式。
 
 ### [1.1.4](https://github.com/spudhero/NetVplayer/releases/tag/1.1.4)（2026-10-15）
 
@@ -178,6 +258,84 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### Unreleased
+
+- Fix mixed source configurations failing registration in automatic mode. Healthy sources continue registering, and affected sources show the component failure. The fix uses **2.0.0 (build 20)**.
+- Advance the main development application to **2.0.0 (build 19)**, integrating the original runtime, ten OV91 improvements, and the latest UI refinements. See the [2.0.0 notes](docs/releases/2.0.0.md); existing real-service and hardware acceptance gaps remain open.
+- Improve settings search, online metadata matching, cached live previews, source pagination, and programme-guide task layouts; isolate audit preferences and bound test-fixture cleanup.
+
+- Fix lyrics loading in the Android Provider compatibility mode by routing subtitle proxy URLs locally and automatically selecting explicitly named lyrics without language tags. Sampled lyric rendering and song changes verified in the installed development app.
+- Fixed Baidu playback URL resolution for filenames containing `+` by preserving literal plus signs in query paths; verified the same saved file through URL resolution and frame decoding.
+- Deferred and coalesced vertical scroll measurements to avoid publishing state during layout, including player settings, episode and audio-track panels. Layout reentrancy regressions pass; the complete trigger for the reported intermittent UI hang still needs playback validation.
+
+- Add personal folders from Quark, UC, Aliyun, Baidu, and 115 to media libraries, with multiple-folder selection, posters, details, and original-file Range playback. Includes pagination and account-bound credential refresh; real-drive acceptance remains pending.
+
+- Add Zspace Media's Emby-compatible service and an FnOS Media v1 client for libraries, artwork, details, episodes, original-file Range playback, external subtitles, and progress. Refresh FnOS signatures for each byte read. Synthetic-service and native playback checks pass; real NAS acceptance and complete playback-window screenshots remain pending.
+
+- Unify recent settings with the existing themes: place common audio and color controls first, group experimental TrueHD and system Dolby Vision options with relevant requirements, clarify required Plex tokens and expiry messages, guide SFTP fingerprint verification, and adapt local-drop feedback to light and dark themes.
+- Add local media drops to the main window and on-demand player. Play the first valid file and retain the rest in pending files; recovery only queues files. Import and queue regressions pass; a physical cross-window drag still needs manual verification.
+- Improve poster and cast-image cache reuse: rebuilt views display cached images immediately, nearby thumbnail sizes share decoded images, and bounded prefetch reduces loading flashes while scrolling.
+- Load Dolby format artwork from the installed app resources to avoid development-directory lookups that can block the detail view.
+- Add a Plex original-file client with access tokens, library artwork, details, file versions, external subtitles, and playback progress reporting. Plex PIN sign-in and server transcoding are not included.
+- Add FTP and SFTP file browsing and indexed libraries, with range-based playback, subtitles, and saved progress. SFTP uses password authentication and pinned SSH host keys; its runtime is bundled with the app.
+- Fix WebDAV subdirectory redirects losing authentication when a server adds a trailing slash. Same-origin credentials are retained and cross-origin redirects remain blocked. Archive local-server poster, detail, playback, and seek evidence for WebDAV, Alist, OpenList, Plex, FTP, and SFTP; settings-form entry, FTPS, and long playback over external networks remain unverified.
+- Fix silent TrueHD playback stuck on “Confirming” after changing audio output devices. Resynchronize the decoder within the current session and recover available PCM output while preserving position, pause, tracks, and volume preferences.
+- Fix current-media read-ahead being suspended when the playback buffer is low on some remote range paths. Preserve read-ahead concurrency, memory limits, and congestion cooldown while auxiliary reads keep yielding.
+- Fix high CPU after pausing or ending playback by avoiding repeated publication of unchanged floating-window state; reuse HDR display reads and skip unchanged window preference writes.
+- Migrate verified legacy Quark, UC, Ali, and 115 saved-file mappings to the current account. Reuse the exact personal file after verification; preserve inconclusive records without transferring again.
+- Add per-frame HDR Vivid display adaptation for single-window PQ/HLG sources, including SDR/floating HDR output, screenshots, and chapter previews. Status reflects successful mapping; invalid metadata falls back to the base image. Native HDR Vivid/Dolby Vision TV signalling is not implemented.
+- Fix playback of legacy Baidu saved-file records without account bindings. Migration verifies the original personal file ID, path, size, and fingerprint in the current account, without matching by name or automatically transferring again.
+- Restore the vertical player volume slider while retaining mute and receiver/player volume controls.
+- Keep the generic Emby/Jellyfin adapter in public source exports so the application builds successfully.
+- Restore the familiar Picture in Picture symbol for the Mini Player entry, shorten its Chinese label, and pair it with the matching restore symbol.
+- Preserve cloud account verification for the current credentials instead of showing an unverified warning whenever settings reopen. Use a roughly 480-point floating player that fits the video, conservatively removes encoded black bars, and restores the full picture when it expands or returns to the regular window.
+- Align player icons, labels, and status rows, and label intro/outro controls. Unify VOD and live playback under Floating Window: shrink and pin the current window, with unpin and restore controls, replacing the duplicate Picture in Picture entry.
+- Add strictly qualified HDMI passthrough for DD+/TrueHD Atmos and full DTS-HD MA, with shared Auto/On/Off controls and distinct HD, DTS-core, and PCM states. Replay original packets through PCM if HD extensions are lost. The documented Mac/Sony eARC chain was tested; DTS:X object recognition remains unverified.
+- Fix silent seven-channel DTS tracks and failed track selection by preserving unspecified FFmpeg layouts instead of inventing speaker positions.
+- Follow system HDR by default, avoiding automatic desktop mode changes when entering or leaving a movie. Offer explicit temporary HDR with restoration on exit. Dolby Vision maps to available HDR/SDR presentation; explicit HDMI mode changes can still briefly blank the display.
+- Let PCM follow the device or source sample rate, verify actual rates, and restore the device on stop. Show source, bitstream logical, and device transport rates separately.
+- Show receiver volume control during bitstream output instead of ineffective percentage/mute feedback, with an explicit switch to PCM for player volume. Simplify actual-format badges and shared audio/video controls, with device and mapping parameters under Advanced settings.
+- Restore saved NAS/local library indexes on startup without automatically traversing every directory after 24 hours. Explicit refresh, library creation/editing, and NAS catalog backup restore still update the index.
+- Fix repeated buffering when Emby/Jellyfin original-file ranges rebuild network connections; reuse connections and use larger bounded ranges.
+- Prefer Chinese primary subtitles, then English, across embedded and external tracks while preserving manual choices, disabled subtitles, history and the independent secondary slot.
+- Fix library, image, and original-file access after signing into Jellyfin servers with legacy authentication disabled, using standard Authorization tokens while retaining compatibility with older servers.
+- Add gold indicators for confirmed Dolby Vision/HDR output to the VOD player, alongside PCM/system/bitstream states and a four-second notice. Click for actual output, source, and device details; unconfirmed Atmos receiver rendering is never marked enabled.
+- Recover to PCM within the current session when rejected TrueHD compressed output remains without an audio backend, preserving pause, position, tracks, and output preferences.
+- Expand disclosure targets across playback details, settings help, reports, resource groups, and file information to include titles, whitespace, and card padding; keep expanded controls and selectable text independent.
+- Select or directly play an Emby/Jellyfin file version, preserving the choice in primary playback and history. Bind reads, subtitles, chapters, and progress reports to that source; request a new selection if it becomes unavailable.
+- Distinguish saved, validated, expired, and unavailable media-server sign-ins, retain display usernames, and request credentials only when needed. Emby/Jellyfin details now share the NAS layout with server ratings, cast, runtime, file/track information, and season selection.
+- Unify eight interfaces covering playback information, color, audio, dialogue, subtitle translation/recognition, media-server accounts, and display patterns. Organize actual status and three-step tasks with consistent themes, feedback and recovery; include light/narrow layouts and a before/after gallery.
+- Add Apple on-device subtitle translation, partial/complete coverage caches, and original/translated/bilingual exports. Add local SUP image recognition, macOS 26+ WAV speech recognition, and translation handoff; enable result exports only after complete coverage.
+- Add original-file Emby/Jellyfin clients with separate accounts, libraries, pagination, search, episodes, tracks, subtitles, chapters, and watch-progress synchronization. CloudDrive2 path mapping remains unavailable.
+- Add Blu-ray title selection and playback through libbluray VFS; HDMV menus and BD-J remain research/planning work.
+- Separate DSD source rates, decoded PCM, engine output, and system device formats. DoP and Native DSD remain disabled.
+
+- Fix Emby/Jellyfin folders opening playback details and loading whole libraries; add paged folder navigation, breadcrumbs, and authenticated posters while preserving series episode lists.
+
+- Fix Emby session validation failing after sign-in and blocking library loading by checking the authenticated user ID; retain Jellyfin's existing endpoint.
+
+- Coordinate playback reads with chapter previews and next-item preloads: share overlapping ranges, cancel stale work on seek/stop, and retain resources still used by another reader. Diagnostics now include first-frame and rebuffer measurements; the VOD rebuffer experiment remains disabled by default.
+
+- Fix near-black video differences from macOS native color conversion with some single-gamma display ICC profiles. Playback uses a private profile derived from the native response while preserving the system ICC, tone mapping, and window color tag.
+
+- Add Display Test Patterns & Guide with grayscale, near-black, highlight, and color patches from the Window menu and VOD/live color settings. The guide explains system ICC and app tone-mapping scope; professional calibration, iPhone measurement, and ICC/LUT import remain unavailable.
+
+- Show the display mode refresh rate and distinguish unchanged system refresh rate from an unverified QMS chain. Add a development-only cadence probe for seven source rates, keeping host submissions separate from physical panel timing and HDMI negotiation.
+
+- Playback information separates audio codec/profile, requested output, actual PCM/native compressed output, and receiver status. E-AC-3/JOC uses Apple's native renderer with coordinated PCM fallback for rate changes or processing. HDMI/DP attempts require matching formats, exclusivity and actual readback; source labels do not confirm physical receiver or object effects.
+
+- Add optional Dialogue clarity with three strengths and one-click restoration, off by default. Multichannel PCM preserves the center while stereo uses EQ and compression. VOD and live playback share the preference; unsupported layouts, source filters and passthrough retain their original processing with an explanation. Changes fade out and in without changing saved volume. This does not separate speech from music.
+
+- Add automatic, stereo, up-to-5.1 and up-to-7.1 PCM preferences and physical output-device selection, with separate source, output-layout and device-rate diagnostics. Unknown layouts safely downmix; unavailable output falls back or pauses with an explanation. Virtual/aggregate routes remain gated pending validation, and full physical surround/hot-plug acceptance is still outstanding.
+
+- Embed Dolby Vision P5/P8 dynamic reconstruction and P7 FEL enhancement-layer composition in the existing session, with SDR/FP16 EDR and correct chapter previews. Missing required metadata/layers still block incorrect output. Metadata, reconstruction and presentation remain distinct; this does not claim TV Dolby Vision signaling. Retain correct external subtitle attachment after media loads.
+
+- Add a development-only sustained 4K60/AV1 acceptance recorder, separating actual decoding, supply stalls, decoder/render drops and resource trends. Short compatibility checks remain distinct from sustained acceptance; HDR performance still requires physical-display validation.
+- Add Auto / SDR tone mapping / HDR (when available) preferences. Auto uses FP16 Metal EDR when source and display permit, with explained SDR fallback. Display changes, detached windows and sleep clear stale status; this machine's sustained HDR check does not cover every display or OS version.
+- Apply the current display color profile to SDR video and define HDR10/HLG-to-SDR mapping. On-demand and live playback offer tone-mapping, reference-peak and reset controls with actual runtime color diagnostics.
+- Add playback information for on-demand and live video, separating source parameters, actual hardware/software decoding, SDR/HDR presentation and actual audio paths, with redacted diagnostic copy and export.
+- Fix direct mode still inheriting a session's proxy for initial requests, streaming reads, and file downloads. Existing clients apply the selected mode to subsequent requests.
 
 ### [1.1.4](https://github.com/spudhero/NetVplayer/releases/tag/1.1.4) (2026-10-15)
 

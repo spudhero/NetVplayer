@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import ImageIO
 import Testing
+import Models
 @testable import NetVplayerApp
 
 @MainActor
@@ -188,7 +189,7 @@ struct PosterCancellationTests {
 
 private enum PosterCancellationProbeError: Error { case timedOut }
 
-private struct PosterCancellationFixture {
+struct PosterCancellationFixture {
     let directory: URL
     let session: URLSession
     private let baseURL = "https://poster-cancellation-\(UUID().uuidString).test"
@@ -204,12 +205,17 @@ private struct PosterCancellationFixture {
 
     func url(_ path: String) -> URL { URL(string: baseURL + path)! }
 
-    func pipeline(limit: Int = 8) -> PosterImagePipeline {
-        PosterImagePipeline(session: session, cacheDirectory: directory, maximumConcurrentDownloads: limit)
+    func pipeline(limit: Int = 8, decodeLimit: Int = 2, outstanding: Int = 96,
+                  budget: PlaybackBackgroundBudget = .shared,
+                  decoder: (@Sendable (Data, CGFloat) throws -> DecodedPosterImage)? = nil) -> PosterImagePipeline {
+        PosterImagePipeline(session: session, cacheDirectory: directory, maximumConcurrentDownloads: limit,
+            maximumConcurrentDecodes: decodeLimit, maximumOutstandingImages: outstanding, backgroundBudget: budget, decoder: decoder)
     }
 
-    func start(_ pipeline: PosterImagePipeline, path: String, size: Int = 64) -> TrackedPosterRequest {
-        TrackedPosterRequest(pipeline: pipeline, request: URLRequest(url: url(path)), key: path, size: size)
+    func start(_ pipeline: PosterImagePipeline, path: String, size: Int = 64,
+               demand: PosterDemandToken = PosterDemandToken()) -> TrackedPosterRequest {
+        TrackedPosterRequest(pipeline: pipeline, request: URLRequest(url: url(path)),
+            key: ImageLoader.cacheKey(url: url(path), headers: nil), size: size, demand: demand)
     }
 
     func remove() {
@@ -237,28 +243,29 @@ private struct PosterCancellationFixture {
     }
 }
 
-private struct TrackedPosterRequest {
+struct TrackedPosterRequest {
     let task: Task<DecodedPosterImage, Error>
     private let completion = PosterRequestCompletion()
     var isFinished: Bool { completion.isFinished }
 
-    init(pipeline: PosterImagePipeline, request: URLRequest, key: String, size: Int) {
+    init(pipeline: PosterImagePipeline, request: URLRequest, key: String, size: Int,
+         demand: PosterDemandToken = PosterDemandToken()) {
         let completion = self.completion
         task = Task {
             defer { completion.finish() }
-            return try await pipeline.image(request: request, key: key, maxPixelSize: CGFloat(size))
+            return try await pipeline.image(request: request, key: key, maxPixelSize: CGFloat(size), demand: demand)
         }
     }
 }
 
-private final class PosterRequestCompletion: @unchecked Sendable {
+final class PosterRequestCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var finished = false
     var isFinished: Bool { lock.withLock { finished } }
     func finish() { lock.withLock { finished = true } }
 }
 
-private final class PosterCancellationURLProtocol: URLProtocol, @unchecked Sendable {
+final class PosterCancellationURLProtocol: URLProtocol, @unchecked Sendable {
     static let state = PosterCancellationProtocolState()
     let id = UUID()
 
@@ -283,7 +290,7 @@ private final class PosterCancellationURLProtocol: URLProtocol, @unchecked Senda
     }
 }
 
-private final class PosterCancellationProtocolState: @unchecked Sendable {
+final class PosterCancellationProtocolState: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     private var requests: [String: Int] = [:]

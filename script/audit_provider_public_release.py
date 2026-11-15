@@ -12,6 +12,10 @@ import sys
 from typing import Any
 
 from audit_provider_public_boundary import build_report
+from android_presentation import ARCHIVE_NAME, RESOURCE_PATH, validate_presentation
+from public_release_policy import is_internal_publication
+from audit_public_links import missing_markdown_targets
+from android_compatibility import RESOURCE_PATH as COMPATIBILITY_RESOURCES, validate as validate_compatibility
 
 
 REQUIRED_FILES = (
@@ -47,25 +51,9 @@ INTERNAL_ONLY_FILES = (
     "script/verify_hmys_java_provider.py",
     "script/verify_private_covers_public.py",
 )
-PUBLIC_RELEASE_DOCUMENTS = {
-    "docs/data/provider-public-boundary-v1.json",
-    "docs/data/torrent-bridge-license-audit-2026-08-18.json",
-    "docs/design/player-ui/assets/w700d1q75cms.jpg",
-}
-PUBLIC_RELEASE_DOCUMENT_PREFIXES = ("docs/releases/",)
-INTERNAL_PUBLICATION_PREFIXES = (
-    "NetVplayer/Docs/",
-    "NetVplayer/Resources/UI_Mockups/",
-    "docs/",
-)
-INTERNAL_PUBLICATION_FILES = {
-    "NetVplayer/README.md",
-    "NetVplayer/PRD.md",
-    "NetVplayer/TASK.md",
-    "NetVplayer/migration_plan.md",
-    "NetVplayer/ui_design_guidelines.md",
-}
 FORBIDDEN_BINARY_SUFFIXES = (
+    ".apk",
+    ".class",
     ".dex",
     ".dylib",
     ".jar",
@@ -147,6 +135,10 @@ def build_release_report(repo: Path) -> dict[str, Any]:
     boundary = build_report(repo)
     paths = tracked_paths(repo)
     missing_required = [path for path in REQUIRED_FILES if path not in paths]
+    compatibility_errors = (
+        validate_compatibility(repo / COMPATIBILITY_RESOURCES)
+        if "NetVplayer/Sources/SpiderEngine/AndroidCompatibilityPolicy.swift" in paths else []
+    )
     license_files_present = all(path in paths for path in ("LICENSE", "provider-sdk/LICENSE"))
     sdk_license_matches_root = license_files_present and (
         (repo / "LICENSE").read_bytes() == (repo / "provider-sdk/LICENSE").read_bytes()
@@ -154,21 +146,23 @@ def build_release_report(repo: Path) -> dict[str, Any]:
     internal_only = [path for path in INTERNAL_ONLY_FILES if path in paths]
     internal_publication = [
         path for path in paths
-        if path in INTERNAL_PUBLICATION_FILES
-        or (
-            any(path.startswith(prefix) for prefix in INTERNAL_PUBLICATION_PREFIXES)
-            and path not in PUBLIC_RELEASE_DOCUMENTS
-            and not path.startswith(PUBLIC_RELEASE_DOCUMENT_PREFIXES)
-        )
+        if is_internal_publication(path)
     ]
+    presentation_path = f"{RESOURCE_PATH}/{ARCHIVE_NAME}"
+    presentation_errors = (
+        validate_presentation(repo / RESOURCE_PATH, repo=repo)
+        if any(path.startswith(RESOURCE_PATH + "/") for path in paths) else []
+    )
     binary_files = [
         path for path in paths if Path(path).suffix.lower() in FORBIDDEN_BINARY_SUFFIXES
+        and not (path == presentation_path and not presentation_errors)
     ]
     build_artifacts = [
         path for path in paths if any(part in FORBIDDEN_BUILD_PARTS for part in Path(path).parts)
     ]
     symlinks = [path for path in paths if (repo / path).is_symlink()]
     secrets = secret_findings(repo, paths)
+    missing_links = missing_markdown_targets(repo, paths)
     blockers: list[str] = []
     if not boundary["summary"]["release_ready"]:
         blockers.append("provider-boundary-not-release-ready")
@@ -188,6 +182,12 @@ def build_release_report(repo: Path) -> dict[str, Any]:
         blockers.append("tracked-symlinks")
     if secrets:
         blockers.append("potential-secrets")
+    if presentation_errors:
+        blockers.append("invalid-android-presentation")
+    if compatibility_errors:
+        blockers.append("invalid-android-compatibility-resource")
+    if missing_links:
+        blockers.append("missing-public-document-targets")
     return {
         "schema_version": 1,
         "release_ready": not blockers,
@@ -200,6 +200,9 @@ def build_release_report(repo: Path) -> dict[str, Any]:
         "tracked_build_artifacts": build_artifacts,
         "tracked_symlinks": symlinks,
         "secret_findings": secrets,
+        "android_presentation_errors": presentation_errors,
+        "android_compatibility_errors": compatibility_errors,
+        "missing_document_targets": missing_links,
         "blocking_reasons": blockers,
         "provider_boundary": boundary["summary"],
     }

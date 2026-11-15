@@ -4,6 +4,7 @@
 import CryptoKit
 import Foundation
 import Models
+import Storage
 
 public enum DrivePlaybackRoute {
     public static let ucOriginalProxy = "uc-original-proxy"
@@ -46,6 +47,10 @@ public struct DriveSavedFileRecord: Codable, Equatable, Sendable {
     public let savedFileName: String
     public let parentFID: String
     public let driveID: String?
+    public let targetRootFID: String?
+    public let savedPickCode: String?
+    public let isTemporary: Bool?
+    public let contentFingerprint: String?
     public var updatedAt: Date
 
     public init(
@@ -60,6 +65,10 @@ public struct DriveSavedFileRecord: Codable, Equatable, Sendable {
         savedFileName: String,
         parentFID: String,
         driveID: String? = nil,
+        targetRootFID: String? = nil,
+        savedPickCode: String? = nil,
+        isTemporary: Bool? = nil,
+        contentFingerprint: String? = nil,
         updatedAt: Date = Date()
     ) {
         self.provider = provider
@@ -73,6 +82,10 @@ public struct DriveSavedFileRecord: Codable, Equatable, Sendable {
         self.savedFileName = savedFileName
         self.parentFID = parentFID
         self.driveID = driveID
+        self.targetRootFID = targetRootFID
+        self.savedPickCode = savedPickCode
+        self.isTemporary = isTemporary
+        self.contentFingerprint = contentFingerprint
         self.updatedAt = updatedAt
     }
 
@@ -87,7 +100,7 @@ public struct DriveSavedFileRecord: Codable, Equatable, Sendable {
             DrivePlaybackMetadataKey.fid: savedFID,
             DrivePlaybackMetadataKey.fileName: savedFileName,
             DrivePlaybackMetadataKey.size: String(size),
-            DrivePlaybackMetadataKey.temporarySavedFile: "true"
+            DrivePlaybackMetadataKey.temporarySavedFile: String(isTemporary ?? true)
         ]
         if let driveID, !driveID.isEmpty {
             values[DrivePlaybackMetadataKey.driveID] = driveID
@@ -109,6 +122,10 @@ public struct DriveSavedFileRecord: Codable, Equatable, Sendable {
             savedFileName: savedFileName,
             parentFID: parentFID,
             driveID: driveID,
+            targetRootFID: targetRootFID,
+            savedPickCode: savedPickCode,
+            isTemporary: isTemporary,
+            contentFingerprint: contentFingerprint,
             updatedAt: updatedAt
         )
     }
@@ -161,7 +178,8 @@ public actor DriveSavedFileStore {
         records()[cacheKey]
     }
 
-    public func record(for identity: DriveSavedFileIdentity) -> DriveSavedFileRecord? {
+    public func record(for identity: DriveSavedFileIdentity) async -> DriveSavedFileRecord? {
+        guard (try? await DriveTransferContext.current.check()) != nil else { return nil }
         var all = records()
         if let current = all[identity.cacheKey] { return current }
         guard let legacyCacheKey = identity.legacyCacheKey,
@@ -175,11 +193,56 @@ public actor DriveSavedFileStore {
         return migrated
     }
 
-    public func save(_ record: DriveSavedFileRecord) throws {
+    public func save(_ record: DriveSavedFileRecord) async throws {
+        try await DriveTransferContext.current.check()
         var all = records()
-        var updated = record
-        updated.updatedAt = Date()
-        all[record.cacheKey] = updated
+        all[record.cacheKey] = record
+        try write(all)
+    }
+
+    /// The account-bound cache key is evidence; an unscoped legacy row is not.
+    /// Searching these local rows never enumerates a remote service.
+    public func verificationRecord(for base: DriveSavedFileIdentity, account: String,
+        allowUnscopedCandidate: Bool = false) async throws -> DriveSavedFileRecord? {
+        try await DriveTransferContext.current.check()
+        let all = records()
+        let candidates = all.values.filter { record in
+            let target = record.provider == .baidu
+                ? (record.parentFID as NSString).deletingLastPathComponent
+                : record.targetRootFID ?? record.parentFID
+            return record.cacheKey == base.scoped(account: account, target: target).cacheKey
+        }
+        guard candidates.count <= 1 else { throw DriveMappingVerification.unconfirmed(base.provider) }
+        if let record = candidates.first {
+            guard !DriveRequestRecovery.background else { throw DriveMappingVerification.unconfirmed(base.provider) }
+            return record
+        }
+        let legacyKeys = Set([base.cacheKey, base.legacyCacheKey].compactMap { $0 })
+        let legacy = legacyKeys.compactMap { all[$0] }
+        if !legacy.isEmpty {
+            // This returns a candidate only. The provider must prove the exact
+            // personal file in the current account before binding it.
+            guard allowUnscopedCandidate,
+                  !DriveRequestRecovery.background, legacy.count == 1,
+                  legacy[0].provider == base.provider else {
+                throw DriveMappingVerification.unconfirmed(base.provider)
+            }
+            return legacy[0]
+        }
+        return nil
+    }
+
+    /// Commit a verified observation only while the examined row is unchanged.
+    /// A legacy row is removed in the same write that creates its account binding.
+    func replaceVerified(_ record: DriveSavedFileRecord, with verified: DriveSavedFileRecord) async throws {
+        try await DriveTransferContext.current.check()
+        var all = records()
+        guard all[record.cacheKey] == record,
+              record.cacheKey == verified.cacheKey || all[verified.cacheKey] == nil else {
+            throw DriveMappingVerification.unconfirmed(verified.provider ?? .quark)
+        }
+        all[record.cacheKey] = nil
+        all[verified.cacheKey] = verified
         try write(all)
     }
 
@@ -189,16 +252,26 @@ public actor DriveSavedFileStore {
         try write(all)
     }
 
+    func confirmedRecords(provider: DriveProvider, fileID: String, account: String) -> [DriveSavedFileRecord] {
+        records().values.filter {
+            $0.provider == provider && $0.savedFID == fileID
+                && $0.cacheKey.hasSuffix(":" + DriveTransferContext.digest([account, $0.parentFID]))
+        }
+    }
+
     /// Keep a brief rejection across preparation retries, including a directory rescan.
-    func invalidate(_ record: DriveSavedFileRecord, now: Date = Date()) throws {
+    func invalidate(_ record: DriveSavedFileRecord, now: Date = Date()) async throws {
+        try await DriveTransferContext.current.check()
+        var all = records()
+        // Also protect a newer observation of the same ID from a late failure.
+        let matches = all[record.cacheKey] == record
+        if !matches && all[record.cacheKey]?.savedFID == record.savedFID { return }
         rejectedFiles[RejectedFile(cacheKey: record.cacheKey, fid: record.savedFID)] = now
         if rejectedFiles.count > 256,
            let oldest = rejectedFiles.min(by: { $0.value < $1.value })?.key {
             rejectedFiles.removeValue(forKey: oldest)
         }
-        var all = records()
-        // A late failure for an old file must not remove a newer successful transfer.
-        if all[record.cacheKey]?.savedFID == record.savedFID {
+        if matches {
             all.removeValue(forKey: record.cacheKey)
             try write(all)
         }
@@ -255,9 +328,43 @@ public actor DriveSavedFileStore {
 }
 
 public actor DriveTransferCoordinator {
-    public static let shared = DriveTransferCoordinator()
+    public static let shared = DriveTransferCoordinator(store: TestRuntime.isRunning ? nil : .shared)
+    @TaskLocal public static var current = shared
+    var recovering = Set<UUID>()
+    func hasTransfer(cacheKey: String) -> Bool { tasks[cacheKey] != nil }
+    let taskStore: DriveTransferTaskStore?
+    public init(store: DriveTransferTaskStore? = nil) { taskStore = store }
+
+    /// Gate before folder creation: a restored/cancelled write cannot be bypassed
+    /// by changing its destination. Existing in-process attempts retain MSC-01.
+    func checkRecovery(sourceKey: String, account: String) throws {
+        guard let taskStore else { return }
+        for record in try taskStore.records() where record.scope.sourceKey == sourceKey
+            && record.scope.accountReference == DriveTransferContext.digest([account]) && !record.completed {
+            if record.cancelled || attempts[record.scope.cacheKey] == nil
+                || record.scope.configurationIdentity != DriveTransferContext.current.configurationIdentity {
+                throw DriveTaskRecoveryError.requiresReview
+            }
+        }
+    }
+
+    public func summaries() throws -> [DriveTransferTask] { try taskStore?.records() ?? [] }
+    public func activeDiagnosticIDs() async -> Set<UUID> {
+        var ids = recovering
+        for (key, attempt) in attempts where tasks[key] != nil {
+            if let id = await attempt.record?.id { ids.insert(id) }
+        }
+        return ids
+    }
+    public func cancelRecovery(_ id: UUID) throws {
+        guard let record = try taskStore?.records().first(where: { $0.id == id }) else { return }
+        try taskStore?.cancel(id)
+        tasks[record.scope.cacheKey]?.cancel()
+    }
 
     private var tasks: [String: Task<DriveSavedFileTransferResult, Error>] = [:]
+    private var attempts: [String: DriveTransferAttempt] = [:]
+    private var attemptRevisions: [String: String] = [:]
     private var cleanupCounts: [String: Int] = [:]
     private var cleanupWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
@@ -294,9 +401,15 @@ public actor DriveTransferCoordinator {
         cacheKey: String,
         operation: @escaping @Sendable () async throws -> DriveSavedFileTransferResult
     ) async throws -> DriveSavedFileTransferResult {
+        try await DriveTransferContext.current.check()
         await waitForCleanup(cacheKey: cacheKey)
+        try await DriveTransferContext.current.check()
         if let task = tasks[cacheKey] {
-            return try await task.value
+            let result = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: { task.cancel() }
+            try await DriveTransferContext.current.check()
+            return result
         }
 
         let task = Task {
@@ -305,11 +418,85 @@ public actor DriveTransferCoordinator {
         tasks[cacheKey] = task
 
         do {
-            let record = try await task.value
+            let record = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: { task.cancel() }
             tasks[cacheKey] = nil
+            try await DriveTransferContext.current.check()
             return record
         } catch {
             tasks[cacheKey] = nil
+            throw error
+        }
+    }
+
+    /// Re-enter the adapter with retained evidence; the attempt refuses a second
+    /// uncertain submission. Revision changes cannot adopt an old in-flight task.
+    func confirmedTransfer(
+        cacheKey: String,
+        scope: DriveTransferTaskScope? = nil,
+        operation: @escaping @Sendable (DriveTransferAttempt) async throws -> DriveSavedFileTransferResult
+    ) async throws -> DriveSavedFileTransferResult {
+        try await DriveTransferContext.current.check()
+        let revision = DriveTransferContext.current.revision
+        let remainingRetries = await DriveRequestRecovery.budget?.availableRetries ?? 2
+        if let prior = attemptRevisions[cacheKey], prior != revision {
+            if tasks[cacheKey] != nil {
+                throw DriveEngineError.transferConfirmationPending()
+            }
+            if let attempt = attempts[cacheKey], !(await attempt.needsSubmission) {
+                throw DriveEngineError.transferConfirmationPending()
+            }
+            attempts[cacheKey] = nil
+        }
+        // Never evict unresolved writes to make room: that would allow a replay.
+        guard attempts[cacheKey] != nil || attempts.count < 256 else {
+            throw DriveEngineError.transferConfirmationPending()
+        }
+        let attempt: DriveTransferAttempt
+        if let existing = attempts[cacheKey] { attempt = existing }
+        else if let taskStore {
+            guard let scope else { throw DriveTaskRecoveryError.storageUnavailable }
+            // All unfinished rows, including pre-submit rows, require an explicit
+            // continue after reopening. No transport runs during this lookup.
+            guard !(try taskStore.records()).contains(where: {
+                !$0.completed && $0.scope.sourceKey == scope.sourceKey
+                    && $0.scope.accountReference == scope.accountReference
+            }) else { throw DriveTaskRecoveryError.requiresReview }
+            var record = DriveTransferTask(scope: scope)
+            record.remainingReadRetries = remainingRetries
+            try taskStore.insert(record)
+            attempt = DriveTransferAttempt(record: record, store: taskStore)
+        } else { attempt = DriveTransferAttempt() }
+        attempts[cacheKey] = attempt
+        attemptRevisions[cacheKey] = revision
+        do {
+            let result = try await transfer(cacheKey: cacheKey) {
+                try await DriveTransferContext.$confirmationDeadline.withValue(.now.advanced(by: .seconds(20))) {
+                    try await DriveRequestRecovery.withBudget {
+                        try await DriveRequestRecovery.$transferAttempt.withValue(attempt) {
+                            try await operation(attempt)
+                        }
+                    }
+                }
+            }
+            try await attempt.completed()
+            if attempts[cacheKey] === attempt {
+                attempts[cacheKey] = nil
+                attemptRevisions[cacheKey] = nil
+            }
+            return result
+        } catch {
+            if TaskDiagnosticIssue.isCancellation(error) || Task.isCancelled { try await attempt.cancel() }
+            else { await attempt.recordIssue(error) }
+            if error is DriveTaskRecoveryError { throw error }
+            await attempt.interrupted()
+            let phase = await attempt.phase
+            try await DriveTransferContext.current.check()
+            if error is CancellationError { throw error }
+            if phase == .submittedAwaitingConfirmation || phase == .outcomeUnknown {
+                throw DriveEngineError.transferConfirmationPending(phase)
+            }
             throw error
         }
     }

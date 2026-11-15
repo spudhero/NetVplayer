@@ -5,6 +5,21 @@ import Models
 import Sentry
 
 @Suite struct DiagnosticReportingTests {
+    @Test func disabledStartupDiagnosticsStayLocalAndDoNotClaimReceipt() throws {
+        let suite = "ov87-diagnostics-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: DiagnosticReportingConfiguration.preferenceKey)
+        let reporter = SentryDiagnostics(defaults: defaults)
+        reporter.start()
+        #expect(reporter.startupSnapshot == .init(state: .disabled, crashedLastRun: false))
+        #expect(reporter.captureVerificationEvent() == nil)
+        reporter.setEnabled(false)
+        reporter.stop()
+        #expect(defaults.bool(forKey: DiagnosticReportingConfiguration.preferenceKey) == false)
+        #expect(reporter.startupSnapshot.state == .disabled)
+    }
+
     @Test func remoteProjectionDoesNotCopyCredentialsOrMediaDetails() throws {
         let record = try #require(RemoteDiagnosticRecord(localMessage:
             "[PROXY_UPSTREAM_ERROR] status=403 url=https://example.com/movie?token=secret Cookie: session=private bodyPrefix={\"password\":\"hunter2\"} title=Private Movie"))

@@ -37,7 +37,18 @@ public actor MediaIndex {
             CREATE TABLE IF NOT EXISTS media(id TEXT PRIMARY KEY, library TEXT NOT NULL, service TEXT NOT NULL,
               path TEXT NOT NULL, group_id TEXT NOT NULL, payload BLOB NOT NULL, seen TEXT NOT NULL, available INTEGER NOT NULL DEFAULT 1);
             CREATE INDEX IF NOT EXISTS media_library ON media(library,available,group_id);
+            CREATE INDEX IF NOT EXISTS media_library_identity ON media(library,available,id);
+            CREATE TABLE IF NOT EXISTS rematch_snapshot(run TEXT NOT NULL,library TEXT NOT NULL,media_id TEXT NOT NULL,
+              PRIMARY KEY(run,media_id));
+            CREATE INDEX IF NOT EXISTS rematch_snapshot_library ON rematch_snapshot(library);
             CREATE TABLE IF NOT EXISTS scan_state(library TEXT PRIMARY KEY,last_success REAL,error TEXT);
+            CREATE TABLE IF NOT EXISTS scan_checkpoint(library TEXT PRIMARY KEY,payload BLOB NOT NULL,run TEXT);
+            CREATE TABLE IF NOT EXISTS scan_directory(library TEXT NOT NULL,path TEXT NOT NULL,payload BLOB NOT NULL,observed_run TEXT,
+              PRIMARY KEY(library,path));
+            CREATE TABLE IF NOT EXISTS match_session(library TEXT PRIMARY KEY,revision TEXT NOT NULL,run TEXT);
+            CREATE TABLE IF NOT EXISTS match_queue(sequence INTEGER PRIMARY KEY AUTOINCREMENT,library TEXT NOT NULL,
+              media_id TEXT NOT NULL UNIQUE,rematch INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS match_queue_library ON match_queue(library,sequence);
             CREATE TABLE IF NOT EXISTS media_browse(id TEXT PRIMARY KEY,sort_title TEXT NOT NULL,release_date TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS media_facets(media_id TEXT NOT NULL,kind TEXT NOT NULL,facet_key TEXT NOT NULL,label TEXT NOT NULL,
               PRIMARY KEY(media_id,kind,facet_key));
@@ -97,6 +108,41 @@ public actor MediaIndex {
         try ensureBrowseIndex()
         return try query("SELECT payload FROM media WHERE library=? AND available=1 ORDER BY group_id,path LIMIT ? OFFSET ?",
                   [.text(libraryID.uuidString), .number(Double(max(1, min(limit, 50000)))), .number(Double(max(0, offset)))])
+    }
+    /// Snapshot identities in SQLite, never full payloads in a growing Swift array.
+    /// Matching can change titles/grouping; only the immutable media ID is a cursor.
+    public func beginRematch(libraryID: UUID, runID: UUID, representativesOnly: Bool = false) throws -> Int {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try Task.checkCancellation()
+            try execute("DELETE FROM rematch_snapshot WHERE library=?", [.text(libraryID.uuidString)])
+            let selection = representativesOnly ? "MIN(id) FROM media WHERE library=? AND available=1 GROUP BY group_id" : "id FROM media WHERE library=? AND available=1"
+            try execute("INSERT INTO rematch_snapshot(run,library,media_id) SELECT ?,library," + selection,
+                        [.text(runID.uuidString), .text(libraryID.uuidString)])
+            let statement = try prepare("SELECT COUNT(*) FROM rematch_snapshot WHERE run=?", [.text(runID.uuidString)])
+            let step = sqlite3_step(statement), count = Int(sqlite3_column_int64(statement, 0)); sqlite3_finalize(statement)
+            guard step == SQLITE_ROW else { throw failure() }
+            try execute("COMMIT"); return count
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    public func rematchPage(libraryID: UUID, runID: UUID, after: String = "", limit: Int = 256) throws -> [String] {
+        let statement = try prepare("SELECT media_id FROM rematch_snapshot WHERE run=? AND library=? AND media_id>? ORDER BY media_id LIMIT ?",
+            [.text(runID.uuidString), .text(libraryID.uuidString), .text(after), .number(Double(max(1, min(256, limit))))])
+        defer { sqlite3_finalize(statement) }
+        var ids: [String] = []
+        while true {
+            let code = sqlite3_step(statement)
+            if code == SQLITE_DONE { return ids }
+            guard code == SQLITE_ROW, let id = sqlite3_column_text(statement, 0) else { throw failure() }
+            ids.append(String(cString: id))
+        }
+    }
+    public func rematchRecord(id: String, libraryID: UUID) throws -> MediaRecord? {
+        try ensureBrowseIndex()
+        return try query("SELECT payload FROM media WHERE id=? AND library=? AND available=1", [.text(id), .text(libraryID.uuidString)]).first
+    }
+    public func endRematch(runID: UUID) throws {
+        try execute("DELETE FROM rematch_snapshot WHERE run=?", [.text(runID.uuidString)])
     }
     public func group(for record: MediaRecord) throws -> [MediaRecord] {
         let current = try self.record(reference: record.reference) ?? record
@@ -207,12 +253,16 @@ public actor MediaIndex {
             try execute("COMMIT"); browseIndexReady = true
         } catch { try? execute("ROLLBACK"); throw error }
     }
-    private func updateBrowseFields(_ record: MediaRecord) throws {
+    private func updateBrowseFields(_ record: MediaRecord, previous: MediaRecord? = nil) throws {
         let metadata = record.metadata
         let title = metadata.kind == .television ? metadata.showTitle ?? metadata.title ?? record.entry.name : metadata.title ?? record.entry.name
         let date = metadata.releaseDate ?? metadata.year.map { String(format: "%04d-01-01", $0) } ?? ""
         try execute("INSERT INTO media_browse(id,sort_title,release_date) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET sort_title=excluded.sort_title,release_date=excluded.release_date",
                     [.text(record.id), .text(MediaLibraryIdentity.normalized(title)), .text(date)])
+        // The transaction already read the current payload for CAS/correction preservation.
+        // Scalar changes do not require deleting/reinserting unchanged actor/director/collection rows.
+        if let old = previous?.metadata, old.kind == metadata.kind, old.collection == metadata.collection,
+           old.directors == metadata.directors, old.cast == metadata.cast { return }
         try execute("DELETE FROM media_facets WHERE media_id=?", [.text(record.id)])
         try execute("DELETE FROM media_actor_names WHERE media_id=?", [.text(record.id)])
         var facets: [(String, String, String)] = []
@@ -237,6 +287,9 @@ public actor MediaIndex {
         }
     }
     public func upsert(_ record: MediaRecord, scanID: UUID? = nil) throws {
+        try writeRecord(record, scanID: scanID)
+    }
+    private func writeRecord(_ record: MediaRecord, scanID: UUID? = nil, previous: MediaRecord? = nil) throws {
         var record = record; record.updateGrouping()
         let data = try JSONEncoder().encode(record)
         let library = record.reference.libraryID?.uuidString ?? ""
@@ -246,19 +299,17 @@ public actor MediaIndex {
         } else {
             try execute("UPDATE media SET payload=?,group_id=? WHERE id=?", [.blob(data), .text(record.groupKey), .text(record.id)])
         }
-        try updateBrowseFields(record)
+        try updateBrowseFields(record, previous: previous)
     }
     public func markSeen(reference: FileResourceReference, scanID: UUID) throws {
         try execute("UPDATE media SET seen=?,available=1 WHERE id=?", [.text(scanID.uuidString), .text(reference.locator)])
     }
     /// Commit a slow detail request only while its matched identity and source are unchanged.
     /// This check and write share one actor turn, preserving concurrent corrections/scans.
-    public func enrichDetails(_ metadata: MediaMetadata, snapshot: MediaRecord) throws -> MediaRecord? {
+    public func enrichDetails(_ metadata: MediaMetadata, snapshot: MediaRecord, validate: @Sendable () throws -> Void = {}) throws -> MediaRecord? {
+        try Task.checkCancellation(); try validate()
         guard var current = try query("SELECT payload FROM media WHERE id=? AND available=1", [.text(snapshot.id)]).first else { return nil }
-        guard current.metadataSource == snapshot.metadataSource,
-              current.correction == snapshot.correction,
-              current.localMetadata == snapshot.localMetadata,
-              current.onlineMetadata == snapshot.onlineMetadata else { return current }
+        guard current == snapshot else { return current }
         current.onlineMetadata = metadata.fillingMissing(from: current.onlineMetadata)
         try upsert(current)
         return current
@@ -277,6 +328,199 @@ public actor MediaIndex {
                         [.text(libraryID.uuidString), .text(error ?? "扫描未完成")])
         }
     }
+    // MARK: - Explicit scan checkpoints (one bounded session per library)
+
+    private func decodedRows<T: Decodable>(_ type: T.Type, sql: String, values: [Value] = [], maximum: Int) throws -> [T] {
+        let statement = try prepare(sql, values); defer { sqlite3_finalize(statement) }
+        var result: [T] = []
+        while true {
+            let code = sqlite3_step(statement)
+            if code == SQLITE_DONE { return result }
+            guard code == SQLITE_ROW, result.count < maximum,
+                  let bytes = sqlite3_column_blob(statement, 0) else { throw MediaScanRecoveryError.capacity }
+            let count = Int(sqlite3_column_bytes(statement, 0))
+            guard count <= 32 * 1024 else { throw MediaScanRecoveryError.capacity }
+            result.append(try JSONDecoder().decode(type, from: Data(bytes: bytes, count: count)))
+        }
+    }
+    public func scanCheckpoint(libraryID: UUID) throws -> MediaScanCheckpoint? {
+        guard var checkpoint = try decodedRows(MediaScanCheckpoint.self,
+            sql: "SELECT payload FROM scan_checkpoint WHERE library=?", values: [.text(libraryID.uuidString)], maximum: 1).first else { return nil }
+        guard checkpoint.version == 1 else { throw MediaScanRecoveryError.unavailable }
+        checkpoint.directories = try decodedRows(MediaScanDirectory.self,
+            sql: "SELECT payload FROM scan_directory WHERE library=? ORDER BY path", values: [.text(libraryID.uuidString)],
+            maximum: MediaScanCheckpoint.maximumDirectories)
+        return checkpoint
+    }
+    private func saveCheckpointHeader(_ checkpoint: MediaScanCheckpoint) throws {
+        var header = checkpoint; header.directories = []
+        try execute("UPDATE scan_checkpoint SET payload=? WHERE library=?",
+                    [.blob(try JSONEncoder().encode(header)), .text(checkpoint.libraryID.uuidString)])
+    }
+    private func requireScanRun(libraryID: UUID, runID: UUID) throws {
+        let statement = try prepare("SELECT 1 FROM scan_checkpoint WHERE library=? AND run=?",
+                                    [.text(libraryID.uuidString), .text(runID.uuidString)])
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw MediaScanRecoveryError.superseded }
+    }
+    /// Claims only an explicitly requested scan. A fresh run token rejects all earlier callbacks.
+    public func beginScanCheckpoint(library: MediaLibraryConfiguration, revision: String,
+                                    request: MediaScanRequest, runID: UUID, now: Date = Date()) throws -> MediaScanCheckpoint {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            var checkpoint: MediaScanCheckpoint
+            if request == .rescan {
+                let count = try prepare("SELECT COUNT(*) FROM scan_checkpoint WHERE library<>?", [.text(library.id.uuidString)])
+                let step = sqlite3_step(count); let total = sqlite3_column_int(count, 0); sqlite3_finalize(count)
+                guard step == SQLITE_ROW, total < 128 else { throw MediaScanRecoveryError.capacity }
+                checkpoint = .init(library: library, revision: revision, now: now)
+                try execute("DELETE FROM scan_directory WHERE library=?", [.text(library.id.uuidString)])
+                try execute("INSERT INTO scan_checkpoint(library,payload,run) VALUES(?,?,?) ON CONFLICT(library) DO UPDATE SET payload=excluded.payload,run=excluded.run",
+                            [.text(library.id.uuidString), .blob(try JSONEncoder().encode(checkpoint)), .text(runID.uuidString)])
+                try saveScanDirectory(.init(path: library.path), libraryID: library.id, runID: runID)
+            } else {
+                guard let saved = try scanCheckpoint(libraryID: library.id) else { throw MediaScanRecoveryError.unavailable }
+                guard saved.configurationRevision == revision, saved.serviceID == library.serviceID,
+                      saved.rootPath == library.path else { throw MediaScanRecoveryError.configurationChanged }
+                guard !saved.isExpired(at: now) else { throw MediaScanRecoveryError.expired }
+                guard saved.phase != .cancelled else { throw MediaScanRecoveryError.cancelled }
+                guard saved.phase != .invalidated, saved.phase != .completed else { throw MediaScanRecoveryError.unavailable }
+                if case .retryFailed(let paths) = request {
+                    guard !paths.isEmpty, Set(paths).isSubset(of: Set(saved.failedDirectories)) else { throw MediaScanRecoveryError.unavailable }
+                }
+                checkpoint = saved; checkpoint.phase = .running; checkpoint.updatedAt = now
+                if case .retryFailed = request { checkpoint.fullTraversal = false }
+                else { checkpoint.fullTraversal = true }
+                try saveCheckpointHeader(checkpoint)
+                try execute("UPDATE scan_checkpoint SET run=? WHERE library=?", [.text(runID.uuidString), .text(library.id.uuidString)])
+            }
+            try execute("COMMIT"); return checkpoint
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    private func saveScanDirectory(_ directory: MediaScanDirectory, libraryID: UUID, runID: UUID) throws {
+        guard directory.path.utf8.count <= 4096, (try? FileServicePath.normalize(directory.path)) == directory.path else {
+            throw MediaScanRecoveryError.capacity
+        }
+        let sql = "INSERT INTO scan_directory(library,path,payload,observed_run) VALUES(?,?,?,?) ON CONFLICT(library,path) DO UPDATE SET payload=excluded.payload,observed_run=excluded.observed_run"
+        try execute(sql, [.text(libraryID.uuidString), .text(directory.path), .blob(try JSONEncoder().encode(directory)), .text(runID.uuidString)])
+    }
+    public func visitScanDirectory(_ directory: MediaScanDirectory, libraryID: UUID, runID: UUID, children: [String] = []) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try requireScanRun(libraryID: libraryID, runID: runID)
+            try saveScanDirectory(directory, libraryID: libraryID, runID: runID)
+            for path in children { try saveScanDirectory(.init(path: path), libraryID: libraryID, runID: runID) }
+            let count = try prepare("SELECT (SELECT COUNT(*) FROM scan_directory WHERE library=?),(SELECT COUNT(*) FROM scan_directory)", [.text(libraryID.uuidString)])
+            let step = sqlite3_step(count); let total = sqlite3_column_int(count, 0), allDirectories = sqlite3_column_int(count, 1); sqlite3_finalize(count)
+            guard step == SQLITE_ROW, total <= MediaScanCheckpoint.maximumDirectories, allDirectories <= 100_000 else { throw MediaScanRecoveryError.capacity }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    public func upsertScanned(_ record: MediaRecord, runID: UUID, queueForMatching: Bool = false, rematch: Bool = false,
+                              validate: @Sendable () throws -> Void = {}) throws {
+        guard let libraryID = record.reference.libraryID else { throw MediaScanRecoveryError.unavailable }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try Task.checkCancellation(); try validate()
+            try requireScanRun(libraryID: libraryID, runID: runID)
+            var updated = record
+            // Metadata reads can suspend while a user edits the same item.
+            let current = try query("SELECT payload FROM media WHERE id=?", [.text(record.id)]).first
+            if let current {
+                updated.correction = current.correction; updated.onlineMetadata = current.onlineMetadata
+            }
+            try writeRecord(updated, scanID: runID, previous: browseIndexReady ? current : nil)
+            if queueForMatching {
+                try requireMatchRun(libraryID: libraryID, runID: runID)
+                try execute("DELETE FROM match_queue WHERE media_id=?", [.text(record.id)])
+                guard try pendingMatchCount(libraryID: libraryID) < Self.maximumPendingMatches else { throw MediaScanRecoveryError.capacity }
+                try execute("INSERT INTO match_queue(library,media_id,rematch) VALUES(?,?,?)",
+                            [.text(libraryID.uuidString), .text(record.id), .number(rematch ? 1 : 0)])
+            }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    public func markScanned(reference: FileResourceReference, runID: UUID) throws {
+        guard let libraryID = reference.libraryID else { throw MediaScanRecoveryError.unavailable }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try requireScanRun(libraryID: libraryID, runID: runID)
+            try markSeen(reference: reference, scanID: runID)
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    /// Reuse only records actually observed in the matching complete listing. Older retained rows are excluded.
+    public func reuseScanDirectory(path: String, previousScanID: UUID, libraryID: UUID, runID: UUID) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try requireScanRun(libraryID: libraryID, runID: runID)
+            let prefix = path == "/" ? "/" : path + "/"
+            try execute("UPDATE media SET seen=?,available=1 WHERE library=? AND seen=? AND (path=? OR (substr(path,1,?)=? AND instr(substr(path,?),'/')=0))",
+                        [.text(runID.uuidString), .text(libraryID.uuidString), .text(previousScanID.uuidString), .text(path),
+                         .number(Double(prefix.unicodeScalars.count)), .text(prefix), .number(Double(prefix.unicodeScalars.count + 1))])
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    private func scopeCondition(_ path: String) -> (String, [Value]) {
+        let prefix = path == "/" ? "/" : path + "/"
+        return ("(path=? OR substr(path,1,?)=?)", [.text(path), .number(Double(prefix.unicodeScalars.count)), .text(prefix)])
+    }
+    /// Whole-library availability requires a new, complete root traversal in this run.
+    /// A retry may finalize only fully enumerated selected subtrees, even if the ledger now has no failures.
+    public func completeScanCheckpoint(libraryID: UUID, runID: UUID, fullSuccess: Bool,
+                                       successfulRetryRoots: [String] = []) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try requireScanRun(libraryID: libraryID, runID: runID)
+            guard var checkpoint = try scanCheckpoint(libraryID: libraryID) else { throw MediaScanRecoveryError.unavailable }
+            let observed = try decodedRows(MediaScanDirectory.self,
+                sql: "SELECT payload FROM scan_directory WHERE library=? AND observed_run=?",
+                values: [.text(libraryID.uuidString), .text(runID.uuidString)], maximum: MediaScanCheckpoint.maximumDirectories)
+            func hasCompleteEvidence(_ root: String) -> Bool {
+                let scope = observed.filter { $0.path == root || $0.path.hasPrefix(root == "/" ? "/" : root + "/") }
+                return scope.contains { $0.path == root } && scope.allSatisfy { $0.state == .completed && $0.scanID == runID }
+            }
+            if fullSuccess {
+                guard checkpoint.fullTraversal, hasCompleteEvidence(checkpoint.rootPath) else { throw MediaScanRecoveryError.unavailable }
+                try execute("UPDATE media SET available=0 WHERE library=? AND seen<>?", [.text(libraryID.uuidString), .text(runID.uuidString)])
+                try execute("INSERT INTO scan_state(library,last_success,error) VALUES(?,?,NULL) ON CONFLICT(library) DO UPDATE SET last_success=excluded.last_success,error=NULL",
+                            [.text(libraryID.uuidString), .number(Date().timeIntervalSince1970)])
+                try execute("DELETE FROM scan_directory WHERE library=? AND observed_run<>?", [.text(libraryID.uuidString), .text(runID.uuidString)])
+            } else {
+                for root in successfulRetryRoots {
+                    guard !checkpoint.fullTraversal, hasCompleteEvidence(root) else { throw MediaScanRecoveryError.unavailable }
+                    guard root == checkpoint.rootPath || root.hasPrefix(checkpoint.rootPath == "/" ? "/" : checkpoint.rootPath + "/") else {
+                        throw MediaScanRecoveryError.unavailable
+                    }
+                    let (condition, values) = scopeCondition(root)
+                    try execute("UPDATE media SET available=0 WHERE library=? AND seen<>? AND " + condition,
+                                [.text(libraryID.uuidString), .text(runID.uuidString)] + values)
+                    try execute("DELETE FROM scan_directory WHERE library=? AND observed_run<>? AND " + condition,
+                                [.text(libraryID.uuidString), .text(runID.uuidString)] + values)
+                }
+                try execute("INSERT INTO scan_state(library,error) VALUES(?,?) ON CONFLICT(library) DO UPDATE SET error=excluded.error",
+                            [.text(libraryID.uuidString), .text("扫描仅完成部分范围，旧索引已保留")])
+            }
+            checkpoint.directories = try scanCheckpoint(libraryID: libraryID)?.directories ?? []
+            checkpoint.phase = checkpoint.failedDirectories.isEmpty && checkpoint.pendingDirectories == 0 ? .completed : .partial
+            checkpoint.updatedAt = Date(); try saveCheckpointHeader(checkpoint)
+            try execute("UPDATE scan_checkpoint SET run=NULL WHERE library=?", [.text(libraryID.uuidString)])
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    public func interruptScanCheckpoint(libraryID: UUID, runID: UUID? = nil, phase: MediaScanCheckpoint.Phase) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            if let runID { try requireScanRun(libraryID: libraryID, runID: runID) }
+            if var checkpoint = try scanCheckpoint(libraryID: libraryID) {
+                checkpoint.phase = phase; checkpoint.updatedAt = Date()
+                try saveCheckpointHeader(checkpoint)
+                try execute("UPDATE scan_checkpoint SET run=NULL WHERE library=?", [.text(libraryID.uuidString)])
+            }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+
     public func lastSuccessfulScan(libraryID: UUID) throws -> Date? {
         let statement = try prepare("SELECT last_success FROM scan_state WHERE library=?", [.text(libraryID.uuidString)])
         defer { sqlite3_finalize(statement) }
@@ -300,9 +544,6 @@ public actor MediaIndex {
             }
             try execute("COMMIT")
         } catch { try? execute("ROLLBACK"); throw error }
-    }
-    public func corrections() throws -> [MediaManualCorrection] {
-        try query("SELECT payload FROM media").compactMap(\.correction)
     }
     /// Reconcile the rebuildable index with restored configuration, including removed locks.
     public func restoreCatalogState(libraries: [MediaLibraryConfiguration], corrections: [MediaManualCorrection], resetScanState: Bool = true) throws {
@@ -332,6 +573,86 @@ public actor MediaIndex {
         } catch { try? execute("ROLLBACK"); throw error }
     }
     public func removeLibrary(_ id: UUID) throws {
+        try execute("DELETE FROM rematch_snapshot WHERE library=?", [.text(id.uuidString)])
+        try execute("DELETE FROM match_session WHERE library=?", [.text(id.uuidString)])
+        try execute("DELETE FROM match_queue WHERE library=?", [.text(id.uuidString)])
+        try execute("DELETE FROM scan_checkpoint WHERE library=?", [.text(id.uuidString)])
+        try execute("DELETE FROM scan_directory WHERE library=?", [.text(id.uuidString)])
         try execute("UPDATE media SET available=0 WHERE library=?", [.text(id.uuidString)])
+    }
+
+    // MARK: - Durable bounded scan-to-match handoff
+
+    public static let maximumPendingMatches = 128
+    public struct MatchWork: Sendable {
+        public let sequence: Int64
+        public let record: MediaRecord
+        public let rematch: Bool
+    }
+    /// Claim on explicit scan/resume only. Reading the database never starts network work.
+    public func beginMatching(libraryID: UUID, revision: String, runID: UUID) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("SELECT 1 FROM match_session WHERE library=? AND revision=?",
+                                        [.text(libraryID.uuidString), .text(revision)])
+            let sameRevision = sqlite3_step(statement) == SQLITE_ROW; sqlite3_finalize(statement)
+            if !sameRevision { try execute("DELETE FROM match_queue WHERE library=?", [.text(libraryID.uuidString)]) }
+            try execute("INSERT INTO match_session(library,revision,run) VALUES(?,?,?) ON CONFLICT(library) DO UPDATE SET revision=excluded.revision,run=excluded.run",
+                        [.text(libraryID.uuidString), .text(revision), .text(runID.uuidString)])
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+    private func requireMatchRun(libraryID: UUID, runID: UUID) throws {
+        let statement = try prepare("SELECT 1 FROM match_session WHERE library=? AND run=?",
+                                    [.text(libraryID.uuidString), .text(runID.uuidString)])
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw MediaScanRecoveryError.superseded }
+    }
+    public func interruptMatching(libraryID: UUID, runID: UUID) throws {
+        try execute("UPDATE match_session SET run=NULL WHERE library=? AND run=?", [.text(libraryID.uuidString), .text(runID.uuidString)])
+    }
+    public func pendingMatchCount(libraryID: UUID) throws -> Int {
+        let statement = try prepare("SELECT COUNT(*) FROM match_queue WHERE library=?", [.text(libraryID.uuidString)])
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw failure() }
+        return Int(sqlite3_column_int(statement, 0))
+    }
+    public func nextMatch(libraryID: UUID, runID: UUID) throws -> MatchWork? {
+        try requireMatchRun(libraryID: libraryID, runID: runID)
+        // Deleted/unavailable rows cannot be revived by queued requests.
+        try execute("DELETE FROM match_queue WHERE library=? AND NOT EXISTS (SELECT 1 FROM media WHERE media.id=match_queue.media_id AND available=1)", [.text(libraryID.uuidString)])
+        let statement = try prepare("SELECT q.sequence,q.rematch,m.payload FROM match_queue q JOIN media m ON m.id=q.media_id WHERE q.library=? ORDER BY q.sequence LIMIT 1", [.text(libraryID.uuidString)])
+        defer { sqlite3_finalize(statement) }
+        let step = sqlite3_step(statement)
+        if step == SQLITE_DONE { return nil }
+        guard step == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 2) else { throw failure() }
+        let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 2)))
+        return MatchWork(sequence: sqlite3_column_int64(statement, 0), record: try JSONDecoder().decode(MediaRecord.self, from: data),
+                         rematch: sqlite3_column_int(statement, 1) != 0)
+    }
+    /// CAS and acknowledgement are atomic. A newer scan, correction or detail result wins.
+    /// A rejected snapshot stays queued and is read afresh by the consumer.
+    public func commitMatch(_ updated: MediaRecord, snapshot: MediaRecord, work: MatchWork? = nil, runID: UUID? = nil,
+                            acknowledge: Bool = true, validate: @Sendable () throws -> Void = {}) throws -> Bool {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try Task.checkCancellation(); try validate()
+            guard updated.reference == snapshot.reference else { throw MediaScanRecoveryError.superseded }
+            if let work {
+                guard let runID, let libraryID = snapshot.reference.libraryID else { throw MediaScanRecoveryError.superseded }
+                try requireMatchRun(libraryID: libraryID, runID: runID)
+                let statement = try prepare("SELECT 1 FROM match_queue WHERE sequence=? AND media_id=?",
+                                            [.number(Double(work.sequence)), .text(snapshot.id)])
+                let current = sqlite3_step(statement) == SQLITE_ROW; sqlite3_finalize(statement)
+                guard current else { try execute("COMMIT"); return false }
+            }
+            guard let current = try query("SELECT payload FROM media WHERE id=? AND available=1", [.text(snapshot.id)]).first,
+                  current == snapshot else { try execute("COMMIT"); return false }
+            try writeRecord(updated, previous: browseIndexReady ? current : nil)
+            if acknowledge, let work {
+                try execute("DELETE FROM match_queue WHERE sequence=?", [.number(Double(work.sequence))])
+            }
+            try execute("COMMIT"); return true
+        } catch { try? execute("ROLLBACK"); throw error }
     }
 }

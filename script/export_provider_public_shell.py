@@ -15,6 +15,8 @@ import tempfile
 from typing import Any
 
 from audit_provider_public_boundary import build_report, is_private_provider_source, serialized
+from audit_provider_public_release import build_release_report
+from public_release_policy import is_internal_publication
 from validate_publication_identity import audit_history, install_hooks
 
 
@@ -22,28 +24,20 @@ FORBIDDEN_PREFIXES = ("FongMi/", "private-providers/")
 PUBLIC_WORKFLOW_TEMPLATES = {
     ".github/workflows/release-macos.yml": "script/templates/release-macos.yml",
 }
-PUBLIC_RELEASE_DOCUMENTS = {
-    "docs/data/torrent-bridge-license-audit-2026-08-18.json",
-    "docs/design/player-ui/assets/w700d1q75cms.jpg",
-}
-PUBLIC_RELEASE_DOCUMENT_PREFIXES = ("docs/releases/",)
-INTERNAL_PUBLICATION_PREFIXES = (
-    "NetVplayer/Docs/",
-    "NetVplayer/Resources/UI_Mockups/",
-    "docs/",
-)
-INTERNAL_PUBLICATION_FILES = {
-    "NetVplayer/README.md",
-    "NetVplayer/PRD.md",
-    "NetVplayer/TASK.md",
-    "NetVplayer/migration_plan.md",
-    "NetVplayer/ui_design_guidelines.md",
-}
 PRIVATE_TEST_FILES = {
+    "NetVplayer/Tests/ProviderRuntimeTests/DevelopmentAndroidSeedCredentialTests.swift",
+    "NetVplayer/Tests/ConfigEngineTests/DevelopmentAndroidAliAccountFlowTests.swift",
+    "NetVplayer/Tests/ProviderRuntimeTests/DevelopmentAndroidAliEpisodeAdapterTests.swift",
+    "NetVplayer/Tests/ProviderRuntimeTests/DevelopmentAndroidUCEpisodeAdapterTests.swift",
+    "NetVplayer/Tests/ProviderRuntimeTests/DevelopmentAndroidDoubaoPageAdapterTests.swift",
+    "NetVplayer/Tests/ProviderRuntimeTests/DevelopmentAndroidDoubaoSignalAdapterTests.swift",
+    "NetVplayer/Tests/ProviderRuntimeTests/DevelopmentAndroidSixVMagnetAdapterTests.swift",
+    "NetVplayer/Tests/ProviderRuntimeTests/DevelopmentAndroidSeedPageTransportTests.swift",
     "NetVplayer/Tests/ProviderRuntimeTests/LegacyNativeProviderPrecedenceTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/BaiduLivePlaybackTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/ConfigEngineTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/ExternalSourceCompatibilityTests.swift",
+    "NetVplayer/Tests/ConfigEngineTests/FyNativeProviderTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/NewCzBrowserSessionTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/PlaybackTransferAcceptanceTests.swift",
     "NetVplayer/Tests/ConfigEngineTests/RealVodPlaybackAuditTests.swift",
@@ -52,6 +46,12 @@ PRIVATE_TEST_FILES = {
     "NetVplayer/Tests/ConfigEngineTests/WoggMirrorFallbackTests.swift",
 }
 INTERNAL_MIGRATION_FILES = {
+    "script/build_android_runtime_component.py",
+    "script/test_android_runtime_component.py",
+    "script/build_android_compatibility_policy.py",
+    "script/audit_provider_split.py",
+    "script/test_audit_provider_split.py",
+    "script/android_private_source_policy.py",
     "NetVplayer/script/test_playback_transfer_acceptance.py",
     ".github/workflows/private-covers-public.yml",
     "script/test_verify_private_covers_public.py",
@@ -276,11 +276,8 @@ def exclusion_reason(path: str) -> str | None:
         return "regenerated-boundary-report"
     if any(path.startswith(prefix) for prefix in FORBIDDEN_PREFIXES):
         return "forbidden-private-tree"
-    if path in INTERNAL_PUBLICATION_FILES:
+    if is_internal_publication(path):
         return "internal-publication-artifact"
-    if any(path.startswith(prefix) for prefix in INTERNAL_PUBLICATION_PREFIXES):
-        if path not in PUBLIC_RELEASE_DOCUMENTS and not path.startswith(PUBLIC_RELEASE_DOCUMENT_PREFIXES):
-            return "internal-publication-artifact"
     if is_private_provider_source(path):
         return "site-specific-swift-provider"
     if path in PRIVATE_TEST_FILES:
@@ -370,6 +367,9 @@ def verify_export(destination: Path, *, run_swift_tests: bool) -> dict[str, Any]
     report = build_report(destination)
     if not report["summary"]["release_ready"]:
         raise PublicExportError(f"public boundary failed: {report['blocking_reasons']}")
+    release = build_release_report(destination)
+    if not release["release_ready"]:
+        raise PublicExportError(f"public source release audit failed: {release['blocking_reasons']}")
     commit_count = int(run(["git", "rev-list", "--count", "HEAD"], cwd=destination).strip())
     if commit_count != 1:
         raise PublicExportError(f"public export must have one clean-history commit, found {commit_count}")
@@ -389,6 +389,7 @@ def verify_export(destination: Path, *, run_swift_tests: bool) -> dict[str, Any]
         "release_ready": True,
         "commit_count": commit_count,
         "swift_tests": "passed" if run_swift_tests else "not-run",
+        "source_release_audit": "passed",
         **report["summary"],
     }
 

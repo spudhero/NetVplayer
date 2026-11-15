@@ -3918,3 +3918,59 @@ private extension ProviderInstallPhase {
     }
     await manager.shutdownAll()
 }
+
+@Test func processBundledPythonEnvironmentRejectsEscapes() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("provider python environment \(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let root = directory.appendingPathComponent("runtime", isDirectory: true)
+    for path in ["jdk/bin", "python/home", "python/original/app", "python/original/requirements", "python/original/bootstrap"] {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(path), withIntermediateDirectories: true)
+    }
+    let executable = root.appendingPathComponent("jdk/bin/java")
+    try Data().write(to: executable)
+    try Data("fixture CA".utf8).write(to: root.appendingPathComponent("python/original/cacert.pem"))
+    let state = directory.appendingPathComponent("state", isDirectory: true)
+    let command = ProviderCommand(executableURL: executable, arguments: [], currentDirectoryURL: state,
+        stateDirectoryURL: state, environment: [
+            "NETVPLAYER_PROVIDER_ID": "fixture.original-python",
+            "NETVPLAYER_PROVIDER_STATE": state.path,
+            "NETVPLAYER_PROVIDER_ROOT": root.path,
+            "PYTHONHOME": root.appendingPathComponent("python/home").path,
+            "PYTHONPATH": ["app", "requirements", "bootstrap"].map { root.appendingPathComponent("python/original/" + $0).path }.joined(separator: ":"),
+            "SSL_CERT_FILE": root.appendingPathComponent("python/original/cacert.pem").path,
+            "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
+        ])
+    let environment = try ProviderProcessClient.launchEnvironment(for: command)
+    #expect(environment["PYTHONPATH"] == command.environment["PYTHONPATH"])
+    #expect(environment["HOME"] == state.appendingPathComponent("home").path)
+    #expect(environment["SSL_CERT_FILE"] == command.environment["SSL_CERT_FILE"])
+    for key in ["PYTHONHOME", "PYTHONPATH", "SSL_CERT_FILE"] {
+        var external = command
+        external.environment[key] = directory.path
+        #expect(throws: ProviderProcessError.invalidEnvironment(key)) {
+            try ProviderProcessClient.launchEnvironment(for: external)
+        }
+        var missing = command
+        missing.environment.removeValue(forKey: key)
+        #expect(throws: ProviderProcessError.invalidEnvironment(key)) {
+            try ProviderProcessClient.launchEnvironment(for: missing)
+        }
+    }
+    var extra = command
+    extra.environment["PYTHONPATH"]! += ":" + directory.path
+    #expect(throws: ProviderProcessError.invalidEnvironment("PYTHONPATH")) {
+        try ProviderProcessClient.launchEnvironment(for: extra)
+    }
+    var unrelated = command
+    unrelated.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+    #expect(throws: ProviderProcessError.invalidEnvironment("NETVPLAYER_PROVIDER_ROOT")) {
+        try ProviderProcessClient.launchEnvironment(for: unrelated)
+    }
+    let pythonHome = root.appendingPathComponent("python/home")
+    try FileManager.default.removeItem(at: pythonHome)
+    try FileManager.default.createSymbolicLink(at: pythonHome, withDestinationURL: directory)
+    #expect(throws: ProviderProcessError.invalidEnvironment("PYTHONHOME")) {
+        try ProviderProcessClient.launchEnvironment(for: command)
+    }
+}

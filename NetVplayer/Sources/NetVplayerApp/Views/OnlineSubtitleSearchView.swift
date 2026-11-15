@@ -26,13 +26,14 @@ struct OnlineSubtitleSearchView: View {
             DisclosureGroup(L10n.text("字幕服务设置"), isExpanded: $serviceSettingsExpanded) {
                 serviceSettings.padding(.top, 10)
             }
+            .disclosureGroupStyle(FullRowDisclosureGroupStyle())
             FormFieldLabel(title: L10n.text("影片名称"), requirement: .required)
             HStack {
                 TextField(L10n.text("字幕搜索词"), text: $query)
                     .textFieldStyle(SettingsFieldStyle())
                     .onSubmit { search() }
                 Button(L10n.text("搜索")) { search() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
                     .disabled(!enabled || model.isLoading || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || savedToken.isEmpty)
                 if model.isLoading {
                     ProgressView().controlSize(.small)

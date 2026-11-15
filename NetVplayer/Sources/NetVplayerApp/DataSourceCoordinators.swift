@@ -3,6 +3,7 @@ import Models
 import Networking
 import SpiderEngine
 import FileServiceEngine
+import MediaServerEngine
 import ConfigEngine
 import LiveEngine
 
@@ -103,6 +104,7 @@ final class VodDataSourceCoordinator {
         return try await requests.run(scope: scope, operation: {
             try await api.playerContent(key: site.key, flag: flag, id: id, sites: sites)
         }, discard: { value in
+            if let server = value.mediaServer { await MediaServerRuntime.shared.release(server.leaseID) }
             if let raw = value.fileResourceLeaseID, let id = UUID(uuidString: raw) {
                 await FileServiceRuntime.shared.releasePlayback(leaseID: id)
             }

@@ -100,7 +100,17 @@ public enum ProviderCommandBuilder {
                 packageRoot: packageRoot,
                 stateDirectory: stateDirectoryURL
             )
-            arguments = ["--", runtimeExecutable.path] + runtimeArguments
+            if stateDirectoryURL.deletingLastPathComponent().lastPathComponent == ".audit" {
+                // App Sandbox startup rewrites HOME/TMPDIR to its shared
+                // container. Restore the fresh audit paths after that startup,
+                // while the same sandbox still constrains the child runtime.
+                arguments = ["--", "/usr/bin/env",
+                    "HOME=" + stateDirectoryURL.appendingPathComponent("home").path,
+                    "TMPDIR=" + stateDirectoryURL.appendingPathComponent("tmp").path + "/",
+                    runtimeExecutable.path] + runtimeArguments
+            } else {
+                arguments = ["--", runtimeExecutable.path] + runtimeArguments
+            }
         }
 
         var environment = [

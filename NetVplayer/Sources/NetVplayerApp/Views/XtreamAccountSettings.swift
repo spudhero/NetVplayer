@@ -60,6 +60,7 @@ struct XtreamAccountSettings: View {
                         Button(L10n.text("退出此账号")) {
                             do {
                                 try UserPreferences.shared.saveCredential("", for: "xtream." + id.uuidString.lowercased())
+                                appState.invalidateLiveXtreamAccount(id)
                                 username = ""; password = ""; status = L10n.text("账号已退出，服务器配置已保留。")
                                 statusIsError = false
                             } catch { status = error.localizedDescription; statusIsError = true }
@@ -98,6 +99,7 @@ struct XtreamAccountSettings: View {
                 try UserPreferences.shared.saveXtreamCredentials(credentials, for: account.id, server: account.server)
                 accounts.removeAll { $0.id == account.id }; accounts.append(account)
                 UserPreferences.shared.xtreamConfigurations = accounts
+                appState.invalidateLiveXtreamAccount(account.id)
                 selectedID = account.id
                 await appState.loadConfig(url: account.url, waitForProviderRuntime: false)
                 status = appState.configError ?? L10n.text("Xtream 已连接。")

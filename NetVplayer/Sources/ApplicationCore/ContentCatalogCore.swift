@@ -6,11 +6,13 @@ public struct ContentCatalogState: Sendable {
     public var vods: [Vod]
     public var categories: [VodClass]
     public var selectedCategory: VodClass?
+    fileprivate var inheritedFilterCategory: VodClass? = nil
     public var categoryFilters: [Filter]
     public var selectedFilterValues: [String: String]
     public var filtersByCategoryID: [String: [Filter]]
     public var selectionsByCategoryID: [String: [String: String]]
     public var currentPage: Int
+    /// Zero means an original category has not advertised a page limit.
     public var pageCount: Int
     public var isLoading: Bool
     public var isLoadingMore: Bool
@@ -50,6 +52,9 @@ public struct ContentCatalogPayload: Sendable {
     public var filters: [String: [Filter]]
     public var page: Int
     public var pageCount: Int
+    /// Exact original Result.getPageCount: zero allows another request.
+    /// Presence selects y40 request-page semantics, including empty-page retry.
+    public var originalCategoryPageCount: Int? = nil
 
     public init(
         types: [VodClass] = [],
@@ -162,7 +167,8 @@ public enum ContentCatalogCore {
 
     public static func beginCategory(
         _ current: ContentCatalogState,
-        category: VodClass
+        category: VodClass,
+        preservingFilterSelection: Bool = false
     ) -> ContentCatalogTransition {
         var state = current
         state.generation &+= 1
@@ -171,6 +177,11 @@ public enum ContentCatalogCore {
         state.currentPage = 1
         state.pageCount = 1
         state.isLoadingMore = false
+        if preservingFilterSelection {
+            state.inheritedFilterCategory = category
+        } else if state.inheritedFilterCategory != category {
+            state.inheritedFilterCategory = nil
+        }
         state = configureFilters(state, category: category)
 
         guard !CategoryFilterSelectionPolicy.hasMissingRequiredText(
@@ -196,7 +207,7 @@ public enum ContentCatalogCore {
               current.vods.last?.vodId == triggerVodID,
               !current.isLoading,
               !current.isLoadingMore,
-              current.currentPage < current.pageCount else {
+              current.pageCount == 0 || current.currentPage < current.pageCount else {
             return ContentCatalogTransition(state: current)
         }
         var state = current
@@ -233,6 +244,11 @@ public enum ContentCatalogCore {
             state.currentPage = max(payload.page, request.page)
             state.pageCount = max(payload.pageCount, state.pageCount)
             state.isLoadingMore = false
+        }
+        if let pageCount = payload.originalCategoryPageCount {
+            // y40 owns its page number; Result.page never advances or rewinds it.
+            state.currentPage = max(payload.vods.isEmpty ? request.page - 1 : request.page, 1)
+            state.pageCount = pageCount
         }
         return state
     }
@@ -287,7 +303,7 @@ public enum ContentCatalogCore {
               }) else {
             return ContentCatalogTransition(state: current, failure: .invalidFilter)
         }
-        guard filter.values.contains(where: { $0.value == value }) else {
+        guard filter.values.contains(where: { $0.value == value }) || (value.isEmpty && !filter.isRequired) else {
             return ContentCatalogTransition(state: current, failure: .invalidOption)
         }
         var state = current
@@ -348,7 +364,7 @@ public enum ContentCatalogCore {
         }
         let value = state.selectedFilterValues[filter.key]
         return filter.values.first(where: { $0.value == value })?.name
-            ?? filter.values.first?.name
+            ?? filter.values.first(where: { $0.value.isEmpty })?.name
             ?? ""
     }
 
@@ -370,6 +386,7 @@ public enum ContentCatalogCore {
         clearDefinitions: Bool
     ) -> ContentCatalogState {
         var state = current
+        state.inheritedFilterCategory = nil
         state.categoryFilters = []
         state.selectedFilterValues = [:]
         state.selectionsByCategoryID = [:]
@@ -397,6 +414,9 @@ public enum ContentCatalogCore {
         _ current: ContentCatalogState,
         category: VodClass
     ) -> ContentCatalogState {
+        // Original folders inherit opaque extend values through restore, refresh
+        // and pagination. A different category or home leaves this scope.
+        guard current.inheritedFilterCategory != category else { return current }
         var state = current
         let filters = state.filtersByCategoryID[category.typeId] ?? []
         let existing = state.selectionsByCategoryID[category.typeId] ?? [:]

@@ -3,7 +3,6 @@
 
 import CryptoKit
 import Foundation
-import Models
 import Networking
 
 public struct NodeBundleResolution: Sendable {

@@ -87,7 +87,7 @@ public actor ProviderManager {
         if let old = sessions.removeValue(forKey: document.manifest.providerID) {
             try await stopRetaining(old)
         }
-        let stateDirectory = try await store.stateDirectory(providerID: document.manifest.providerID)
+        let stateDirectory = try await store.stateDirectory(providerID: document.manifest.providerID, sandboxed: document.manifest.sandbox != nil)
         let command = try ProviderCommandBuilder.command(
             manifest: document.manifest,
             packageRoot: installed,
@@ -414,7 +414,7 @@ public actor ProviderManager {
         try permitLaunch(providerID: providerID)
         let (root, document) = try await store.activePackage(providerID: providerID)
         guard document.manifest.providerID == providerID else { throw ProviderManagerError.providerMismatch }
-        let stateDirectory = try await store.stateDirectory(providerID: providerID)
+        let stateDirectory = try await store.stateDirectory(providerID: providerID, sandboxed: document.manifest.sandbox != nil)
         let command = try ProviderCommandBuilder.command(
             manifest: document.manifest,
             packageRoot: root,

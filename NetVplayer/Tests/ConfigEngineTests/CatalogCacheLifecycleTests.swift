@@ -1,6 +1,8 @@
 import Foundation
 import Models
-import SpiderEngine
+import ConfigEngine
+import Storage
+@testable import SpiderEngine
 import Testing
 @testable import NetVplayerApp
 
@@ -65,6 +67,8 @@ struct CatalogCacheLifecycleTests {
         await state.loadHomeContent()
         await state.selectCategory(VodClass(typeId: "movie"))
         let filter = try #require(state.categoryFilters.first)
+          // Optional filters have no implicit first-value selection.
+          await state.selectCategoryFilter(filter, value: FilterValue(name: "国内", value: "domestic"))
         let firstPage = try #require(state.vods.last)
         await state.loadMoreCategoryContentIfNeeded(currentVod: firstPage)
         let domesticIDs = state.vods.map(\.vodId)
@@ -183,6 +187,228 @@ struct CatalogCacheLifecycleTests {
         #expect((await repository.stats()).pageCount == 0)
     }
 
+    #if DEBUG
+    @MainActor
+    @Test func originalEmptyHomeRequestsTheExactFirstCategoryAndKeepsExplicitSelection() async throws {
+        let provider = OriginalHomeCatalogProvider(home: originalHomeCatalog())
+        let (state, _) = try await makeOriginalHomeState(provider: provider)
+        await state.loadHomeContent()
+
+        #expect(!state.showsHomeRecommendation)
+        #expect(state.selectedCategory?.typeId == originalHomeFirstCategoryID)
+        #expect(state.vods.first?.vodId == "category-" + originalHomeFirstCategoryID)
+        #expect(await provider.categoryRequests() == [OriginalHomeCategoryRequest(
+            id: originalHomeFirstCategoryID, page: "1", filter: true, selection: [:]
+        )])
+        #expect(await provider.homeCallCount() == 1)
+
+        await state.selectCategory(VodClass(typeId: "second"))
+        await state.refreshCurrentCatalog()
+        #expect(state.selectedCategory?.typeId == "second")
+        #expect(state.vods.first?.vodId == "category-second")
+        #expect(!state.showsHomeRecommendation)
+        #expect(await provider.categoryRequests().map(\.id) == [originalHomeFirstCategoryID, "second", "second"])
+        #expect(await provider.homeCallCount() == 1)
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func originalNonemptyMergedHomeRetainsRecommendationAcrossEmptyCategories(inHomeVideo: Bool) async throws {
+        let recommendation = Vod(vodId: "recommendation", vodName: "Recommendation")
+        let provider = OriginalHomeCatalogProvider(
+            home: originalHomeCatalog(list: inHomeVideo ? [] : [recommendation]),
+            homeVideo: Result(list: inHomeVideo ? [recommendation] : []),
+            emptyCategories: true
+        )
+        let (state, _) = try await makeOriginalHomeState(provider: provider)
+        await state.loadHomeContent()
+        #expect(state.showsHomeRecommendation)
+        #expect(state.selectedCategory == nil)
+        #expect(state.vods.map(\.vodId) == ["recommendation"])
+        #expect(await provider.categoryRequests().isEmpty)
+
+        await state.selectCategory(VodClass(typeId: "second"))
+        #expect(state.vods.isEmpty)
+        #expect(state.showsHomeRecommendation)
+        await state.loadHomeContent()
+        #expect(state.selectedCategory == nil)
+        #expect(state.vods.map(\.vodId) == ["recommendation"])
+        #expect(await provider.homeCallCount() == 1)
+        state.didClearPerformanceCaches()
+        #expect(state.showsHomeRecommendation)
+        #expect(state.vods.map(\.vodId) == ["recommendation"])
+    }
+
+    @MainActor
+    @Test(arguments: [0.0, 301.0, 1_801.0])
+    func originalEmptyCachedHomeLoadsFirstCategoryAndRestoresItsCache(age: TimeInterval) async throws {
+        let clock = CatalogLifecycleClock()
+        let repository = CatalogRepository(now: clock.now)
+        let provider = OriginalHomeCatalogProvider(home: originalHomeCatalog())
+        let (state, site) = try await makeOriginalHomeState(provider: provider, repository: repository)
+        let key = CatalogCacheBaseKey(revision: 1, siteKey: site.key, kind: .home)
+        _ = try await repository.result(for: key, page: 1) { originalHomeCatalog() }
+        clock.advance(age)
+        await state.loadHomeContent()
+        #expect(!state.showsHomeRecommendation)
+        #expect(state.selectedCategory?.typeId == originalHomeFirstCategoryID)
+        #expect(state.vods.first?.vodId == "category-" + originalHomeFirstCategoryID)
+        #expect(await provider.categoryRequests().map(\.id) == [originalHomeFirstCategoryID])
+        if age > 0 {
+            try await waitUntil { (await repository.lookup(key)).freshness == .fresh }
+        }
+        #expect(await provider.homeCallCount() == (age == 0 ? 0 : 1))
+
+        await state.selectCategory(VodClass(typeId: "second"))
+        await state.loadHomeContent()
+        #expect(state.selectedCategory?.typeId == originalHomeFirstCategoryID)
+        #expect(state.vods.first?.vodId == "category-" + originalHomeFirstCategoryID)
+        #expect(await provider.categoryRequests().map(\.id) == [originalHomeFirstCategoryID, "second"])
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func originalStaleHomeRefreshPreservesTheExplicitCategory(failingRefresh: Bool) async throws {
+        let clock = CatalogLifecycleClock()
+        let repository = CatalogRepository(now: clock.now)
+        let provider = OriginalHomeCatalogProvider(
+            home: originalHomeCatalog(list: [Vod(vodId: "new-recommendation")]),
+            holdHome: true,
+            failHome: failingRefresh
+        )
+        let (state, site) = try await makeOriginalHomeState(provider: provider, repository: repository)
+        let key = CatalogCacheBaseKey(revision: 1, siteKey: site.key, kind: .home)
+        _ = try await repository.result(for: key, page: 1) { originalHomeCatalog() }
+        clock.advance(301)
+        await state.loadHomeContent()
+        #expect(state.selectedCategory?.typeId == originalHomeFirstCategoryID)
+        #expect(!state.showsHomeRecommendation)
+        try await waitUntil { await provider.homeCallCount() == 1 }
+        await state.selectCategory(VodClass(typeId: "second"))
+        await provider.releaseHome()
+        try await waitUntil { await provider.completedHomeCallCount() == 1 }
+        if !failingRefresh {
+            try await waitUntil { state.showsHomeRecommendation }
+        }
+        #expect(state.selectedCategory?.typeId == "second")
+        #expect(state.vods.map(\.vodId) == ["category-second"])
+        #expect(state.vodError == nil)
+        #expect(!state.isLoadingVod)
+        #expect(!state.isCatalogRefreshing)
+        #expect(state.showsHomeRecommendation == !failingRefresh)
+        #expect(await provider.categoryRequests().map(\.id) == [originalHomeFirstCategoryID, "second"])
+    }
+
+    @MainActor
+    @Test func originalFailedHomeDoesNotTurnAnErrorIntoAFirstCategoryRequest() async throws {
+        let provider = OriginalHomeCatalogProvider(home: originalHomeCatalog(), failHome: true)
+        let (state, _) = try await makeOriginalHomeState(provider: provider)
+        state.categories = originalHomeCatalog().types
+        await state.loadHomeContent()
+        #expect(state.vodError != nil)
+        #expect(!state.isLoadingVod)
+        #expect(await provider.categoryRequests().isEmpty)
+    }
+
+    @MainActor
+    @Test func explicitCategoryRetiresAPendingOriginalHomeDefault() async throws {
+        let provider = OriginalHomeCatalogProvider(home: originalHomeCatalog(), holdHome: true)
+        let (state, _) = try await makeOriginalHomeState(provider: provider)
+        let home = Task { await state.loadHomeContent() }
+        try await waitUntil { await provider.homeCallCount() == 1 }
+        await state.selectCategory(VodClass(typeId: "second"))
+        await provider.releaseHome()
+        await home.value
+        #expect(state.selectedCategory?.typeId == "second")
+        #expect(state.vods.map(\.vodId) == ["category-second"])
+        #expect(await provider.categoryRequests().map(\.id) == ["second"])
+    }
+
+    @MainActor
+    @Test func nativeEmptyHomeKeepsItsExistingNavigationPolicy() async throws {
+        let provider = OriginalHomeCatalogProvider(home: originalHomeCatalog())
+        let (state, site) = try await makeOriginalHomeState(provider: provider, backend: .macNative)
+        await state.loadHomeContent()
+        #expect(state.showsHomeRecommendation == site.showsSyntheticRecommendation)
+        #expect(state.selectedCategory == nil)
+        #expect(state.vods.isEmpty)
+        #expect(await provider.categoryRequests().isEmpty)
+    }
+
+    @MainActor
+    @Test func originalEmptyHomeWithoutCategoriesRemainsAnEmptySuccess() async throws {
+        let provider = OriginalHomeCatalogProvider(home: .empty)
+        let (state, _) = try await makeOriginalHomeState(provider: provider)
+        await state.loadHomeContent()
+        #expect(!state.showsHomeRecommendation)
+        #expect(state.selectedCategory == nil)
+        #expect(state.vods.isEmpty)
+        #expect(state.vodError == nil)
+        #expect(await provider.categoryRequests().isEmpty)
+    }
+
+    @MainActor
+    private func makeOriginalHomeState(
+        provider: OriginalHomeCatalogProvider,
+        repository: CatalogRepository = CatalogRepository(),
+        backend: ProviderExecutionBackend = .androidOriginal
+    ) async throws -> (AppState, Site) {
+        let site = Site(key: UUID().uuidString, type: 3, api: "csp_HomeCatalog_\(UUID().uuidString)")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "netvplayer-home-catalog-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let preferences = UserPreferences(defaults: defaults, credentialStore: MemoryCredentialStore())
+        preferences.providerExecutionPreference = .automatic
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        if backend == .androidOriginal {
+            let binding = DevelopmentAndroidRuntimeManifest.Binding(key: site.key, api: site.api, className: "fixture.NoExecution")
+            let manifest = DevelopmentAndroidRuntimeManifest(schema: 1, providerID: "test.home-navigation", backend: nil,
+                providerSHA256: String(repeating: "0", count: 64), hostSHA256: String(repeating: "0", count: 64),
+                bindings: [binding], bootstrapClass: nil, package: nil)
+            let layout = DevelopmentAndroidRuntimeLayout(root: directory, manifest: manifest, classPath: [])
+            let original = DevelopmentAndroidSiteProvider(runtime: layout, binding: binding, stateDirectory: directory)
+            await SpiderReplacementRegistry.shared.register(originalKey: site.key, originalAPI: site.api, provider: original)
+        } else {
+            await SpiderReplacementRegistry.shared.register(originalKey: site.key, originalAPI: site.api, provider: provider)
+        }
+        let state = AppState(
+            loadDefaultConfig: false,
+            startProxyServer: false,
+            startProviderRuntime: false,
+            storageManager: StorageManager(storageDirectory: directory),
+            userPreferences: preferences,
+            providerRuntimeBootstrap: nil,
+            providerRuntimeRegistrationOverride: { true },
+            providerRuntimeStartupOverride: { true },
+            // The providers above are the fixture. Do not select the machine's
+            // installed component or require a signed application test bundle.
+            androidProviderRegistrationOverride: { _ in },
+            catalogRepository: repository
+        )
+        let json = try JSONSerialization.data(withJSONObject: ["sites": [
+            ["key": site.key, "type": 3, "api": site.api]
+        ]])
+        let url = directory.appendingPathComponent("config.json").absoluteString
+        // Use the existing config path to capture the real backend. An already-resolved
+        // initial payload prevents any helper or content request during setup.
+        await state.loadConfig(url: url, persistUserConfig: false, waitForProviderRuntime: false,
+            refreshCachedConfiguration: false, preparedInput: ResolvedVodInput(
+                json: String(decoding: json, as: UTF8.self), config: Config(url: url),
+                kind: .configuration, canonicalURL: url, initialResult: .empty, usesCachedConfiguration: true
+            ))
+        #expect(state.configError == nil)
+        #expect(state.providerExecutionBackends[site.key] == backend)
+        #expect(state.activeSite?.key == site.key)
+        // Only subsequent content calls are handled by the in-memory request recorder.
+        await SpiderReplacementRegistry.shared.register(originalKey: site.key, originalAPI: site.api, provider: provider)
+        return (state, site)
+    }
+
+    #endif
+
     @MainActor
     private func makeState(
         repository: CatalogRepository,
@@ -263,3 +489,67 @@ private actor CatalogLifecycleProvider: SiteContentProvider {
     func playerContent(site: Site, flag: String, id: String) async throws -> Result { .empty }
     func searchContent(site: Site, keyword: String, quick: Bool, page: String) async throws -> Result { .empty }
 }
+
+#if DEBUG
+private let originalHomeFirstCategoryID = "first +%2F category"
+
+private func originalHomeCatalog(list: [Vod] = []) -> Result {
+    Result(types: [
+        VodClass(typeId: originalHomeFirstCategoryID, typeName: "First"),
+        VodClass(typeId: "second", typeName: "Second")
+    ], list: list)
+}
+
+private struct OriginalHomeCategoryRequest: Sendable, Equatable {
+    let id: String
+    let page: String
+    let filter: Bool
+    let selection: [String: String]
+}
+
+private actor OriginalHomeCatalogProvider: SiteContentProvider {
+    private let home: Result
+    private let homeVideo: Result?
+    private let emptyCategories: Bool
+    private var holdHome: Bool
+    private let failHome: Bool
+    private var homeCalls = 0
+    private var completedHomeCalls = 0
+    private var requests: [OriginalHomeCategoryRequest] = []
+    private var homeWaiter: CheckedContinuation<Void, Never>?
+
+    init(home: Result, homeVideo: Result? = .empty, emptyCategories: Bool = false,
+         holdHome: Bool = false, failHome: Bool = false) {
+        self.home = home
+        self.homeVideo = homeVideo
+        self.emptyCategories = emptyCategories
+        self.holdHome = holdHome
+        self.failHome = failHome
+    }
+
+    func homeCallCount() -> Int { homeCalls }
+    func completedHomeCallCount() -> Int { completedHomeCalls }
+    func categoryRequests() -> [OriginalHomeCategoryRequest] { requests }
+    func releaseHome() {
+        holdHome = false
+        homeWaiter?.resume()
+        homeWaiter = nil
+    }
+    func homeContent(site: Site) async throws -> Result {
+        homeCalls += 1
+        defer { completedHomeCalls += 1 }
+        if holdHome { await withCheckedContinuation { homeWaiter = $0 } }
+        if failHome { throw URLError(.notConnectedToInternet) }
+        return home
+    }
+    func homeVideoContent(site: Site) async throws -> Result? { homeVideo }
+    func categoryContent(site: Site, tid: String, page: String, filter: Bool, extend: [String: String]) async throws -> Result {
+        requests.append(OriginalHomeCategoryRequest(id: tid, page: page, filter: filter, selection: extend))
+        return emptyCategories ? .empty : Result(list: [Vod(vodId: "category-" + tid)])
+    }
+    func detailContent(site: Site, id: String) async throws -> Result { .empty }
+    func playerContent(site: Site, flag: String, id: String) async throws -> Result { .empty }
+    func searchContent(site: Site, keyword: String, quick: Bool, page: String) async throws -> Result { .empty }
+}
+
+#endif

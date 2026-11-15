@@ -131,23 +131,29 @@ struct SettingsInlineMessage: View {
 }
 
 enum FileConnectionPresentation {
-    static let choices: [FileServiceKind] = [.local, .smb, .webDAV, .alist, .openList]
+    static let choices: [FileServiceKind] = [.local, .smb, .webDAV, .alist, .openList, .ftp, .sftp]
     static func title(_ kind: FileServiceKind) -> String {
         switch kind {
         case .local: L10n.text("本机文件夹")
+        case .cloudDrive: L10n.text("网盘目录")
         case .smb: L10n.text("NAS / 共享文件夹（SMB）")
         case .webDAV: L10n.text("文件服务器（WebDAV）")
         case .alist: L10n.text("AList 文件列表")
         case .openList: L10n.text("OpenList 文件列表")
+        case .ftp: "FTP / FTPS"
+        case .sftp: "SFTP（SSH）"
         }
     }
     static func hint(_ kind: FileServiceKind) -> String {
         switch kind {
         case .local: L10n.text("选择这台 Mac 上的视频文件夹。更换电脑后需要重新选择。")
+        case .cloudDrive: L10n.text("选择已登录网盘里的文件夹，添加到媒体库。")
         case .smb: L10n.text("粘贴或输入完整的文件夹地址，账号和密码在下方填写。")
         case .webDAV: L10n.text("连接支持 WebDAV 的 NAS 或文件服务器，填写服务方提供的地址。")
         case .alist: L10n.text("连接自己的 AList 文件列表，浏览其中的视频与文件夹。")
         case .openList: L10n.text("连接自己的 OpenList 文件列表，浏览其中的视频与文件夹。")
+        case .ftp: L10n.text("连接 FTP 文件服务器；FTP 为明文连接，支持加密连接的服务器可填写 ftps:// 地址。")
+        case .sftp: L10n.text("通过 SSH 读取文件，使用用户名、密码和服务器的 SHA256 主机指纹。")
         }
     }
     static func metadataTitle(_ source: MetadataSource) -> String {
@@ -168,7 +174,6 @@ private struct SettingsEditorHeightKey: PreferenceKey {
 
 /// A sheet grows with its form. Its header and actions stay outside the scroll area.
 struct SettingsEditorContainer<Content: View, Actions: View>: View {
-    @Environment(\.appThemePalette) private var palette
     let title: String
     var width: CGFloat = 620
     @ViewBuilder var content: Content

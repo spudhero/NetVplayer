@@ -127,7 +127,7 @@ public struct BaiduQRLoginClient: Sendable {
         return try await exchange(exchangeToken: exchangeToken, session: session)
     }
 
-    private func exchange(exchangeToken: String, session: BaiduQRCodeSession) async throws -> CloudCredential {
+    private func exchange(exchangeToken: String, session _: BaiduQRCodeSession) async throws -> CloudCredential {
         let now = Self.milliseconds()
         var components = URLComponents(string: "\(Self.passportBase)/v3/login/main/qrbdusslogin")!
         components.queryItems = [

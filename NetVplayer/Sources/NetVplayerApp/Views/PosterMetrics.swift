@@ -5,8 +5,6 @@ import SwiftUI
 
 enum PosterMetrics {
     static let aspectRatio: CGFloat = 2.0 / 3.0
-    static let detailWidth: CGFloat = 190
-    static let detailHeight: CGFloat = detailWidth / aspectRatio
 }
 
 struct PosterAspectContainer<Content: View>: View {

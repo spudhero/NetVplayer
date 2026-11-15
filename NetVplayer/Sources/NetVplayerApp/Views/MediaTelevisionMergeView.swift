@@ -1,6 +1,5 @@
 import SwiftUI
 import Models
-import MediaLibraryEngine
 
 struct MediaTelevisionMergeView: View {
     @Environment(\.dismiss) private var dismiss
@@ -33,7 +32,7 @@ struct MediaTelevisionMergeView: View {
                 }.disabled(busy)
             }
             HStack {
-                TextField(L10n.text("筛选剧集条目"), text: $search).textFieldStyle(.roundedBorder)
+                TextField(L10n.text("筛选剧集条目"), text: $search).textFieldStyle(SettingsFieldStyle())
                 Button(L10n.text("全选")) { selected.formUnion(visible.map(\.id)) }
                 Button(L10n.text("清除选择")) { selected.removeAll() }
             }.disabled(busy)
@@ -57,13 +56,14 @@ struct MediaTelevisionMergeView: View {
             HStack {
                 Text(L10n.text("已选择 {0} 个条目", [String(selected.count)])).font(.caption).foregroundStyle(palette.muted)
                 Spacer()
-                Button(L10n.text("取消")) { dismiss() }.disabled(busy)
-                Button(L10n.text("合并剧集"), action: merge).buttonStyle(.borderedProminent)
+                Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
+                Button(L10n.text("合并剧集"), action: merge).buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
+                    .keyboardShortcut(.defaultAction)
                     .disabled(busy || selected.count < 2 || !selected.contains(targetID))
             }
         }.padding(24).frame(width: 680, height: 570)
             .foregroundStyle(palette.foreground).tint(palette.accent)
-            .background { AppThemeBackdropLayer(palette: palette) }
+            .themedPresentation()
             .task {
                 do {
                     records = try await state.televisionRepresentatives(libraryID: libraryID)

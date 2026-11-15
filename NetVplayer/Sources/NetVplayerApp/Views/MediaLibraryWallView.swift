@@ -1,6 +1,5 @@
 import SwiftUI
 import Models
-import Storage
 import MediaLibraryEngine
 
 struct MediaLibraryWallView: View {
@@ -13,6 +12,10 @@ struct MediaLibraryWallView: View {
     @State private var verifying = false
     @State private var addingFolders = false
     @State private var mergingTelevision = false
+    @State private var posterPreheatStart = 0
+    init(state: FileServicesState = .shared, service: FileServiceConfiguration) {
+        self.service = service; self.state = state
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             libraryToolbar
@@ -20,14 +23,12 @@ struct MediaLibraryWallView: View {
             if let id = state.selectedLibraryID, let progress = state.scanProgress[id] {
                 HStack {
                     if progress.isRunning { ProgressView().controlSize(.small).tint(palette.accent) }
-                    Text(progress.isRunning ? "已扫描 \(progress.files) 个视频 · " + progress.currentPath : progress.message ?? "").font(.caption).lineLimit(1)
+                    Text(scanMessage(progress)).font(.caption).lineLimit(2)
                     Spacer()
                     if progress.isRunning { Button("取消") { state.cancelCurrentRefresh() } }
                 }
-                if !progress.failedDirectories.isEmpty {
-                    Text("未完成目录：" + progress.failedDirectories.joined(separator: "、")).font(.caption).foregroundStyle(palette.color(for: .warning)).textSelection(.enabled)
-                }
             }
+            MediaScanRecoveryPanel(state: state)
             if state.verificationURL != nil {
                 HStack { Text("豆瓣需要网页验证；现有资料和播放可继续使用。").font(.caption); Button("完成验证") { verifying = true } }
             }
@@ -49,6 +50,10 @@ struct MediaLibraryWallView: View {
             if let error = state.error { Text(error).font(.caption).foregroundStyle(palette.color(for: .danger)) }
             GeometryReader { geometry in
                 let layout = HomeVisualPolicy.posterGridLayout(availableWidth: max(0, geometry.size.width - AppScrollbarMetrics.gutterWidth))
+                let prefetch = PosterImagePrefetchRequest(
+                    urls: state.mediaRecords.dropFirst(posterPreheatStart).prefix(layout.columnCount * 4).compactMap { $0.metadata.poster },
+                    headers: appState.activeSite?.header, maxPixelSize: layout.itemWidth * 2
+                )
                 ThemedScrollView(onScrollPositionChange: { offset, remaining in
                     // Ignore transient empty-content measurements during the first layout.
                     // Only scrolling into the final 260 points requests another page.
@@ -62,6 +67,7 @@ struct MediaLibraryWallView: View {
                                 }
                                 Spacer(minLength: 0)
                             }
+                            .onAppear { posterPreheatStart = start }
                         }
                         paginationFooter
                         if state.mediaRecords.isEmpty && !state.mediaLoading && state.mediaError == nil {
@@ -84,6 +90,7 @@ struct MediaLibraryWallView: View {
                 }
                 .scrollContentBackground(.hidden).background(Color.clear)
                 .id((state.selectedLibraryID?.uuidString ?? "") + String(describing: state.mediaFilter))
+                .task(id: prefetch) { await ImageLoader.prefetch(prefetch) }
             }
         }
         .foregroundStyle(palette.foreground).tint(palette.accent)
@@ -99,6 +106,15 @@ struct MediaLibraryWallView: View {
         .onAppear { state.loadMedia() }
         .onChange(of: state.selectedLibraryID) { _, _ in state.loadMedia() }
         .onDisappear { state.cancelMediaLoad() }
+    }
+
+    private func scanMessage(_ progress: MediaScanProgress) -> String {
+        if progress.isRunning { return L10n.text("已扫描 {0} 个视频 · {1}", [String(progress.files), progress.currentPath]) }
+        if progress.isCancelled { return L10n.text("扫描已取消，旧索引已保留") }
+        if let error = progress.recoveryError {
+            return UserFacingErrorPresenter.message(for: error, context: .storage(operation: L10n.text("扫描媒体库")))
+        }
+        return progress.message ?? ""
     }
 
     private var libraryToolbar: some View {
@@ -186,6 +202,7 @@ struct MediaLibraryWallView: View {
                 .buttonStyle(.bordered)
             if let library = state.selectedLibrary {
                 Menu {
+                    Button(L10n.text("重新扫描媒体库")) { state.requestMediaScan(.rescan) }.disabled(state.isRefreshing)
                     Button(L10n.text("编辑媒体库")) { draft = library }
                     Menu(L10n.text("影片资料来源")) {
                         ForEach(MetadataSource.allCases, id: \.self) { source in

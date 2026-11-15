@@ -59,7 +59,7 @@ struct MediaLibraryEditor: View {
                     do { try await FileServicesState.shared.saveLibrary(library); dismiss() }
                     catch { self.error = error.localizedDescription }
                 }
-            }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(busy)
+            }.buttonStyle(ThemedDialogButtonStyle(isPrimary: true)).keyboardShortcut(.defaultAction).disabled(busy)
         }
         .sheet(isPresented: $selectingFolder) { ServiceDirectoryPicker(serviceID: library.serviceID, selection: $library.path) }
     }
@@ -108,7 +108,7 @@ struct ServiceDirectoryPicker: View {
             Button(L10n.text("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
             Spacer()
             Button(L10n.text("选择此文件夹")) { selection = path; dismiss() }
-                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(busy || error != nil)
+                .buttonStyle(ThemedDialogButtonStyle(isPrimary: true)).keyboardShortcut(.defaultAction).disabled(busy || error != nil)
         }
         .task(id: path) { await load() }
     }

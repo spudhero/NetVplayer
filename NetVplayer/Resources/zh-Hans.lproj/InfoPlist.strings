@@ -1,1 +1,3 @@
 "NSLocalNetworkUsageDescription" = "NetVplayer 需要访问局域网中的 NAS 和媒体服务器，以浏览和播放影片与音乐。";
+
+"NSMotionUsageDescription" = "仅当您启用头部追踪时，NetVplayer 才使用耳机运动数据，使空间音频与屏幕保持相对定位。";

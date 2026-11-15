@@ -12,7 +12,16 @@ public enum DriveEngineError: Error, LocalizedError, Sendable {
     case noPlayableFile(String)
     case noDownloadURL(String)
     case officialPlayURLPending(String)
+    case transferConfirmationPending(DriveTransferPhase = .outcomeUnknown)
     case api(provider: DriveProvider, statusCode: Int, code: Int?, message: String)
+
+    public var transferPhase: DriveTransferPhase? {
+        switch self {
+        case .transferConfirmationPending(let phase): return phase
+        case .officialPlayURLPending: return .playbackAddressPending
+        default: return nil
+        }
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -28,6 +37,8 @@ public enum DriveEngineError: Error, LocalizedError, Sendable {
             return L10n.text("网盘没有返回完整播放地址: {0}。可能是 Cookie 过期、账号无权限，或该文件只能转存后播放。", ["\(fileName)"])
         case .officialPlayURLPending(let fileName):
             return L10n.text("已转存成功，但夸克只返回下载 CDN，正在等待官方播放地址: {0}。请稍后重试，或先在夸克网盘 App 中打开一次该文件后再试。", ["\(fileName)"])
+        case .transferConfirmationPending:
+            return L10n.text("转存结果仍待确认。请稍后重试以核对文件，本次不会重复提交转存。")
         case .api(let provider, let statusCode, let code, let message):
             if let code {
                 return L10n.text("{0} 接口错误 HTTP {1} / {2}: {3}", ["\(provider.localizedDisplayName)", "\(statusCode)", "\(code)", "\(message)"])
@@ -37,23 +48,14 @@ public enum DriveEngineError: Error, LocalizedError, Sendable {
     }
 
     public static func invalidatesSavedRecord(_ error: Error, provider: DriveProvider? = nil) -> Bool {
-        guard let driveError = error as? DriveEngineError,
-              case .api(let errorProvider, let statusCode, let code, let message) = driveError,
-              provider == nil || provider == errorProvider else {
-            return false
+        if let failure = error as? DriveServiceFailure {
+            return (provider == nil || provider == failure.provider) && failure.reason == .fileMissing
         }
-        if statusCode == 404 || statusCode == 410 {
-            return true
-        }
-        if let code, [31005, 32003, 32004, 41017].contains(code) {
-            return true
-        }
-        let lower = message.lowercased()
-        return lower.contains("not exist")
-            || lower.contains("not found")
-            || lower.contains("不存在")
-            || lower.contains("文件已删除")
-            || lower.contains("无权限")
+        guard case let DriveEngineError.api(actual, status, code, _) = error,
+              provider == nil || provider == actual, status != 403 else { return false }
+        // Legacy errors lack endpoint evidence. Only the established personal
+        // file business code is sufficient; HTTP 404/410 and text are not.
+        return (actual == .quark || actual == .uc) && code == 32003
     }
 }
 
@@ -285,7 +287,7 @@ public final class QuarkDriveClient: @unchecked Sendable {
     private static let maxPagesPerDirectory = 8
     private static let maxTaskPolls = 20
 
-    private let httpClient: HTTPClient
+    private let httpClient: DriveHTTPClient
     private let pendingPlayPolls: Int
     private let pendingPlayIntervalMilliseconds: Int
 
@@ -294,7 +296,7 @@ public final class QuarkDriveClient: @unchecked Sendable {
         pendingPlayPolls: Int = 15,
         pendingPlayIntervalMilliseconds: Int = 2_000
     ) {
-        self.httpClient = httpClient
+        self.httpClient = DriveHTTPClient(httpClient, provider: .quark)
         self.pendingPlayPolls = max(1, pendingPlayPolls)
         self.pendingPlayIntervalMilliseconds = max(0, pendingPlayIntervalMilliseconds)
     }
@@ -472,6 +474,9 @@ public final class QuarkDriveClient: @unchecked Sendable {
     }
 
     public func fetchSavedDownloadURLResult(for playable: QuarkPlayableFile, share: QuarkShareRequest, cookie: String) async throws -> QuarkDownloadResult {
+        if DriveRequestRecovery.budget == nil {
+            return try await DriveRequestRecovery.withBudget { try await self.fetchSavedDownloadURLResult(for: playable, share: share, cookie: cookie) }
+        }
         var activeCookie = cookie
         // An explicit video type takes precedence over a disguised audio extension.
         let preferAudioOriginal = !playable.file.isPlayableVideo && DriveMediaClassifier.isPlayableAudio(
@@ -480,98 +485,97 @@ public final class QuarkDriveClient: @unchecked Sendable {
             isDirectory: playable.file.isDirectory,
             isFile: playable.file.isFile
         )
-        let identity = DriveSavedFileNaming.identity(provider: .quark, pwdID: share.pwdID, file: playable.file)
-        let folder = try await ensureTransferFolder(for: share, cookie: activeCookie)
+        let baseIdentity = DriveSavedFileNaming.identity(provider: .quark, pwdID: share.pwdID, file: playable.file)
+        let account = DriveTransferContext.account(provider: .quark, cookie: cookie)
+        try await DriveTransferCoordinator.current.checkRecovery(sourceKey: baseIdentity.cacheKey, account: account)
+        let cached = try await DriveSavedFileStore.shared.verificationRecord(for: baseIdentity, account: account,
+            allowUnscopedCandidate: true)
+        let legacy = try DriveMappingVerification.legacyCandidate(cached, for: baseIdentity,
+            shareID: share.pwdID, sourceID: playable.file.fid, size: playable.file.size)
+        let folder = try await DriveMappingVerification.target(record: cached, provider: .quark, legacy: legacy) {
+            try await ensureTransferFolder(for: share, cookie: cookie)
+        }
         activeCookie = folder.updatedCookie
+        let identity = baseIdentity.scoped(account: account, target: folder.fid)
 
-        if let cached = await DriveSavedFileStore.shared.record(for: identity) {
-            let matchesTargetFolder = (cached.provider ?? .quark) == .quark
-                && cached.parentFID == folder.fid
-            if !matchesTargetFolder {
-                try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
-                DiagnosticLog.write("[QUARK_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(cached.savedFID) reason=transfer-folder-mismatch")
-            } else {
-                do {
-                    return try await personalPlayResultWaitingIfNeeded(for: cached, cookie: activeCookie, preferAudioOriginal: preferAudioOriginal)
-                } catch {
-                    if Self.shouldInvalidateSavedRecord(error) {
-                        try? await DriveSavedFileStore.shared.invalidate(cached)
-                        DiagnosticLog.write("[QUARK_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(cached.savedFID) reason=\(error.localizedDescription)")
-                    } else if Self.shouldWaitForPersonalPlayback(error) {
-                        throw DriveEngineError.officialPlayURLPending(cached.originalName)
-                    } else {
-                        throw error
+        if let cached {
+            var verifiedRecord = cached
+            do {
+                guard (cached.targetRootFID ?? cached.parentFID) == folder.fid else {
+                    try await DriveMappingVerification.invalidate(cached, provider: .quark, legacy: legacy)
+                }
+                // A returned transfer container is allowed only while it still
+                // belongs to the configured target. Never search its siblings.
+                if cached.parentFID != folder.fid {
+                    let parents = try await listPersonalFiles(parentFID: folder.fid, cookie: activeCookie)
+                    activeCookie = parents.updatedCookie
+                    guard parents.files.contains(where: { $0.fid == cached.parentFID && $0.isDirectory }) else {
+                        if parents.complete { try await DriveMappingVerification.invalidate(cached, provider: .quark, legacy: legacy) }
+                        throw DriveMappingVerification.unconfirmed(.quark)
                     }
                 }
+                let listed = try await listPersonalFiles(parentFID: cached.parentFID, cookie: activeCookie)
+                activeCookie = listed.updatedCookie
+                let matches = listed.files.filter { $0.fid == cached.savedFID }
+                guard matches.count <= 1 else { throw DriveMappingVerification.unconfirmed(.quark) }
+                verifiedRecord = try await DriveMappingVerification.verified(cached, identity: identity, legacy: legacy,
+                    file: matches.first.map { .init(id: $0.fid,
+                        parent: $0.pdirFID.isEmpty ? cached.parentFID : $0.pdirFID,
+                        size: $0.size, isDirectory: $0.isDirectory) }, listingComplete: listed.complete)
+                return try await personalPlayResultWaitingIfNeeded(for: verifiedRecord, cookie: activeCookie, preferAudioOriginal: preferAudioOriginal)
+            } catch {
+                try await DriveMappingVerification.handle(error, record: verifiedRecord, provider: .quark, legacy: legacy)
+                if Self.shouldWaitForPersonalPlayback(error) { throw DriveEngineError.officialPlayURLPending(cached.originalName) }
+                throw error
             }
         }
 
         let transferStartCookie = activeCookie
-        let transferResult = try await DriveTransferCoordinator.shared.transfer(cacheKey: identity.cacheKey) {
+        let transferResult = try await DriveTransferCoordinator.current.confirmedTransfer(cacheKey: identity.cacheKey,
+            scope: .make(identity: identity, account: account, target: folder.fid,
+                         shareID: share.pwdID, sourceFileID: playable.file.fid,
+                         name: playable.file.name, size: playable.file.size, collectionName: share.collectionName)) { attempt in
             var transferCookie = transferStartCookie
             let rejectedFIDs = await DriveSavedFileStore.shared.rejectedFileIDs(cacheKey: identity.cacheKey)
-            let existing = try await self.findPersonalFileRecursively(
-                fileName: identity.targetFileName,
-                size: playable.file.size,
-                rootFID: folder.fid,
-                cookie: transferCookie,
-                excludingFIDs: rejectedFIDs
-            )
-            transferCookie = existing.updatedCookie
-            if let file = existing.file {
-                let record = DriveSavedFileRecord(
-                    provider: .quark,
-                    cacheKey: identity.cacheKey,
-                    pwdID: share.pwdID,
-                    shareFID: playable.file.fid,
-                    fidToken: playable.file.shareFIDToken,
-                    size: playable.file.size,
-                    originalName: playable.file.name,
-                    savedFID: file.fid,
-                    savedFileName: file.name,
-                    parentFID: file.pdirFID.isEmpty ? folder.fid : file.pdirFID
-                )
-                try await DriveSavedFileStore.shared.save(record)
-                DiagnosticLog.write("[QUARK_SAVED_CACHE] reused hash-file cacheKey=\(identity.cacheKey) fid=\(file.fid) file=\(file.name)")
-                return DriveSavedFileTransferResult(record: record, updatedCookie: transferCookie)
+            // Names (including the historical hash suffix) are not file identity.
+            let before = await attempt.needsSubmission
+                ? try await self.listPersonalFiles(parentFID: folder.fid, cookie: transferCookie) : nil
+            if let before { transferCookie = before.updatedCookie }
+            if await attempt.needsSubmission {
+                let submitCookie = transferCookie
+                let submitted = try await attempt.submit(previousIDs: Set(before?.files.map(\.fid) ?? [])) {
+                    let save = try await self.saveShareFileToPersonalDrive(
+                        playable: playable, share: share, targetPdirFID: folder.fid, cookie: submitCookie)
+                    return DriveTransferSubmission(fileID: save.savedFID, taskID: save.taskID, updatedCookie: save.updatedCookie)
+                }
+                if let submitted, !submitted.updatedCookie.isEmpty { transferCookie = submitted.updatedCookie }
             }
-
-            let save = try await self.saveShareFileToPersonalDrive(
-                playable: playable,
-                share: share,
-                targetPdirFID: folder.fid,
-                cookie: transferCookie
-            )
-            transferCookie = save.updatedCookie
-
-            var savedFID = save.savedFID
-            if let taskID = save.taskID {
-                let task = try await self.waitForSaveTask(
-                    taskID: taskID,
-                    originalFID: playable.file.fid,
-                    fileName: playable.file.name,
-                    intervalMilliseconds: save.intervalMilliseconds,
-                    cookie: transferCookie
-                )
-                transferCookie = task.updatedCookie
-                savedFID = task.savedFID ?? savedFID
+            if let taskID = await attempt.taskID, await attempt.fileID == nil {
+                do {
+                    let task = try await self.waitForSaveTask(taskID: taskID, originalFID: playable.file.fid,
+                        fileName: playable.file.name, intervalMilliseconds: 500, cookie: transferCookie)
+                    transferCookie = task.updatedCookie
+                    try await attempt.update(fileID: task.savedFID)
+                } catch is CancellationError { throw CancellationError() } catch {
+                    // A task read failure says nothing about whether the write ran.
+                }
             }
-
-            let resolved = try await self.waitForResolvedSavedPersonalFile(
-                candidateFID: savedFID?.isEmpty == false ? savedFID : nil,
-                originalFileName: playable.file.name,
-                size: playable.file.size,
-                appFolderFID: folder.fid,
-                cookie: transferCookie,
-                excludingFIDs: rejectedFIDs
-            )
+            let resolved = try await self.confirmTransferredFile(
+                attempt: attempt, originalFileName: playable.file.name, size: playable.file.size,
+                folderFID: folder.fid, cookie: transferCookie, excludingFIDs: rejectedFIDs)
             transferCookie = resolved.updatedCookie
-            guard let savedFile = resolved.file else {
-                throw DriveEngineError.noDownloadURL(playable.file.name)
-            }
-
-            let rename = try await self.renamePersonalFile(fid: savedFile.fid, fileName: identity.targetFileName, cookie: transferCookie)
-            transferCookie = rename.updatedCookie
+            guard let savedFile = resolved.file else { throw DriveEngineError.transferConfirmationPending() }
+            try await attempt.confirmed(savedFile.fid, parent: savedFile.pdirFID.isEmpty ? folder.fid : savedFile.pdirFID)
+            try await DriveTransferContext.current.check()
+            // Retain the confirmed ID before optional renaming. A rename failure
+            // must never cause another copy on the next click.
+            var savedName = savedFile.name
+            do {
+                let renamed = try await self.renamePersonalFile(fid: savedFile.fid, fileName: identity.targetFileName, cookie: transferCookie)
+                transferCookie = renamed.updatedCookie
+                savedName = identity.targetFileName
+            } catch is CancellationError { throw CancellationError() } catch { }
+            try await DriveTransferContext.current.check()
             let record = DriveSavedFileRecord(
                 provider: .quark,
                 cacheKey: identity.cacheKey,
@@ -581,8 +585,9 @@ public final class QuarkDriveClient: @unchecked Sendable {
                 size: playable.file.size,
                 originalName: playable.file.name,
                 savedFID: savedFile.fid,
-                savedFileName: identity.targetFileName,
-                parentFID: savedFile.pdirFID.isEmpty ? folder.fid : savedFile.pdirFID
+                savedFileName: savedName,
+                parentFID: savedFile.pdirFID.isEmpty ? folder.fid : savedFile.pdirFID,
+                targetRootFID: folder.fid
             )
             try await DriveSavedFileStore.shared.save(record)
             DiagnosticLog.write("[QUARK_SAVED_CACHE] saved cacheKey=\(identity.cacheKey) fid=\(savedFile.fid) file=\(identity.targetFileName)")
@@ -594,10 +599,7 @@ public final class QuarkDriveClient: @unchecked Sendable {
         do {
             return try await personalPlayResultWaitingIfNeeded(for: savedFile, cookie: activeCookie, preferAudioOriginal: preferAudioOriginal)
         } catch {
-            if Self.shouldInvalidateSavedRecord(error) {
-                try? await DriveSavedFileStore.shared.invalidate(savedFile)
-                DiagnosticLog.write("[QUARK_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(savedFile.savedFID) reason=\(error.localizedDescription)")
-            }
+            try await DriveMappingVerification.handle(error, record: savedFile, provider: .quark)
             if Self.shouldWaitForPersonalPlayback(error) {
                 DiagnosticLog.write("[QUARK_LINK_SELECT] type=rejected-pds-download context=personal-play-error file=\(playable.file.name), reason=\(error.localizedDescription)")
                 throw DriveEngineError.officialPlayURLPending(playable.file.name)
@@ -649,7 +651,6 @@ private extension QuarkDriveClient {
         let pdirFID: String
         let size: Int64
         let fileType: Int
-        let category: Int
         let formatType: String
         let isDirectory: Bool
         let isFile: Bool
@@ -672,7 +673,6 @@ private extension QuarkDriveClient {
     struct SaveStartResult: Sendable {
         let taskID: String?
         let savedFID: String?
-        let intervalMilliseconds: Int
         let updatedCookie: String
     }
 
@@ -736,6 +736,9 @@ private extension QuarkDriveClient {
             return AppFolderResult(fid: existing.fid, updatedCookie: root.updatedCookie)
         }
 
+        guard root.complete else { throw DriveMappingVerification.unconfirmed(.quark) }
+        if DriveMappingVerification.readOnly { throw DriveMappingVerification.changed(.quark) }
+
         let result = try await postJSONResult(
             url: Self.apiURL(base: Self.pcAPIBase, path: "/1/clouddrive/file"),
             headers: accountHeaders(cookie: root.updatedCookie),
@@ -780,6 +783,9 @@ private extension QuarkDriveClient {
         if let existing = listed.files.first(where: { $0.isDirectory && $0.name == name }) {
             return AppFolderResult(fid: existing.fid, updatedCookie: listed.updatedCookie)
         }
+
+        guard listed.complete else { throw DriveMappingVerification.unconfirmed(.quark) }
+        if DriveMappingVerification.readOnly { throw DriveMappingVerification.changed(.quark) }
 
         let result = try await postJSONResult(
             url: Self.apiURL(base: Self.pcAPIBase, path: "/1/clouddrive/file"),
@@ -828,14 +834,13 @@ private extension QuarkDriveClient {
         let result = try await postJSONResult(
             url: Self.apiURL(base: Self.shareAPIBase, path: "/1/clouddrive/share/sharepage/save"),
             headers: requestHeaders(share: share, cookie: cookie, stoken: playable.stoken),
-            body: body
+            body: body,
+            allowsProxyFallback: false
         )
         let data = result.json["data"] as? [String: Any] ?? result.json
-        let metadata = result.json["metadata"] as? [String: Any]
         return SaveStartResult(
             taskID: Self.firstString(in: data, keys: ["task_id", "taskId"]),
             savedFID: Self.savedFID(in: data, excluding: file.fid, matching: file.name),
-            intervalMilliseconds: max(300, Self.intValue(metadata?["tq_gap"]) ?? Self.intValue(metadata?["task_gap"]) ?? 500),
             updatedCookie: result.updatedCookie
         )
     }
@@ -850,7 +855,9 @@ private extension QuarkDriveClient {
         var activeCookie = cookie
         var lastJSON: [String: Any] = [:]
 
-        for _ in 0..<Self.maxTaskPolls {
+        for _ in 0..<min(6, Self.maxTaskPolls) {
+            try await DriveTransferContext.current.check()
+            _ = try DriveTransferContext.readTimeout(30)
             let result = try await getJSONResult(
                 url: Self.apiURL(base: Self.pcAPIBase, path: "/1/clouddrive/task", queryItems: [
                     URLQueryItem(name: "task_id", value: taskID)
@@ -875,138 +882,40 @@ private extension QuarkDriveClient {
         throw DriveEngineError.api(provider: .quark, statusCode: 200, code: nil, message: message)
     }
 
-    func findPersonalFileRecursively(
-        fileName: String, size: Int64?, rootFID: String, cookie: String,
-        excludingFIDs: Set<String>
+    private func confirmTransferredFile(
+        attempt: DriveTransferAttempt, originalFileName: String, size: Int64,
+        folderFID: String, cookie: String, excludingFIDs: Set<String>
     ) async throws -> PersonalFileLookupResult {
         var activeCookie = cookie
-        var queue = [rootFID]
-        var visited = Set<String>()
-
-        while !queue.isEmpty && visited.count < Self.maxDirectories {
-            let parentFID = queue.removeFirst()
-            guard visited.insert(parentFID).inserted else { continue }
-
-            let listed = try await listPersonalFiles(parentFID: parentFID, cookie: activeCookie)
+        let previous = await attempt.previousIDs
+        let knownID = await attempt.fileID
+        for poll in 0..<min(6, max(1, pendingPlayPolls)) {
+            try await DriveTransferContext.current.check()
+            let listed = try await listPersonalFiles(parentFID: folderFID, cookie: activeCookie)
             activeCookie = listed.updatedCookie
-
-            let candidates = listed.files.filter { $0.isPlayableMediaObject && !excludingFIDs.contains($0.fid) }
-            let exactMatches = candidates.filter { $0.name == fileName }
-            if let size,
-               let exact = exactMatches.first(where: { $0.size == size }) {
-                return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
+            let matches = listed.files.filter {
+                !$0.isDirectory && $0.fileType != 0 && $0.isPlayableMediaObject && !excludingFIDs.contains($0.fid)
+                    && (size <= 0 || $0.size == size)
+                    && ($0.pdirFID.isEmpty || $0.pdirFID == folderFID)
+            }.filter { file in
+                if let knownID { return file.fid == knownID }
+                return listed.complete && size > 0 && file.name == originalFileName && !previous.contains(file.fid)
             }
-            if let exact = exactMatches.first {
-                return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
+            if matches.count == 1 { return PersonalFileLookupResult(file: matches[0], updatedCookie: activeCookie) }
+            // Some services return a container ID. Only descend into that exact,
+            // observed directory; never fall back to its siblings or another name.
+            if let knownID, listed.files.contains(where: { $0.fid == knownID && ($0.isDirectory || $0.fileType == 0) }) {
+                let nested = try await listPersonalFiles(parentFID: knownID, cookie: activeCookie)
+                activeCookie = nested.updatedCookie
+                let children = nested.files.filter {
+                    !$0.isDirectory && $0.isPlayableMediaObject && $0.name == originalFileName
+                        && size > 0 && $0.size == size && !excludingFIDs.contains($0.fid)
+                }
+                if nested.complete && children.count == 1 { return PersonalFileLookupResult(file: children[0], updatedCookie: activeCookie) }
             }
-            if let folded = candidates.first(where: { $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
-                return PersonalFileLookupResult(file: folded, updatedCookie: activeCookie)
-            }
-
-            queue.append(contentsOf: listed.files.filter(\.isDirectory).map(\.fid))
+            if poll + 1 < min(6, max(1, pendingPlayPolls)) { try await sleepForPendingPlayback() }
         }
-
         return PersonalFileLookupResult(file: nil, updatedCookie: activeCookie)
-    }
-
-    func resolveSavedPersonalFile(
-        candidateFID: String, originalFileName: String, size: Int64, appFolderFID: String, cookie: String,
-        excludingFIDs: Set<String>
-    ) async throws -> PersonalFileLookupResult {
-        var activeCookie = cookie
-        let appFolder = try await listPersonalFiles(parentFID: appFolderFID, cookie: activeCookie)
-        activeCookie = appFolder.updatedCookie
-
-        if let candidate = appFolder.files.first(where: { $0.fid == candidateFID }), !excludingFIDs.contains(candidateFID) {
-            DiagnosticLog.write("[QUARK_SAVED_CACHE] save candidate fid=\(candidateFID) name=\(candidate.name) dir=\(candidate.isDirectory) fileType=\(candidate.fileType) category=\(candidate.category) format=\(candidate.formatType) size=\(candidate.size)")
-
-            let nested = try? await findPersonalFileRecursively(
-                fileName: originalFileName,
-                size: size,
-                rootFID: candidate.fid,
-                cookie: activeCookie,
-                excludingFIDs: excludingFIDs
-            )
-            if let nested {
-                activeCookie = nested.updatedCookie
-                if let file = nested.file {
-                    let containerType = candidate.isDirectory ? "folder" : "container"
-                    DiagnosticLog.write("[QUARK_SAVED_CACHE] save task returned \(containerType) fid=\(candidateFID); resolved nested video fid=\(file.fid) file=\(file.name)")
-                    return PersonalFileLookupResult(file: file, updatedCookie: activeCookie)
-                }
-            }
-
-            if candidate.isPlayableMediaObject {
-                return PersonalFileLookupResult(file: candidate, updatedCookie: activeCookie)
-            }
-
-            DiagnosticLog.write("[QUARK_SAVED_CACHE] save task returned non-video fid=\(candidateFID); resolving under app folder file=\(originalFileName)")
-        } else if !excludingFIDs.contains(candidateFID) {
-            let nested = try? await findPersonalFileRecursively(
-                fileName: originalFileName,
-                size: size,
-                rootFID: candidateFID,
-                cookie: activeCookie,
-                excludingFIDs: excludingFIDs
-            )
-            if let nested {
-                activeCookie = nested.updatedCookie
-                if let file = nested.file {
-                    DiagnosticLog.write("[QUARK_SAVED_CACHE] save task returned external container fid=\(candidateFID); resolved nested video fid=\(file.fid) file=\(file.name)")
-                    return PersonalFileLookupResult(file: file, updatedCookie: activeCookie)
-                }
-            }
-        }
-
-        let fallback = try await findPersonalFileRecursively(
-            fileName: originalFileName,
-            size: size,
-            rootFID: appFolderFID,
-            cookie: activeCookie,
-            excludingFIDs: excludingFIDs
-        )
-        return fallback
-    }
-
-    func waitForResolvedSavedPersonalFile(
-        candidateFID: String?, originalFileName: String, size: Int64, appFolderFID: String, cookie: String,
-        excludingFIDs: Set<String>
-    ) async throws -> PersonalFileLookupResult {
-        var activeCookie = cookie
-        var latest = PersonalFileLookupResult(file: nil, updatedCookie: activeCookie)
-
-        for attempt in 0..<pendingPlayPolls {
-            if let candidateFID, !candidateFID.isEmpty {
-                latest = try await resolveSavedPersonalFile(
-                    candidateFID: candidateFID,
-                    originalFileName: originalFileName,
-                    size: size,
-                    appFolderFID: appFolderFID,
-                    cookie: activeCookie,
-                    excludingFIDs: excludingFIDs
-                )
-            } else {
-                latest = try await findPersonalFileRecursively(
-                    fileName: originalFileName,
-                    size: size,
-                    rootFID: appFolderFID,
-                    cookie: activeCookie,
-                    excludingFIDs: excludingFIDs
-                )
-            }
-
-            activeCookie = latest.updatedCookie
-            if latest.file != nil {
-                return latest
-            }
-
-            DiagnosticLog.write("[QUARK_SAVE_PENDING] file=\(originalFileName) attempt=\(attempt + 1)/\(pendingPlayPolls)")
-            if attempt < pendingPlayPolls - 1 {
-                try await sleepForPendingPlayback()
-            }
-        }
-
-        return latest
     }
 
     func personalPlayResult(for record: DriveSavedFileRecord, cookie: String, preferAudioOriginal: Bool) async throws -> QuarkDownloadResult {
@@ -1137,24 +1046,60 @@ private extension QuarkDriveClient {
         return Self.playResult(in: data, updatedCookie: result.updatedCookie)
     }
 
-    func listPersonalFiles(parentFID: String, cookie: String) async throws -> (files: [PersonalFile], updatedCookie: String) {
-        let result = try await getJSONResult(
-            url: Self.apiURL(base: Self.pcAPIBase, path: "/1/clouddrive/file/sort", queryItems: [
-                URLQueryItem(name: "pdir_fid", value: parentFID),
-                URLQueryItem(name: "_page", value: "1"),
-                URLQueryItem(name: "_size", value: "100"),
-                URLQueryItem(name: "_fetch_total", value: "1"),
-                URLQueryItem(name: "fetch_all_file", value: "1"),
-                URLQueryItem(name: "fetch_risk_file_name", value: "1"),
-                URLQueryItem(name: "_sort", value: "file_type:asc,file_name:asc")
-            ]),
-            headers: accountHeaders(cookie: cookie)
-        )
-        let data = result.json["data"] as? [String: Any]
-        let rawList = data?["list"] as? [[String: Any]]
-            ?? data?["file_list"] as? [[String: Any]]
-            ?? []
-        return (rawList.compactMap(Self.parsePersonalFile), result.updatedCookie)
+    func listPersonalFiles(parentFID: String, cookie: String) async throws -> (files: [PersonalFile], updatedCookie: String, complete: Bool) {
+        let pageSize = 100
+        let maximumPages = 32
+        var files: [PersonalFile] = []
+        var seenIDs = Set<String>()
+        var activeCookie = cookie
+        var expectedTotal: Int?
+        // Directory absence is evidence only after every page has been read.
+        // Repeated pages, changing totals and bounded scans remain inconclusive.
+        for page in 1...maximumPages {
+            let result = try await getJSONResult(
+                url: Self.apiURL(base: Self.pcAPIBase, path: "/1/clouddrive/file/sort", queryItems: [
+                    URLQueryItem(name: "pdir_fid", value: parentFID),
+                    URLQueryItem(name: "_page", value: String(page)),
+                    URLQueryItem(name: "_size", value: String(pageSize)),
+                    URLQueryItem(name: "_fetch_total", value: "1"),
+                    URLQueryItem(name: "fetch_all_file", value: "1"),
+                    URLQueryItem(name: "fetch_risk_file_name", value: "1"),
+                    URLQueryItem(name: "_sort", value: "file_type:asc,file_name:asc")
+                ]),
+                headers: accountHeaders(cookie: activeCookie)
+            )
+            activeCookie = result.updatedCookie
+            let data = result.json["data"] as? [String: Any]
+            guard let rawList = data?["list"] as? [[String: Any]]
+                ?? data?["file_list"] as? [[String: Any]] else { throw DriveMappingVerification.unconfirmed(.quark) }
+            let pageFiles = rawList.compactMap(Self.parsePersonalFile)
+            let metadata = result.json["metadata"] as? [String: Any]
+            let total = Self.intValue(metadata?["_total"]) ?? Self.intValue(data?["total"])
+            guard rawList.count <= pageSize, pageFiles.count == rawList.count,
+                  pageFiles.allSatisfy({ !$0.fid.isEmpty && !$0.name.isEmpty }),
+                  Set(pageFiles.map(\.fid)).count == pageFiles.count,
+                  pageFiles.allSatisfy({ !seenIDs.contains($0.fid) }),
+                  total.map({ $0 >= files.count + pageFiles.count }) ?? true,
+                  expectedTotal == nil || total == nil || total == expectedTotal else {
+                return (files, activeCookie, false)
+            }
+            files.append(contentsOf: pageFiles)
+            seenIDs.formUnion(pageFiles.map(\.fid))
+            expectedTotal = total ?? expectedTotal
+            // Keep an observed exact ID for the existing moved-file policy,
+            // but unrelated parents cannot prove this directory is complete.
+            guard pageFiles.allSatisfy({ $0.pdirFID.isEmpty || $0.pdirFID == parentFID }) else {
+                return (files, activeCookie, false)
+            }
+            let hasMore = Self.boolValue(data?["has_more"]) ?? false
+            if expectedTotal == files.count {
+                return (files, activeCookie, !hasMore)
+            }
+            if rawList.count < pageSize {
+                return (files, activeCookie, expectedTotal == nil && !hasMore)
+            }
+        }
+        return (files, activeCookie, false)
     }
 
     static func parseShareFile(_ raw: [String: Any]) -> QuarkShareFile? {
@@ -1192,7 +1137,6 @@ private extension QuarkDriveClient {
             pdirFID: stringValue(raw["pdir_fid"]) ?? stringValue(raw["parent_fid"]) ?? "",
             size: int64Value(raw["size"]) ?? 0,
             fileType: fileType,
-            category: category,
             formatType: stringValue(raw["format_type"]) ?? "",
             isDirectory: isDirectory,
             isFile: isFile
@@ -1238,9 +1182,9 @@ private extension QuarkDriveClient {
         try await postJSONResult(url: url, headers: headers, body: body).json
     }
 
-    func postJSONResult(url: String, headers: [String: String], body: [String: Any]) async throws -> JSONRequestResult {
+    func postJSONResult(url: String, headers: [String: String], body: [String: Any], allowsProxyFallback: Bool = true) async throws -> JSONRequestResult {
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-        let response = try await httpClient.post(url: url, headers: headers, body: bodyData, timeout: 30)
+        let response = try await httpClient.post(url: url, headers: headers, body: bodyData, timeout: 30, allowsProxyFallback: allowsProxyFallback && DriveTransferContext.confirmationDeadline == nil, redactsURLInLogs: true)
         let json = try decodeAPIResponse(response)
         return JSONRequestResult(
             json: json,
@@ -1253,7 +1197,7 @@ private extension QuarkDriveClient {
     }
 
     func getJSONResult(url: String, headers: [String: String]) async throws -> JSONRequestResult {
-        let response = try await httpClient.get(url: url, headers: headers, timeout: 30)
+        let response = try await httpClient.get(url: url, headers: headers, timeout: try DriveTransferContext.readTimeout(30), allowsProxyFallback: DriveTransferContext.confirmationDeadline == nil, redactsURLInLogs: true)
         let json = try decodeAPIResponse(response)
         return JSONRequestResult(
             json: json,
@@ -1512,6 +1456,8 @@ private extension QuarkDriveClient {
             return true
         case .api:
             return shouldFallbackFromPersonalPlayToDownload(error)
+        case .transferConfirmationPending:
+            return false
         case .invalidShareURL, .unsupported, .loginRequired, .noPlayableFile:
             return false
         }
@@ -1648,5 +1594,74 @@ private extension QuarkDriveClient {
             }
         }
         return nil
+    }
+}
+
+extension QuarkDriveClient {
+    func recoverTransfer(_ record: DriveTransferTask, attempt: DriveTransferAttempt, cookie: String) async throws -> DriveRecoveredFile? {
+        let scope = record.scope
+        let target = try await ensureTransferFolder(for: .init(originalURL: "", pwdID: scope.shareID,
+            collectionName: scope.collectionName), cookie: cookie)
+        guard target.fid == scope.target else { throw DriveTaskRecoveryError.scopeChanged }
+        if !record.submitted || record.phase == .failed { return nil }
+        var activeCookie = target.updatedCookie
+        if let taskID = await attempt.taskID, await attempt.fileID == nil {
+            let result = try await waitForSaveTask(taskID: taskID, originalFID: scope.sourceFileID,
+                fileName: scope.name, intervalMilliseconds: 500, cookie: activeCookie)
+            activeCookie = result.updatedCookie
+            try await attempt.update(fileID: result.savedFID)
+        }
+        let parent = record.confirmedParentID ?? scope.target
+        if parent != scope.target {
+            let parents = try await listPersonalFiles(parentFID: scope.target, cookie: activeCookie)
+            guard parents.files.contains(where: { $0.fid == parent && $0.isDirectory }) else {
+                throw DriveTaskRecoveryError.requiresReview
+            }
+        }
+        guard let file = try await confirmTransferredFile(attempt: attempt, originalFileName: scope.name,
+            size: scope.size, folderFID: parent, cookie: activeCookie, excludingFIDs: []).file else {
+            throw DriveTaskRecoveryError.requiresReview
+        }
+        return .init(id: file.fid, name: file.name, parent: file.pdirFID.isEmpty ? parent : file.pdirFID, size: file.size)
+    }
+}
+
+
+// Personal-directory browsing never invokes the share-save or cleanup paths.
+extension QuarkDriveClient {
+    func personalDirectory(folderID: String, cursor: String?, credential: CloudCredential) async throws -> CloudDirectoryPage {
+        let page = try CloudDirectoryPaging.integer(cursor, first: 1, provider: .quark)
+        let result = try await getJSONResult(
+            url: Self.apiURL(base: Self.pcAPIBase, path: "/1/clouddrive/file/sort", queryItems: [
+                URLQueryItem(name: "pdir_fid", value: folderID),
+                URLQueryItem(name: "_page", value: String(page)),
+                URLQueryItem(name: "_size", value: "100"),
+                URLQueryItem(name: "_fetch_total", value: "1"),
+                URLQueryItem(name: "fetch_all_file", value: "1"),
+                URLQueryItem(name: "fetch_risk_file_name", value: "1"),
+                URLQueryItem(name: "_sort", value: "file_type:asc,file_name:asc")
+            ]), headers: accountHeaders(cookie: credential.secret))
+        guard let data = result.json["data"] as? [String: Any],
+              let raw = (data["list"] as? [[String: Any]]) ?? (data["file_list"] as? [[String: Any]]) else {
+            throw DriveMappingVerification.unconfirmed(.quark)
+        }
+        let files = raw.compactMap(Self.parsePersonalFile)
+        guard files.count == raw.count else { throw DriveMappingVerification.unconfirmed(.quark) }
+        let metadata = result.json["metadata"] as? [String: Any]
+        let total = Self.intValue(metadata?["_total"]) ?? Self.intValue(data["total"])
+        let more = try CloudDirectoryPaging.hasNext(count: files.count, offset: (page - 1) * 100, limit: 100,
+            total: total, hasMore: Self.boolValue(data["has_more"]) ?? false, provider: .quark)
+        return CloudDirectoryPage(entries: files.map {
+            .init(id: $0.fid, name: $0.name, parentID: folderID, size: $0.size, isDirectory: $0.isDirectory)
+        }, nextCursor: more ? String(page + 1) : nil,
+           updatedCredential: CloudDirectoryPaging.updatedCookie(result.updatedCookie, credential: credential))
+    }
+
+    func personalDirectoryDownload(entry: CloudDirectoryEntry, credential: CloudCredential) async throws -> CloudDriveLink {
+        let result = try await fetchPersonalDownloadURLResult(fid: entry.id, fileName: entry.name, cookie: credential.secret)
+        guard let url = result.url, !url.isEmpty else { throw DriveEngineError.noDownloadURL(entry.name) }
+        let updated = CloudDirectoryPaging.updatedCookie(result.updatedCookie, credential: credential)
+        return CloudDriveLink(url: url, headers: ["Referer": "https://pan.quark.cn", "Origin": "https://pan.quark.cn", "Cookie": updated.secret],
+            metadata: CloudDirectoryPaging.metadata(entry, provider: .quark), updatedCredential: updated)
     }
 }

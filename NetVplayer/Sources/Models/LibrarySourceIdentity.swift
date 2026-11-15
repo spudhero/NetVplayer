@@ -3,9 +3,13 @@ import CryptoKit
 
 /// Only the digest is persisted; configuration URLs and provider credentials are not identity fields on disk.
 public enum LibrarySourceIdentity {
-    public static func fingerprint(configurationURL: String, site: Site) -> String {
+    public static func fingerprint(configurationURL: String, site: Site,
+                                   executionPreference: ProviderExecutionPreference = .automatic) -> String {
         guard !configurationURL.isEmpty else { return "" }
-        let material = [configurationURL, site.key, String(site.type), site.api, canonicalJSON(site.ext)]
+        var material = [configurationURL, site.key, String(site.type), site.api, canonicalJSON(site.ext)]
+        if site.isSpider && executionPreference != .automatic {
+            material += ["provider-execution:v1", executionPreference.rawValue]
+        }
         let bytes = (try? JSONEncoder().encode(material)) ?? Data()
         return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }

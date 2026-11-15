@@ -5,17 +5,57 @@ import Storage
 public protocol MetadataProvider: Sendable {
     var source: MetadataSource { get }
     func search(title: String, year: Int?, kind: MediaLibraryKind) async throws -> [MetadataCandidate]
+    func searchResult(title: String, year: Int?, kind: MediaLibraryKind) async throws -> MetadataSearchResult
     func details(id: String, kind: MediaLibraryKind) async throws -> MediaMetadata
 }
 
+/// Suggestions can survive incomplete alias coverage, but must not be cached or
+/// used to establish a unique match when part of that coverage failed.
+public struct MetadataSearchResult: Sendable {
+    public var candidates: [MetadataCandidate]
+    public var issue: (any Error)?
+    public init(candidates: [MetadataCandidate], issue: (any Error)? = nil) {
+        self.candidates = candidates; self.issue = issue
+    }
+}
+
+extension MetadataProvider {
+    public func searchResult(title: String, year: Int?, kind: MediaLibraryKind) async throws -> MetadataSearchResult {
+        .init(candidates: try await search(title: title, year: year, kind: kind))
+    }
+}
+
+public enum MetadataFailureCategory: Sendable {
+    case authentication, verification, rateLimited, service, item
+    public var pausesSource: Bool { self != .item }
+}
+
 public enum MetadataProviderError: Error, LocalizedError, Sendable {
-    case unavailable(String), verification(URL), rateLimited, invalidResponse
+    case unavailable(String), verification(URL), authentication, rateLimited, serviceUnavailable, notFound, rejected(Int), invalidResponse
     public var errorDescription: String? { switch self {
     case .unavailable(let text): text
     case .verification: "豆瓣需要网页验证，完成验证后可继续匹配"
+    case .authentication: L10n.text("信息来源认证失败，请检查凭据或完成登录")
     case .rateLimited: "信息来源暂时限流，已保留现有资料"
+    case .serviceUnavailable: L10n.text("信息来源服务暂时不可用，可稍后重试")
+    case .notFound: L10n.text("信息来源未找到此条资料")
+    case .rejected: L10n.text("信息来源拒绝了此条资料请求")
     case .invalidResponse: "信息来源返回了无法识别的数据"
     } }
+    public static func category(of error: any Error) -> MetadataFailureCategory {
+        if let error = error as? Self {
+            switch error {
+            case .authentication: return .authentication
+            case .verification: return .verification
+            case .rateLimited: return .rateLimited
+            case .unavailable, .serviceUnavailable: return .service
+            case .notFound, .rejected, .invalidResponse: return .item
+            }
+        }
+        if error is URLError { return .service }
+        // Malformed JSON/HTML and per-record provider errors do not disable a source.
+        return .item
+    }
 }
 
 public struct TMDBCredential: Equatable, Sendable {
@@ -84,9 +124,31 @@ struct MetadataTransport: Sendable {
             return (data, response)
         }
     }
-    func data(url: URL, headers: [String: String] = [:]) async throws -> (Data, HTTPURLResponse) {
-        let result = try await request(url, headers)
+    func data(url: URL, headers: [String: String] = [:], timeout: Duration? = nil) async throws -> (Data, HTTPURLResponse) {
+        let result: (Data, HTTPURLResponse)
+        if let timeout {
+            // URLSession and injected transports must cooperate with cancellation;
+            // structured children cannot outlive the request or leak permits.
+            result = try await withThrowingTaskGroup(of: (Data, HTTPURLResponse).self) { group in
+                group.addTask { try await request(url, headers) }
+                group.addTask { try await Task.sleep(for: timeout); throw URLError(.timedOut) }
+                defer { group.cancelAll() }
+                return try await group.next()!
+            }
+        } else { result = try await request(url, headers) }
         if result.1.statusCode == 429 { throw MetadataProviderError.rateLimited }
         return result
+    }
+    /// Call after a provider has checked its host and any genuine verification page.
+    static func checkStatus(_ response: HTTPURLResponse) throws {
+        switch response.statusCode {
+        case 200: return
+        case 401, 403: throw MetadataProviderError.authentication
+        case 404: throw MetadataProviderError.notFound
+        case 429: throw MetadataProviderError.rateLimited
+        case 500...599: throw MetadataProviderError.serviceUnavailable
+        case 400...499: throw MetadataProviderError.rejected(response.statusCode)
+        default: throw MetadataProviderError.invalidResponse
+        }
     }
 }

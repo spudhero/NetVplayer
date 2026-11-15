@@ -2,6 +2,17 @@ import Foundation
 import Models
 @preconcurrency import Sentry
 
+/// SDK availability only. Neither active nor stopped asserts upload/server receipt.
+public struct StartupDiagnosticsSnapshot: Equatable, Sendable {
+    public enum State: String, Sendable { case disabled, unconfigured, active, inactive }
+    public let state: State
+    public let crashedLastRun: Bool
+    public init(state: State, crashedLastRun: Bool) {
+        self.state = state
+        self.crashedLastRun = crashedLastRun
+    }
+}
+
 public final class SentryDiagnostics: @unchecked Sendable {
     public static let shared = SentryDiagnostics()
     private let lock = NSRecursiveLock()
@@ -41,8 +52,24 @@ public final class SentryDiagnostics: @unchecked Sendable {
     }
 
     public func setEnabled(_ enabled: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
         defaults.set(enabled, forKey: DiagnosticReportingConfiguration.preferenceKey)
         if enabled { start() } else { stop() }
+    }
+
+    public var startupSnapshot: StartupDiagnosticsSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        let state: StartupDiagnosticsSnapshot.State
+        if defaults.object(forKey: DiagnosticReportingConfiguration.preferenceKey) as? Bool == false {
+            state = .disabled
+        } else if !isConfigured {
+            state = .unconfigured
+        } else {
+            state = started ? .active : .inactive
+        }
+        return .init(state: state, crashedLastRun: started && SentrySDK.lastRunStatus == .didCrash)
     }
 
     /// Synthetic verification only. An event ID and a completed flush do not prove server receipt.

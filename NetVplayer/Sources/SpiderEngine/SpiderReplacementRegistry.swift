@@ -42,6 +42,40 @@ public actor SpiderReplacementRegistry {
         nativeKeyedProviders[normalizeKeyed(originalKey, originalAPI)] = provider
     }
 
+    /// Returns only an explicitly registered key/API pair, without resolving
+    /// aliases or signed remote bindings from another source identity.
+    func exactNativeProvider(for site: Site) -> (any SiteContentProvider)? {
+        nativeKeyedProviders[normalizeKeyed(site.key, site.api)]
+    }
+
+    func removeDevelopmentAndroidProvider(key: String, api: String, matching provider: DevelopmentAndroidSiteProvider) {
+        let identity = normalizeKeyed(key, api)
+        guard let current = nativeKeyedProviders[identity] as? DevelopmentAndroidSiteProvider,
+              current === provider else { return }
+        nativeKeyedProviders.removeValue(forKey: identity)
+    }
+
+    /// A development adapter may retain a complete installed implementation,
+    /// but a loose API alias or an unverified registration is not sufficient.
+    /// The manager rechecks the active package's signature and every asset.
+    func exactInstalledRemoteProvider(for site: Site) async -> RemoteSiteContentProvider? {
+        let key = normalize(site.key)
+        let api = normalize(site.api)
+        guard !key.isEmpty, !api.isEmpty,
+              let owner = remoteBindingOwners[key], remoteBindingOwners[api] == owner,
+              let provider = remoteProviders[key] as? RemoteSiteContentProvider,
+              provider.providerID == owner, !(await provider.manager.isDisabled()) else { return nil }
+        let documents = await provider.manager.activeManifests()
+        guard let manifest = documents.first(where: { $0.manifest.providerID == owner })?.manifest,
+              [.home, .category, .detail, .player].allSatisfy(manifest.capabilities.contains),
+              manifest.sourceBindings?.contains(where: {
+                  $0.originalKeys.contains(site.key) && $0.originalAPIs.contains(site.api)
+              }) == true else { return nil }
+        // Actor reentrancy must not resurrect an owner removed during verification.
+        guard remoteBindingOwners[key] == owner, remoteBindingOwners[api] == owner else { return nil }
+        return provider
+    }
+
     /// Registers utility providers that are present in both the public shell and
     /// the private legacy build. Their aliases remain shell-owned even when a
     /// signed site package declares the same binding, while a compiled-in native
@@ -112,6 +146,11 @@ public actor SpiderReplacementRegistry {
     }
 
     public func nativeProvider(for site: Site) -> (any SiteContentProvider)? {
+        if site.api.hasPrefix("netvplayer-server://"),
+           let id = UUID(uuidString: String(site.api.dropFirst("netvplayer-server://".count))),
+           let account = MediaServerStore.shared.load().first(where: { $0.id == id }), account.siteKey == site.key {
+            return MediaServerNativeProvider(accountID: id)
+        }
         if site.api.hasPrefix("netvplayer-files://"),
            let id = UUID(uuidString: String(site.api.dropFirst("netvplayer-files://".count))),
            let configuration = FileServiceStore.shared.load().services.first(where: { $0.id == id }),
@@ -154,6 +193,17 @@ public actor SpiderReplacementRegistry {
 
     public func hasReplacement(for site: Site) -> Bool {
         replacement(for: site) != nil || nativeProvider(for: site) != nil
+    }
+
+    /// Describes the selected whole-source implementation, including a failed
+    /// Android artifact. Never label a fallback as successful Android execution.
+    public func executionBackend(for site: Site) -> ProviderExecutionBackend {
+        guard let provider = nativeProvider(for: site) else { return .standard }
+        if provider is AndroidOriginalUnavailableProvider { return .androidUnavailable }
+        if provider is DevelopmentAndroidArtifactFailureProvider { return .androidUnavailable }
+        if provider is DevelopmentAndroidSiteProvider { return .androidOriginal }
+        if provider is RemoteSiteContentProvider { return .macExtension }
+        return .macNative
     }
 
     public func clearContentCaches() async {
@@ -207,6 +257,9 @@ public actor SpiderReplacementRegistry {
     public func removeRemoteBindings(providerID: String) {
         remoteProxyProviderIDs.remove(providerID)
         remoteProxyRoutes = remoteProxyRoutes.filter { $0.value.providerID != providerID }
+        nativeKeyedProviders = nativeKeyedProviders.filter {
+            ($0.value as? RemoteSiteContentProvider)?.providerID != providerID
+        }
         for key in remoteBindingKeys.removeValue(forKey: providerID) ?? [] {
             guard remoteBindingOwners[key] == providerID else { continue }
             remoteProviders.removeValue(forKey: key)

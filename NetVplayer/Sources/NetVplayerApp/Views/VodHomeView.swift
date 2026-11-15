@@ -20,9 +20,24 @@ struct SitePickerMenuItem: Equatable, Identifiable {
         status != .invalidConfiguration
     }
 
-    static func statusPresentation(
-        for status: ExternalSourceSupportStatus
+    static func unregisteredAndroidStatus(
+        configurationLoaded: Bool
     ) -> (text: String?, icon: String, detail: String) {
+        guard configurationLoaded else {
+            return (L10n.text("尚未检查"), "questionmark.circle",
+                L10n.text("数据源配置尚未加载完成，暂时无法确认此来源是否可用。"))
+        }
+        return statusPresentation(for: .unsupportedAndroidCsp)
+    }
+
+    static func statusPresentation(
+        for status: ExternalSourceSupportStatus,
+        backend: ProviderExecutionBackend? = nil
+    ) -> (text: String?, icon: String, detail: String) {
+        if backend == .androidUnavailable {
+            return (L10n.text("组件不可用"), "exclamationmark.triangle",
+                L10n.text("此来源所需的组件未能加载，请刷新配置或切换视频源。"))
+        }
         switch status {
         case .native:
             return (nil, "checkmark.circle", status.userFacingDetail)
@@ -202,6 +217,7 @@ struct VodHomeView: View {
                     FileServiceBrowserView(state: fileServices, service: service)
                 } else if appState.isConfigLoaded {
                     categoryStrip
+                    mediaServerBreadcrumbs
                     categoryFilterStrip
                     libraryContent(posterLayout: posterLayout)
                 } else {
@@ -415,7 +431,7 @@ struct VodHomeView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: HomeVisualPolicy.categoryGap) {
-                    if appState.activeSite?.showsSyntheticRecommendation != false {
+                    if appState.showsHomeRecommendation {
                         categoryButton(
                             title: L10n.text("推荐"),
                             id: "recommend",
@@ -432,7 +448,7 @@ struct VodHomeView: View {
                         categoryButton(
                             title: category.typeName,
                             id: category.typeId,
-                            isSelected: appState.selectedCategory?.typeId == category.typeId
+                            isSelected: (appState.mediaServerFolderPath.first ?? appState.selectedCategory)?.typeId == category.typeId
                         ) {
                             scrollTargetID = category.typeId
                             Task {
@@ -447,7 +463,7 @@ struct VodHomeView: View {
                 )
             }
             .onChange(of: appState.selectedCategory) { _, newValue in
-                let targetID = newValue?.typeId ?? "recommend"
+                let targetID = appState.mediaServerFolderPath.first?.typeId ?? newValue?.typeId ?? "recommend"
                 scrollTargetID = targetID
                 withAnimation(.easeOut(duration: 0.22)) {
                     proxy.scrollTo(targetID, anchor: .center)
@@ -455,6 +471,34 @@ struct VodHomeView: View {
             }
         }
         .padding(.bottom, HomeVisualPolicy.categoryBottomPadding)
+    }
+
+    @ViewBuilder
+    private var mediaServerBreadcrumbs: some View {
+        if appState.mediaServerFolderPath.count > 1 {
+            HStack(spacing: 12) {
+                Button {
+                    Task { await appState.openMediaServerAncestor(at: appState.mediaServerFolderPath.count - 2) }
+                } label: {
+                    Label(L10n.text("返回上级"), systemImage: "chevron.left")
+                }
+                .buttonStyle(.plain)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(appState.mediaServerFolderPath.enumerated()), id: \.offset) { index, folder in
+                            if index > 0 { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(palette.muted) }
+                            Button(folder.typeName) {
+                                Task { await appState.openMediaServerAncestor(at: index) }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(index == appState.mediaServerFolderPath.count - 1)
+                        }
+                    }
+                }
+            }
+            .font(.system(size: 13, weight: .medium))
+            .padding(.bottom, 12)
+        }
     }
 
     private func categoryButton(
@@ -579,8 +623,22 @@ struct VodHomeView: View {
     }
 
     private func categoryFilterMenu(_ filter: Filter) -> some View {
-        let selectedName = appState.selectedCategoryFilterName(for: filter)
+        let selected = appState.selectedCategoryFilterName(for: filter)
+        let selectedName = selected.isEmpty ? L10n.text("全部") : selected
         return Menu {
+            if !filter.isRequired && !filter.values.contains(where: { $0.value.isEmpty }) {
+                Button {
+                    Task {
+                        await appState.selectCategoryFilter(filter, value: FilterValue(name: L10n.text("全部"), value: ""))
+                    }
+                } label: {
+                    if (appState.selectedCategoryFilterValues[filter.key] ?? "").isEmpty {
+                        Label(L10n.text("全部"), systemImage: "checkmark")
+                    } else {
+                        Text(L10n.text("全部"))
+                    }
+                }
+            }
             ForEach(filter.values.indices, id: \.self) { index in
                 let value = filter.values[index]
                 Button {
@@ -693,7 +751,9 @@ struct VodHomeView: View {
                         HStack(alignment: .top, spacing: HomeVisualPolicy.posterHorizontalGap) {
                             ForEach(
                                 appState.vods[rowStart..<min(rowStart + posterLayout.columnCount, appState.vods.count)]
-                            ) { vod in
+                                    .enumerated().map { VodPosterGridItem(vod: $0.element, index: rowStart + $0.offset) }
+                            ) { item in
+                                let vod = item.vod
                                 Button {
                                     Task {
                                         await appState.openVodCard(vod)
@@ -784,7 +844,7 @@ struct VodHomeView: View {
                             .frame(width: 56)
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
                 .keyboardShortcut(.defaultAction)
                 .disabled(pushPlaybackInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isOpeningPushPlayback)
             }
@@ -911,7 +971,7 @@ struct VodHomeView: View {
 
     private func siteMenuStatus(for site: Site) -> (text: String?, icon: String, detail: String) {
         if let status = appState.externalSourceReport(for: site)?.status {
-            return SitePickerMenuItem.statusPresentation(for: status)
+            return SitePickerMenuItem.statusPresentation(for: status, backend: appState.providerExecutionBackends[site.key])
         }
         if appState.nativeReplacementSiteKeys.contains(site.key) {
             return (nil, "checkmark.circle", L10n.text("已提供当前系统可用的兼容实现，实际可用性取决于源站和网络。"))
@@ -920,7 +980,7 @@ struct VodHomeView: View {
             return (nil, "checkmark.circle", L10n.text("已提供当前系统可用的兼容实现，实际可用性取决于源站和网络。"))
         }
         if site.isAndroidCrawlerSource {
-            return (L10n.text("暂不支持"), "exclamationmark.triangle", L10n.text("该来源使用的格式当前无法加载，请选择其他视频源。"))
+            return SitePickerMenuItem.unregisteredAndroidStatus(configurationLoaded: appState.isConfigLoaded)
         }
         if site.isSpider {
             return (nil, "link", L10n.text("该来源可直接尝试加载。"))
@@ -942,7 +1002,8 @@ struct VodCard: View {
                 WebImage(
                     urlString: vod.vodPic,
                     siteHeader: appState.activeSite?.header,
-                    fallbackText: vod.vodName,
+                    fallbackText: vod.isFolder ? nil : vod.vodName,
+                    fallbackSystemImage: vod.isFolder ? "folder.fill" : "film",
                     maxPixelSize: posterWidth * 2
                 )
             }

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import ProviderSDK
 
 public enum ProviderProcessError: LocalizedError, Equatable, Sendable {
@@ -34,6 +35,7 @@ public actor ProviderProcessClient {
     private let providerID: String
     private let diagnosticWriter: ProviderDiagnosticJSONLWriter
     private var stoppingProcesses: [Process] = []
+    private var exitConfirmationTask: Task<Void, Error>?
     private var process: Process?
     private var inputHandle: FileHandle?
     private var outputHandle: FileHandle?
@@ -88,6 +90,8 @@ public actor ProviderProcessClient {
 
     public func start() throws {
         if let process, process.isRunning { return }
+        stoppingProcesses.removeAll { !$0.isRunning }
+        guard stoppingProcesses.isEmpty, exitConfirmationTask == nil else { throw ProviderProcessError.notRunning }
 
         emit(level: .info, category: .lifecycle, code: .processStarting)
 
@@ -181,7 +185,8 @@ public actor ProviderProcessClient {
         }
     }
 
-    public func request(_ request: ProviderRequest, timeout: Duration = .seconds(15)) async throws -> ProviderResponse {
+    public func request(_ request: ProviderRequest, timeout: Duration = .seconds(15),
+                        interaction: ProviderInteractionPolicy? = nil) async throws -> ProviderResponse {
         emit(
             level: .info,
             category: .request,
@@ -191,9 +196,12 @@ public actor ProviderProcessClient {
         )
         do {
             try start()
+            let interactionWait = try (request.operation == .player ? interaction : nil)?.begin(requestID: request.requestID)
+            defer { interactionWait?.finish() }
             let response = try await withThrowingTaskGroup(of: ProviderResponse.self) { group in
                 group.addTask { try await self.enqueue(request) }
                 group.addTask {
+                    if let interactionWait { try await interactionWait.waitForTimeout(networkTimeout: timeout) }
                     try await Task.sleep(for: timeout)
                     throw ProviderProcessError.timedOut(request.requestID)
                 }
@@ -255,13 +263,21 @@ public actor ProviderProcessClient {
     }
 
     public func stopAndConfirmExit() async throws {
-        await stop()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while stoppingProcesses.contains(where: \.isRunning), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(25))
+        if let exitConfirmationTask { return try await exitConfirmationTask.value }
+        // Request cancellation must not cancel process retirement: a successor
+        // may need the same persistent state lock immediately after this returns.
+        let confirmation = Task { [self] in
+            await stop()
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while stoppingProcesses.contains(where: \.isRunning), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            stoppingProcesses.removeAll { !$0.isRunning }
+            guard stoppingProcesses.isEmpty else { throw ProviderMaintenanceError.processRunning }
         }
-        stoppingProcesses.removeAll { !$0.isRunning }
-        guard stoppingProcesses.isEmpty else { throw ProviderMaintenanceError.processRunning }
+        exitConfirmationTask = confirmation
+        defer { exitConfirmationTask = nil }
+        try await confirmation.value
     }
 
     public func stop(graceful: Bool = true) async {
@@ -300,6 +316,72 @@ public actor ProviderProcessClient {
         process?.isRunning == true
     }
 
+    /// Read only this live child process's TCP listeners; nil means ownership could not be verified.
+    public func listeningTCPPorts() -> Set<Int>? {
+        guard let process, process.isRunning else { return nil }
+        let pid = process.processIdentifier
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        let needed = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard needed > 0, needed < 4 * 1024 * 1024 else { return nil }
+        var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(needed) / stride + 32)
+        let capacity = descriptors.count * stride
+        let read = descriptors.withUnsafeMutableBytes {
+            proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32(capacity))
+        }
+        guard read > 0, read < capacity, Int(read) % stride == 0 else { return nil }
+        var ports = Set<Int>()
+        for fd in descriptors.prefix(Int(read) / stride) where fd.proc_fdtype == PROX_FDTYPE_SOCKET {
+            var socket = socket_fdinfo()
+            let size = MemoryLayout<socket_fdinfo>.size
+            let count = proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDSOCKETINFO, &socket, Int32(size))
+            guard count == size else {
+                if errno == EBADF || errno == ENOENT { continue } // Descriptor closed during the snapshot.
+                return nil
+            }
+            guard socket.psi.soi_kind == SOCKINFO_TCP,
+                  socket.psi.soi_family == AF_INET || socket.psi.soi_family == AF_INET6,
+                  socket.psi.soi_proto.pri_tcp.tcpsi_state == TSI_S_LISTEN else { continue }
+            ports.insert(Int(UInt16(bigEndian: UInt16(truncatingIfNeeded: socket.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport))))
+        }
+        guard process.isRunning, self.process === process else { return nil }
+        return ports
+    }
+
+    /// Original Chaquopy needs these paths, but arbitrary Python or CA overrides
+    /// must not escape the already validated Provider runtime bundle.
+    private static func validateBundledPythonEnvironment(for command: ProviderCommand) throws {
+        let keys = ["PYTHONHOME", "PYTHONPATH", "SSL_CERT_FILE"]
+        guard keys.contains(where: { command.environment[$0] != nil }) else { return }
+        guard let path = command.environment["NETVPLAYER_PROVIDER_ROOT"],
+              path.hasPrefix("/"), !path.contains(":") else {
+            throw ProviderProcessError.invalidEnvironment("NETVPLAYER_PROVIDER_ROOT")
+        }
+        let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        let resolvedRoot = root.resolvingSymlinksInPath().path + "/"
+        guard command.executableURL.resolvingSymlinksInPath().path.hasPrefix(resolvedRoot) else {
+            throw ProviderProcessError.invalidEnvironment("NETVPLAYER_PROVIDER_ROOT")
+        }
+        let components = [
+            "PYTHONHOME": ["home"],
+            "PYTHONPATH": ["original/app", "original/requirements", "original/bootstrap"],
+            "SSL_CERT_FILE": ["original/cacert.pem"],
+        ]
+        for key in keys {
+            let locations = components[key]!.map { root.appendingPathComponent("python/" + $0) }
+            guard command.environment[key] == locations.map(\.path).joined(separator: ":") else {
+                throw ProviderProcessError.invalidEnvironment(key)
+            }
+            for location in locations {
+                var directory: ObjCBool = false
+                guard location.resolvingSymlinksInPath().path.hasPrefix(resolvedRoot),
+                      FileManager.default.fileExists(atPath: location.path, isDirectory: &directory),
+                      directory.boolValue == (key != "SSL_CERT_FILE") else {
+                    throw ProviderProcessError.invalidEnvironment(key)
+                }
+            }
+        }
+    }
+
     static func launchEnvironment(for command: ProviderCommand) throws -> [String: String] {
         let allowedCommandKeys: Set<String> = [
             "NETVPLAYER_PROVIDER_ID",
@@ -311,6 +393,9 @@ public actor ProviderProcessClient {
             "NETVPLAYER_PROVIDER_HTTP_FIXTURE_URL",
             "PYTHONDONTWRITEBYTECODE",
             "PYTHONNOUSERSITE",
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "SSL_CERT_FILE",
         ]
         if let unsafe = command.environment.keys.first(where: { !allowedCommandKeys.contains($0) }) {
             throw ProviderProcessError.invalidEnvironment(unsafe)
@@ -318,6 +403,8 @@ public actor ProviderProcessClient {
         guard command.environment["NETVPLAYER_PROVIDER_STATE"] == command.stateDirectoryURL.path else {
             throw ProviderProcessError.invalidEnvironment("NETVPLAYER_PROVIDER_STATE")
         }
+
+        try validateBundledPythonEnvironment(for: command)
 
         let state = command.stateDirectoryURL
         let directories = [
@@ -595,6 +682,9 @@ public actor ProviderProcessClient {
     }
 
     private static func diagnosticCode(for error: Error) -> ProviderDiagnosticCode {
+        if let interaction = error as? ProviderInteractionError {
+            return interaction == .canceled ? .requestCanceled : .requestTimedOut
+        }
         guard let processError = error as? ProviderProcessError else {
             return error is CancellationError ? .requestCanceled : .requestFailed
         }

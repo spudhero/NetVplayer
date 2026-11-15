@@ -22,6 +22,17 @@ SPIDER_ENGINE_PREFIX = "NetVplayer/Sources/SpiderEngine/"
 PUBLIC_PROVIDER_SOURCE_FILES = (
     f"{SPIDER_ENGINE_PREFIX}NativeProviders.swift",
     f"{SPIDER_ENGINE_PREFIX}FileServiceNativeProvider.swift",
+    f"{SPIDER_ENGINE_PREFIX}MediaServerNativeProvider.swift",
+)
+# Site-specific support files can omit "NativeProvider" from their filename.
+PRIVATE_PROVIDER_SUPPORT_FILES = (
+    f"{SPIDER_ENGINE_PREFIX}AiDjNativePlaybackProvider.swift",
+    f"{SPIDER_ENGINE_PREFIX}DevelopmentAndroidSeedPageTransport.swift",
+    f"{SPIDER_ENGINE_PREFIX}DevelopmentAndroidAliEpisodeAdapter.swift",
+    f"{SPIDER_ENGINE_PREFIX}DevelopmentAndroidUCEpisodeAdapter.swift",
+    f"{SPIDER_ENGINE_PREFIX}DevelopmentAndroidDoubaoPageAdapter.swift",
+    f"{SPIDER_ENGINE_PREFIX}DevelopmentAndroidDoubaoSignalAdapter.swift",
+    f"{SPIDER_ENGINE_PREFIX}DevelopmentAndroidSixVMagnetAdapter.swift",
 )
 MIXED_BOUNDARY_FILES: tuple[str, ...] = ()
 LEGACY_EXECUTABLE_LOADERS: tuple[str, ...] = ()
@@ -91,9 +102,12 @@ def is_private_provider_source(path: str) -> bool:
         return False
     name = Path(path).name
     return (
-        "NativeProvider" in name
-        and path not in PUBLIC_PROVIDER_SOURCE_FILES
-        and path not in MIXED_BOUNDARY_FILES
+        path in PRIVATE_PROVIDER_SUPPORT_FILES
+        or (
+            "NativeProvider" in name
+            and path not in PUBLIC_PROVIDER_SOURCE_FILES
+            and path not in MIXED_BOUNDARY_FILES
+        )
     )
 
 
@@ -155,7 +169,8 @@ def build_report(repo: Path) -> dict[str, Any]:
             "target": "clean-public-shell-repository",
             "forbidden_reference_prefixes": [FONGMI_PREFIX],
             "android_binary_suffixes": list(ANDROID_BINARY_SUFFIXES),
-            "private_provider_detection": "SpiderEngine Swift filename containing NativeProvider, except reviewed public adapters",
+            "private_provider_detection": "SpiderEngine Swift filename containing NativeProvider, except reviewed public adapters, plus reviewed private support files",
+            "private_provider_support_files": list(PRIVATE_PROVIDER_SUPPORT_FILES),
             "private_provider_staging_prefix": PRIVATE_PROVIDER_STAGING_PREFIX,
             "public_provider_sources": list(PUBLIC_PROVIDER_SOURCE_FILES),
             "history_requirement": "complete",

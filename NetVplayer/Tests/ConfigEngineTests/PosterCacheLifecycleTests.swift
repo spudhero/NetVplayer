@@ -113,6 +113,124 @@ struct PosterCacheLifecycleTests {
     }
 
     @MainActor
+    @Test func smallLayoutChangesKeepReadyPoster() async throws {
+        ImageLoader.clearMemoryCache()
+        let fixture = try PosterLifecycleFixture()
+        defer { fixture.remove(); ImageLoader.clearMemoryCache() }
+        let loader = ImageLoader(pipeline: fixture.pipeline())
+        loader.load(from: fixture.request.url!.absoluteString, maxPixelSize: 200)
+        try await waitUntilFinished(loader)
+        let readyImage = try #require(loader.image)
+
+        loader.cancel()
+        loader.load(from: fixture.request.url!.absoluteString, maxPixelSize: 201)
+
+        #expect(loader.image === readyImage)
+        #expect(!loader.isLoading)
+        #expect(PosterLifecycleURLProtocol.requestCount == 1)
+        try await waitUntilFinished(loader)
+    }
+
+    @MainActor
+    @Test func recreatedLoaderStartsWithCachedImageBeforeAppearance() async throws {
+        ImageLoader.clearMemoryCache()
+        let fixture = try PosterLifecycleFixture()
+        defer { fixture.remove(); ImageLoader.clearMemoryCache() }
+        let pipeline = fixture.pipeline()
+        let url = fixture.request.url!.absoluteString
+        let first = ImageLoader(pipeline: pipeline)
+        first.load(from: url, maxPixelSize: 200)
+        try await waitUntilFinished(first)
+        let readyImage = try #require(first.image)
+        first.cancel()
+
+        let recreated = ImageLoader(from: url, maxPixelSize: 201, pipeline: pipeline)
+        #expect(recreated.image === readyImage)
+        #expect(!recreated.isLoading)
+        // A different request identity must not display another account's image.
+        let otherHeaders = ImageLoader(from: url, headers: ["X-Fixture": "other"], maxPixelSize: 201, pipeline: pipeline)
+        #expect(otherHeaders.image == nil)
+        #expect(PosterLifecycleURLProtocol.requestCount == 1)
+    }
+
+    @MainActor
+    @Test func explicitClearInvalidatesRetainedReadyImage() async throws {
+        ImageLoader.clearMemoryCache()
+        let fixture = try PosterLifecycleFixture()
+        defer { fixture.remove(); ImageLoader.clearMemoryCache() }
+        let loader = ImageLoader(pipeline: fixture.pipeline())
+        let url = fixture.request.url!.absoluteString
+        loader.load(from: url, maxPixelSize: 64)
+        try await waitUntilFinished(loader)
+        let readyImage = try #require(loader.image)
+        loader.cancel()
+
+        ImageLoader.clearMemoryCache()
+        loader.load(from: url, maxPixelSize: 64)
+        try await waitUntilFinished(loader)
+
+        #expect(loader.image != nil && loader.image !== readyImage)
+        #expect(PosterLifecycleURLProtocol.requestCount == 1)
+    }
+
+    @MainActor
+    @Test func nearbyImagePrefetchWarmsRebuiltCellsWithBoundedDownloads() async throws {
+        ImageLoader.clearMemoryCache()
+        let fixture = try PosterLifecycleFixture(delay: 0.02)
+        defer { fixture.remove(); ImageLoader.clearMemoryCache() }
+        let pipeline = fixture.pipeline()
+        let urls = (0..<12).map { fixture.request.url!.appendingPathComponent("\($0).png").absoluteString }
+        let request = PosterImagePrefetchRequest(urls: urls + urls + [""], maxPixelSize: 200)
+
+        await ImageLoader.prefetch(request, pipeline: pipeline)
+
+        for url in urls {
+            let cell = ImageLoader(from: url, maxPixelSize: 201, pipeline: pipeline)
+            #expect(cell.image != nil && !cell.isLoading)
+        }
+        #expect(PosterLifecycleURLProtocol.requestCount == 12)
+        #expect(PosterLifecycleURLProtocol.maximumConcurrentRequests <= 2)
+        #expect(await pipeline.diskUsage() > 0)
+    }
+
+    @MainActor
+    @Test func leavingPageCancelsImagePrefetchWithoutStartingRemainingURLs() async throws {
+        ImageLoader.clearMemoryCache()
+        let fixture = try PosterLifecycleFixture(delay: 1)
+        defer { fixture.remove(); ImageLoader.clearMemoryCache() }
+        let pipeline = fixture.pipeline()
+        let urls = (0..<12).map { fixture.request.url!.appendingPathComponent("\($0).png").absoluteString }
+        let request = PosterImagePrefetchRequest(urls: urls, maxPixelSize: 200)
+        let prefetch = Task { await ImageLoader.prefetch(request, pipeline: pipeline) }
+        try await waitForRequest()
+
+        prefetch.cancel()
+        await prefetch.value
+
+        #expect(PosterLifecycleURLProtocol.requestCount <= 2)
+        #expect(await pipeline.diskUsage() == 0)
+    }
+
+    @MainActor
+    @Test func clearingCachesStopsRemainingImagePrefetchWithoutRepopulation() async throws {
+        ImageLoader.clearMemoryCache()
+        let fixture = try PosterLifecycleFixture(delay: 0.1)
+        defer { fixture.remove(); ImageLoader.clearMemoryCache() }
+        let pipeline = fixture.pipeline()
+        let urls = (0..<12).map { fixture.request.url!.appendingPathComponent("\($0).png").absoluteString }
+        let request = PosterImagePrefetchRequest(urls: urls, maxPixelSize: 200)
+        let prefetch = Task { await ImageLoader.prefetch(request, pipeline: pipeline) }
+        try await waitForRequest()
+
+        ImageLoader.clearMemoryCache()
+        try await pipeline.clearDiskCache()
+        await prefetch.value
+
+        #expect(PosterLifecycleURLProtocol.requestCount <= 2)
+        #expect(await pipeline.diskUsage() == 0)
+    }
+
+    @MainActor
     @Test func loaderChangesThumbnailSizeWithoutAnotherDownload() async throws {
         ImageLoader.clearMemoryCache()
         let fixture = try PosterLifecycleFixture()
@@ -220,13 +338,20 @@ private final class PosterLifecycleURLProtocol: URLProtocol, @unchecked Sendable
     nonisolated(unsafe) private static var data = Data()
     nonisolated(unsafe) private static var delay: TimeInterval = 0
     nonisolated(unsafe) private static var count = 0
+    nonisolated(unsafe) private static var activeRequests = Set<UUID>()
+    nonisolated(unsafe) private static var maximumActiveRequests = 0
+    private let requestID = UUID()
     private let workLock = NSLock()
     private var work: DispatchWorkItem?
 
     static var requestCount: Int { lock.withLock { count } }
     static var dataCount: Int { lock.withLock { data.count } }
+    static var maximumConcurrentRequests: Int { lock.withLock { maximumActiveRequests } }
     static func configure(data: Data, delay: TimeInterval) {
-        lock.withLock { Self.data = data; Self.delay = delay; count = 0 }
+        lock.withLock {
+            Self.data = data; Self.delay = delay; count = 0
+            activeRequests.removeAll(); maximumActiveRequests = 0
+        }
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -234,6 +359,8 @@ private final class PosterLifecycleURLProtocol: URLProtocol, @unchecked Sendable
     override func startLoading() {
         let (data, delay) = Self.lock.withLock {
             Self.count += 1
+            Self.activeRequests.insert(requestID)
+            Self.maximumActiveRequests = max(Self.maximumActiveRequests, Self.activeRequests.count)
             return (Self.data, Self.delay)
         }
         let item = DispatchWorkItem { [weak self] in
@@ -242,10 +369,14 @@ private final class PosterLifecycleURLProtocol: URLProtocol, @unchecked Sendable
             let response = HTTPURLResponse(url: self.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "image/png"])!
             self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             self.client?.urlProtocol(self, didLoad: data)
+            _ = Self.lock.withLock { Self.activeRequests.remove(self.requestID) }
             self.client?.urlProtocolDidFinishLoading(self)
         }
         workLock.withLock { work = item }
         DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: item)
     }
-    override func stopLoading() { workLock.withLock { work?.cancel() } }
+    override func stopLoading() {
+        workLock.withLock { work?.cancel() }
+        _ = Self.lock.withLock { Self.activeRequests.remove(requestID) }
+    }
 }

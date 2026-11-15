@@ -15,7 +15,7 @@ enum PlayerVisualRegressionCaptureController {
 
     private static func presentRenderingWindow(configuration: PlayerVisualRegressionConfiguration) {
         let contentRect = NSRect(origin: .zero, size: configuration.viewport)
-        let appState = NetVplayerWindowCoordinator.shared.appState
+        guard let appState = AppStartup.shared.runtime, AppStartup.shared.phase == .ready else { return }
         let rootView = PlayerView(
             playerState: appState.playerState,
             windowContext: PlayerWindowContext(),

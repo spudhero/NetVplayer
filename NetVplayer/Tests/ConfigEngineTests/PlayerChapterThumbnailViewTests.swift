@@ -114,7 +114,7 @@ private final class ThumbnailViewFixture {
 private final class ThumbnailViewDecodeProbe {
     var calls: [Double] = []
     private var waiting: [Double: CheckedContinuation<Data?, Never>] = [:]
-    func decode(spec: PlaySpec, seconds: Double) async -> Data? {
+    func decode(spec _: PlaySpec, seconds: Double) async -> Data? {
         calls.append(seconds)
         if seconds == 0 { return try? thumbnailPNG(.red) }
         return await withCheckedContinuation { waiting[seconds] = $0 }

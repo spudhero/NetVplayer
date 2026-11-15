@@ -22,6 +22,7 @@ static uint64_t last_reply;
 static mpv_format last_format;
 static char last_name[64];
 static double last_value;
+static char last_string[1024];
 
 int mpv_set_property(mpv_handle *handle, const char *name, mpv_format format, void *data) {
     (void)handle; (void)name; (void)format; (void)data;
@@ -34,7 +35,8 @@ int mpv_set_property_async(mpv_handle *handle, uint64_t id, const char *name, mp
     last_reply = id;
     last_format = format;
     snprintf(last_name, sizeof(last_name), "%s", name);
-    last_value = format == MPV_FORMAT_FLAG ? *(int *)data : *(double *)data;
+    if (format == MPV_FORMAT_STRING) snprintf(last_string, sizeof(last_string), "%s", *(char **)data);
+    else last_value = format == MPV_FORMAT_FLAG ? *(int *)data : *(double *)data;
     return async_result;
 }
 int nvp_test_synchronous_calls(void) { return synchronous_calls; }
@@ -42,6 +44,7 @@ uint64_t nvp_test_reply(void) { return last_reply; }
 int nvp_test_format(void) { return last_format; }
 const char *nvp_test_name(void) { return last_name; }
 double nvp_test_value(void) { return last_value; }
+const char *nvp_test_string(void) { return last_string; }
 void nvp_test_async_result(int result) { async_result = result; }
 """
 
@@ -66,7 +69,8 @@ class MPVAsyncPropertyTests(unittest.TestCase):
             )
             for output, source, extra in [
                 (fake_library, fake_source, []),
-                (shim_library, shim_root / "MPVShim.c", ["-I" + str(shim_root / "include")]),
+                (shim_library, shim_root / "MPVShim.c", ["-I" + str(shim_root / "include"),
+                 str(shim_root / "NVMPVColorProfile.c"), "-framework", "ColorSync", "-framework", "CoreFoundation"]),
             ]:
                 subprocess.run(
                     ["cc", "-dynamiclib", "-o", str(output), str(source), "-I" + str(include), *extra],
@@ -81,6 +85,8 @@ class MPVAsyncPropertyTests(unittest.TestCase):
                 shim.nv_mpv_destroy.argtypes = [ctypes.c_void_p]
                 shim.nv_mpv_set_property_flag_async.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_char_p, ctypes.c_int]
                 shim.nv_mpv_set_property_double_async.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_char_p, ctypes.c_double]
+                shim.nv_mpv_set_property_string_async.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_char_p, ctypes.c_char_p]
+                fake.nvp_test_string.restype = ctypes.c_char_p
                 shim.nv_mpv_last_error.argtypes = [ctypes.c_void_p]
                 shim.nv_mpv_last_error.restype = ctypes.c_char_p
                 fake.nvp_test_reply.restype = ctypes.c_uint64
@@ -102,6 +108,12 @@ class MPVAsyncPropertyTests(unittest.TestCase):
                         self.assertEqual(fake.nvp_test_name(), name)
                         self.assertEqual(fake.nvp_test_value(), value)
                         self.assertEqual(fake.nvp_test_format(), format_id)
+                    started = time.monotonic()
+                    self.assertEqual(shim.nv_mpv_set_property_string_async(context, 10004, b"audio-channels", b"7.1,5.1,stereo"), 0)
+                    self.assertLess(time.monotonic() - started, 0.25)
+                    self.assertEqual(fake.nvp_test_reply(), 10004)
+                    self.assertEqual(fake.nvp_test_format(), 1)
+                    self.assertEqual(fake.nvp_test_string(), b"7.1,5.1,stereo")
                     self.assertEqual(fake.nvp_test_synchronous_calls(), 0)
                     fake.nvp_test_async_result(-1)
                     self.assertEqual(shim.nv_mpv_set_property_flag_async(context, 10002, b"mute", 1), -1)

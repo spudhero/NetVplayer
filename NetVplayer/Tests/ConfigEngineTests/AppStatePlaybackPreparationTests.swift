@@ -3,6 +3,7 @@ import Testing
 import Models
 import PlayerEngine
 import SpiderEngine
+import Storage
 @testable import NetVplayerApp
 
 @MainActor
@@ -118,6 +119,10 @@ private func playbackPreparationFixture() async -> (AppState, DeferredPlaybackPr
     let state = AppState(
         loadDefaultConfig: false,
         startProxyServer: false,
+        storageManager: StorageManager(storageDirectory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("playback-preparation-\(uniqueID)", isDirectory: true)),
+        userPreferences: UserPreferences(defaults: UserDefaults(suiteName: "playback-preparation-\(uniqueID)")!,
+            credentialStore: MemoryCredentialStore()),
         providerRuntimeRegistrationOverride: { true },
         providerRuntimeStartupOverride: { true }
     )

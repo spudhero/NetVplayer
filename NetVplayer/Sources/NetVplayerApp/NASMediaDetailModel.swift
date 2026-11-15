@@ -68,6 +68,8 @@ enum NASMediaDetailPresentation {
     static func primaryEpisode(episodes: [Episode], history: History?, selectedURL: String? = nil) -> Episode? {
         if let selectedURL, let selected = episodes.first(where: { $0.url == selectedURL }) { return selected }
         if let history, let episode = episodes.first(where: { $0.url == history.episodeUrl }) { return episode }
+        if let history, let reference = MediaServerReference(locator: history.episodeUrl),
+           let episode = episodes.first(where: { reference.matchesItem($0.url) }) { return episode }
         return episodes.first
     }
 

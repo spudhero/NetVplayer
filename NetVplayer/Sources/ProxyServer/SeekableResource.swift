@@ -6,13 +6,22 @@ public struct SeekableResource: Sendable {
     public let contentType: String
     public let readChunkSize: Int64
     public let transferProfile: PlaybackTransferProfile?
+    public let mediaIdentity: PlaybackMediaIdentity?
+    /// Composite resources delegate admission to their bounded physical reads.
+    public let managesReadBudget: Bool
+    public let close: @Sendable () async -> Void
     public let read: @Sendable (Range<Int64>) async throws -> Data
     public init(size: Int64, contentType: String = "application/octet-stream", readChunkSize: Int64 = 512 * 1024,
                 transferProfile: PlaybackTransferProfile? = nil,
+                mediaIdentity: PlaybackMediaIdentity? = nil,
+                  managesReadBudget: Bool = false,
+                close: @escaping @Sendable () async -> Void = {},
                 read: @escaping @Sendable (Range<Int64>) async throws -> Data) {
         self.size = size; self.contentType = contentType; self.read = read
         self.readChunkSize = max(1, min(readChunkSize, 4 * 1024 * 1024))
         self.transferProfile = transferProfile
+        self.mediaIdentity = mediaIdentity; self.close = close
+        self.managesReadBudget = managesReadBudget
     }
 }
 

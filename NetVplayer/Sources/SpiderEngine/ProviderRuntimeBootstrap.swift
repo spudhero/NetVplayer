@@ -58,6 +58,7 @@ public actor ProviderRuntimeBootstrap {
     private let distributionVerifier: ProviderDistributionIndexVerifier?
     private let distributionIndexURL: URL?
     private let allowedSourcePolicies: Set<ProviderSourcePolicy>?
+    private let allowsDistribution: Bool
 
     public init(
         manager: ProviderManager,
@@ -67,13 +68,15 @@ public actor ProviderRuntimeBootstrap {
         allowedSourcePolicies: Set<ProviderSourcePolicy>? = [
             .userConfiguredOnly,
             .userConfiguredCatalog,
-        ]
+        ],
+        allowsDistribution: Bool = true
     ) {
         self.manager = manager
-        self.distribution = distribution
-        self.distributionVerifier = distributionVerifier
-        self.distributionIndexURL = distributionIndexURL
+        self.distribution = allowsDistribution ? distribution : nil
+        self.distributionVerifier = allowsDistribution ? distributionVerifier : nil
+        self.distributionIndexURL = allowsDistribution ? distributionIndexURL : nil
         self.allowedSourcePolicies = allowedSourcePolicies
+        self.allowsDistribution = allowsDistribution
     }
 
     /// Creates the production bootstrap only when the app bundle contains both
@@ -81,7 +84,9 @@ public actor ProviderRuntimeBootstrap {
     public static func makeDefault(
         bundle: Bundle = .main,
         fileManager: FileManager = .default,
-        shellVersion: String? = nil
+        shellVersion: String? = nil,
+        stateDirectoryRootURL: URL? = nil,
+        installedOnly: Bool = false
     ) -> ProviderRuntimeBootstrap? {
         guard let trust = try? ProviderTrustConfiguration.load(bundle: bundle),
               let version = shellVersion
@@ -98,14 +103,15 @@ public actor ProviderRuntimeBootstrap {
             "NetVplayer/Providers",
             isDirectory: true
         )
-        let store = ProviderPackageStore(rootURL: root, verifier: verifier)
+        let store = ProviderPackageStore(rootURL: root, verifier: verifier, stateDirectoryRootURL: stateDirectoryRootURL)
         let indexURL = (bundle.infoDictionary?["NetVplayerProviderDistributionIndexURL"] as? String)
             .flatMap(URL.init(string:))
         return ProviderRuntimeBootstrap(
             manager: ProviderManager(store: store),
-            distribution: ProviderDistributionClient(),
-            distributionVerifier: try? trust.distributionVerifier(),
-            distributionIndexURL: indexURL
+            distribution: installedOnly ? nil : ProviderDistributionClient(),
+            distributionVerifier: installedOnly ? nil : try? trust.distributionVerifier(),
+            distributionIndexURL: installedOnly ? nil : indexURL,
+            allowsDistribution: !installedOnly
         )
     }
 
@@ -134,6 +140,7 @@ public actor ProviderRuntimeBootstrap {
     public func configureDistributionProxy(port: Int?) {
         distributionSession?.invalidateAndCancel()
         distributionSession = nil
+        guard allowsDistribution else { distribution = nil; return }
         distribution = ProviderDistributionClient()
         guard let proxyDictionary = Self.distributionProxyDictionary(port: port) else { return }
 

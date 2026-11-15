@@ -13,7 +13,6 @@ enum PlayerChapterVisualPolicy {
     static let panelWidth: CGFloat = 394
     static let rowHeight: CGFloat = 76
     static let previewWidth: CGFloat = 212
-    static let nodeHitRadius: CGFloat = 10
     static func listHeight(count: Int, compact: Bool = false) -> CGFloat {
         min(CGFloat(max(1, count)) * (rowHeight + 4), compact ? 96 : 286)
     }

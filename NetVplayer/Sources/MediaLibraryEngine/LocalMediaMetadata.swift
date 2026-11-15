@@ -4,48 +4,103 @@ import Models
 import FileServiceEngine
 
 public enum MediaFilenameParser {
+    // Patterns are fixed by this parser, never derived from media filenames.
+    private static let expressions = Expressions()
+    private final class Expressions: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String: NSRegularExpression] = [:]
+        func regex(_ pattern: String) -> NSRegularExpression? {
+            lock.withLock {
+                if let value = values[pattern] { return value }
+                guard let value = try? NSRegularExpression(pattern: pattern) else { return nil }
+                if values.count < 32 { values[pattern] = value }
+                return value
+            }
+        }
+    }
+    private static func replacing(_ pattern: String, in value: String, with replacement: String = "") -> String {
+        guard let regex = expressions.regex(pattern) else { return value }
+        return regex.stringByReplacingMatches(in: value, range: NSRange(value.startIndex..., in: value), withTemplate: replacement)
+    }
+
     public static func parse(path: String, libraryKind: MediaLibraryKind) -> MediaMetadata {
         let file = (path as NSString).lastPathComponent
-        var stem = (file as NSString).deletingPathExtension
-        let episode = captures("(?i)(?:S(\\d{1,2})[ ._-]*E(\\d{1,3})|(\\d{1,2})x(\\d{1,3})|第(\\d{1,2})季[ ._-]*第(\\d{1,3})集)", stem)
+        let rawStem = (file as NSString).deletingPathExtension
+        var stem = cleanTechnicalSuffix(rawStem)
+        var folder = FileServicePath.parent(path)
+        let parent = (folder as NSString).lastPathComponent
+        let folderSeason = captures("(?i)^(?:season[ ._-]*|s|第)(\\d{1,2})(?:季)?$", parent)?.values[0].flatMap(Int.init)
+        if folderSeason != nil { folder = FileServicePath.parent(folder) }
         var season: Int?, number: Int?
-        if let episode {
+        let fullEpisode = captures("(?i)(?:S(\\d{1,2})[ ._-]*E(\\d{1,3})(?!\\d)|(\\d{1,2})x(\\d{1,3})(?!\\d)|第(\\d{1,2})季[ ._-]*第(\\d{1,3})集)", stem)
+        if let episode = fullEpisode {
             season = episode.values[0].flatMap(Int.init) ?? episode.values[2].flatMap(Int.init) ?? episode.values[4].flatMap(Int.init)
             number = episode.values[1].flatMap(Int.init) ?? episode.values[3].flatMap(Int.init) ?? episode.values[5].flatMap(Int.init)
             stem = String(stem.prefix(episode.offset))
+        } else if libraryKind == .television || folderSeason != nil {
+            // Incomplete episode markers need TV context: movie sequels are not episodes.
+            let shortEpisode = captures("(?i)(?:^|[ ._-])E(\\d{1,3})$", stem)
+                ?? captures("[ ._]+-[ ._]*(\\d{1,3})$", stem)
+                ?? (folderSeason != nil ? captures("^(\\d{1,3})$", stem) : nil)
+            if let episode = shortEpisode {
+                number = episode.values[0].flatMap(Int.init)
+                stem = String(stem.prefix(episode.offset))
+            }
         }
-        let yearMatch = captures("(?:[ ._(\\[]|^)((?:19|20)\\d{2})(?:[ ._)\\]]|$)", stem)
-        let year = yearMatch?.values.first.flatMap { $0 }.flatMap(Int.init)
-        if let yearMatch { stem = String(stem.prefix(yearMatch.offset)) }
-        stem = stem.replacingOccurrences(of: "(?i)[ ._-](?:2160p|1080p|720p|bluray|web[ ._-]?dl|remux|h264|h265|x264|x265|hevc|hdr|dv|chs|cht).*$", with: "", options: .regularExpression)
-        stem = stem.replacingOccurrences(of: ".", with: " ").replacingOccurrences(of: "_", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        var originalTitle: String?
-        // A bracketed Chinese title followed by the original title is common in NAS filenames.
-        // Release group prefixes such as [BOBO] are not bilingual titles.
-        if let bilingual = captures("^\\[([^\\]]+)\\]\\s*(.+)$", stem),
-           let localized = bilingual.values[0], let original = bilingual.values[1],
+        let television = fullEpisode != nil || number != nil || libraryKind == .television
+        if television { season = season ?? folderSeason ?? 1 }
+        stem = removingReleasePrefix(stem)
+        // Preserve the localized title (including punctuation) while parsing the original title.
+        let bilingual = captures("^\\[([^\\]]+)\\][ ._]*(.+)$", stem)
+            ?? captures("^\\(([^)]+)\\)[ ._]*(.+)$", stem)
+        var localizedTitle: String?
+        if let bilingual, let localized = bilingual.values[0], let original = bilingual.values[1],
            localized.range(of: "\\p{Han}", options: .regularExpression) != nil,
            original.range(of: "[A-Za-z]", options: .regularExpression) != nil {
-            stem = localized; originalTitle = original.trimmingCharacters(in: .whitespacesAndNewlines)
+            localizedTitle = localized; stem = original
         }
-        stem = stem.trimmingCharacters(in: CharacterSet(charactersIn: originalTitle == nil ? " -()[]" : " -"))
-        let television = episode != nil || libraryKind == .television
-        if television && (stem.isEmpty || Int(stem) != nil) {
-            var folder = FileServicePath.parent(path)
-            let parent = (folder as NSString).lastPathComponent
-            if let match = captures("(?i)(?:season|s|第)[ ._-]*(\\d{1,2})", parent) {
-                season = season ?? match.values[0].flatMap(Int.init); folder = FileServicePath.parent(folder)
-            }
-            stem = (folder as NSString).lastPathComponent
-        }
-        if stem.isEmpty { stem = (file as NSString).deletingPathExtension }
+        let parsed = titleAndYear(stem)
+        stem = parsed.title
+        let originalTitle = localizedTitle == nil || stem.isEmpty ? nil : stem
+        if let localizedTitle { stem = localizedTitle }
+        if television && stem.isEmpty { stem = titleAndYear((folder as NSString).lastPathComponent).title }
+        if stem.isEmpty { stem = rawStem }
         if television {
             let base = MediaLibraryIdentity.showTitle(stem)
             if !base.isEmpty { stem = base }
         }
-        return .init(title: stem, originalTitle: originalTitle, year: year, kind: television ? .television : .movies,
-                     showTitle: television ? stem : nil, season: television ? (season ?? 1) : nil, episode: number)
+        return .init(title: stem, originalTitle: originalTitle, year: parsed.year, kind: television ? .television : .movies,
+                     showTitle: television ? stem : nil, season: season, episode: number)
+    }
+    private static func cleanTechnicalSuffix(_ value: String) -> String {
+        replacing("(?i)[ ._-](?:2160p|1080[pi]|720p|480p|bluray|blu[ ._-]?ray|web[ ._-]?(?:dl|rip)|hdtv|bdrip|brrip|remux|h264|h265|x264|x265|hevc|hdr10\\+?|hdr|dv|chs|cht)(?=$|[ ._\\-\\[\\]()]).*$", in: value)
+    }
+    private static func removingReleasePrefix(_ value: String) -> String {
+        var value = value
+        for _ in 0..<4 {
+            guard let match = captures("^\\[([A-Z0-9._-]{2,32})\\][ ._]*(.+)$", value),
+                  let tag = match.values[0], tag.range(of: "[A-Z]", options: .regularExpression) != nil,
+                  let rest = match.values[1], rest.range(of: "[A-Za-z\\p{Han}]", options: .regularExpression) != nil else { break }
+            value = rest
+        }
+        return value
+    }
+    private static func titleAndYear(_ value: String) -> (title: String, year: Int?) {
+        var title = cleanTechnicalSuffix(value), year: Int?
+        let separators = CharacterSet(charactersIn: " ._-()[]")
+        if let regex = expressions.regex("(?<![\\p{L}\\p{N}])((?:19|20)\\d{2})(?![\\p{L}\\p{N}])") {
+            // A leading number may be the title (1917 / 2001); prefer a trailing release year.
+            for match in regex.matches(in: title, range: NSRange(title.startIndex..., in: title)).reversed() {
+                guard let range = Range(match.range, in: title) else { continue }
+                let prefix = String(title[..<range.lowerBound]).trimmingCharacters(in: separators)
+                let suffix = String(title[range.upperBound...]).trimmingCharacters(in: separators)
+                guard !prefix.isEmpty, suffix.isEmpty || suffix.range(of: "(?i)^(?:remastered|extended|unrated|proper|repack|limited|director.?s?[ ._-]*cut|\\{(?:tmdb|imdb)-)", options: .regularExpression) != nil else { continue }
+                year = Int(title[range]); title = prefix; break
+            }
+        }
+        title = title.replacingOccurrences(of: ".", with: " ").replacingOccurrences(of: "_", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(separators))
+        return (title, year)
     }
     public static func normalizedTitle(_ title: String) -> String {
         title.replacingOccurrences(of: "(?<=[A-Za-z0-9])\\s*&\\s*(?=[A-Za-z0-9])", with: " and ", options: .regularExpression)
@@ -53,7 +108,7 @@ public enum MediaFilenameParser {
             .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined()
     }
     private static func captures(_ pattern: String, _ text: String) -> (values: [String?], offset: Int)? {
-        guard let regex = try? NSRegularExpression(pattern: pattern), let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+        guard let regex = expressions.regex(pattern), let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let full = Range(match.range, in: text) else { return nil }
         return ((1..<match.numberOfRanges).map { Range(match.range(at: $0), in: text).map { String(text[$0]) } }, text.distance(from: text.startIndex, to: full.lowerBound))
     }

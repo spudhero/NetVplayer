@@ -266,7 +266,9 @@ public final class SourceManager: @unchecked Sendable {
 
     /// 查找匹配的提取器并处理 URL，保留播放层需要的请求头和直连标记。
     public func fetchResult(url: String) async throws -> (url: String, needParse: Bool, headers: [String: String], fallbackHeaders: [String: String], isDirectMedia: Bool, mpvOptions: [String: String], metadata: [String: String], drivePlaybackPlan: DrivePlaybackPlan?) {
-        return try await fetchResult(url: url, depth: 0)
+        return try await DriveRequestRecovery.withBudget {
+            try await self.fetchResult(url: url, depth: 0)
+        }
     }
 
     public static func externalDriveCandidate(for rawInput: String) -> ExternalDriveCandidate? {

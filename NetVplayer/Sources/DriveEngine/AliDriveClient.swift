@@ -54,15 +54,6 @@ public struct AliShareFile: Sendable {
         )
     }
 
-    public var isPlayableVideo: Bool {
-        DriveMediaClassifier.isPlayableVideo(
-            name: name,
-            formatType: firstNonEmpty([contentType, category, type]),
-            isDirectory: isDirectory,
-            isFile: !isDirectory
-        )
-    }
-
     public var isKnownNonVideoAsset: Bool {
         DriveMediaClassifier.isKnownNonVideoAsset(name: name)
     }
@@ -89,7 +80,8 @@ public final class AliDriveClient: @unchecked Sendable {
     private static let maxPagesPerDirectory = 8
     private static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
 
-    private let httpClient: HTTPClient
+    private let httpClient: DriveHTTPClient
+    private let directoryAuthorization = AliDirectoryAuthorization()
     private let originalDownloadPolls: Int
     private let originalDownloadIntervalMilliseconds: Int
 
@@ -98,7 +90,7 @@ public final class AliDriveClient: @unchecked Sendable {
         originalDownloadPolls: Int = 3,
         originalDownloadIntervalMilliseconds: Int = 400
     ) {
-        self.httpClient = httpClient
+        self.httpClient = DriveHTTPClient(httpClient, provider: .ali)
         self.originalDownloadPolls = max(1, originalDownloadPolls)
         self.originalDownloadIntervalMilliseconds = max(0, originalDownloadIntervalMilliseconds)
     }
@@ -220,6 +212,9 @@ public final class AliDriveClient: @unchecked Sendable {
     }
 
     public func link(reference: DriveFileReference, credential: CloudCredential) async throws -> CloudDriveLink {
+        if DriveRequestRecovery.budget == nil {
+            return try await DriveRequestRecovery.withBudget { try await self.link(reference: reference, credential: credential) }
+        }
         guard reference.provider == .ali else {
             throw DriveEngineError.unsupported("AliDriveClient 只能处理阿里云盘文件引用。")
         }
@@ -247,24 +242,29 @@ public final class AliDriveClient: @unchecked Sendable {
                 pickCode: reference.pickCode,
                 fileName: reference.fileName
             )
-            do {
-                return try await personalPlaybackLink(
-                    file: file,
-                    personal: personal,
-                    auth: auth,
-                    updatedCredential: auth.updatedCredential
-                )
-            } catch where Self.isMissingPersonalFileError(error) {
-                let identity = DriveSavedFileNaming.identity(provider: .ali, pwdID: share.shareID, file: file)
-                try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
-                DiagnosticLog.write("[ALI_SAVED_CACHE] invalidated stale personal reference cacheKey=\(identity.cacheKey) fid=\(personal.fileID)")
+            guard !DriveRequestRecovery.background else { throw DriveMappingVerification.unconfirmed(.ali) }
+            let observed = try await personalFile(driveID: personal.driveID, fileID: personal.fileID, auth: auth)
+            guard observed.fileID == personal.fileID,
+                  observed.driveID.isEmpty || observed.driveID == personal.driveID else {
+                throw DriveMappingVerification.unconfirmed(.ali)
             }
+            guard !observed.isDirectory else { throw DriveMappingVerification.changed(.ali) }
+            if reference.size > 0 {
+                guard observed.size > 0 else { throw DriveMappingVerification.unconfirmed(.ali) }
+                guard observed.size == reference.size else { throw DriveMappingVerification.changed(.ali) }
+            }
+            // A known personal reference never falls through to another share copy.
+            return try await personalPlaybackLink(file: file, personal: personal, auth: auth,
+                updatedCredential: auth.updatedCredential)
         }
         let refreshedShareToken = try await fetchShareToken(share: share)
         return try await link(file: file, share: share, shareToken: refreshedShareToken, auth: auth)
     }
 
     public func link(file: AliShareFile, share: AliShareRequest, shareToken: String, credential: CloudCredential) async throws -> CloudDriveLink {
+        if DriveRequestRecovery.budget == nil {
+            return try await DriveRequestRecovery.withBudget { try await self.link(file: file, share: share, shareToken: shareToken, credential: credential) }
+        }
         let auth = try await authenticate(credential)
         return try await link(file: file, share: share, shareToken: shareToken, auth: auth)
     }
@@ -272,27 +272,20 @@ public final class AliDriveClient: @unchecked Sendable {
     private func link(file: AliShareFile, share: AliShareRequest, shareToken: String, auth: AliAuthenticatedCredential) async throws -> CloudDriveLink {
         if !auth.defaultDriveID.isEmpty {
             do {
-                let identity = DriveSavedFileNaming.identity(provider: .ali, pwdID: share.shareID, file: file)
-                for attempt in 0...1 {
-                    let saved = try await saveShareFile(file: file, share: share, shareToken: shareToken, auth: auth)
-                    do {
-                        return try await personalPlaybackLink(
-                            file: file,
-                            personal: saved.personal,
-                            auth: auth,
-                            updatedCredential: auth.updatedCredential,
-                            temporarySavedFile: true,
-                            savedRecord: saved.record
-                        )
-                    } catch where Self.isMissingPersonalFileError(error) {
-                        try? await DriveSavedFileStore.shared.invalidate(saved.record)
-                        guard attempt == 0 else { throw error }
-                        DiagnosticLog.write("[ALI_SAVED_CACHE] retrying deleted personal file cacheKey=\(identity.cacheKey) fid=\(saved.personal.fileID)")
-                    }
+                let saved = try await saveShareFile(file: file, share: share, shareToken: shareToken, auth: auth)
+                do {
+                    return try await personalPlaybackLink(file: file, personal: saved.personal, auth: auth,
+                        updatedCredential: auth.updatedCredential, temporarySavedFile: true, savedRecord: saved.record)
+                } catch DriveEngineError.noDownloadURL {
+                    throw DriveEngineError.officialPlayURLPending(file.name)
+                } catch {
+                    try await DriveMappingVerification.handle(error, record: saved.record, provider: .ali)
+                    throw error
                 }
-                throw DriveEngineError.noDownloadURL(file.name)
             } catch {
-                if Self.isUnauthorized(error) { throw error }
+                if Self.isUnauthorized(error) || DriveServiceFailure.stopsRecovery(error) { throw error }
+                if case DriveEngineError.transferConfirmationPending = error { throw error }
+                if case DriveEngineError.officialPlayURLPending = error { throw error }
                 DiagnosticLog.write("[ALI_PLAYBACK_FALLBACK] personal route unavailable; trying share fallback reason=\(error.localizedDescription)")
             }
         }
@@ -344,104 +337,61 @@ public final class AliDriveClient: @unchecked Sendable {
         guard !targetDriveID.isEmpty else {
             throw DriveEngineError.loginRequired(.ali)
         }
-        let identity = DriveSavedFileNaming.identity(provider: .ali, pwdID: share.shareID, file: file)
-        let transfer = try await DriveTransferCoordinator.shared.transfer(cacheKey: identity.cacheKey) {
-            let folder = try await self.ensureTransferFolder(for: share, driveID: targetDriveID, auth: auth)
-            if let cached = await DriveSavedFileStore.shared.record(for: identity) {
-                let cacheMatchesFolder = cached.provider == .ali
-                    && cached.driveID == targetDriveID
-                    && cached.parentFID == folder.fileID
-                if cacheMatchesFolder {
-                    do {
-                        let existing = try await self.personalFile(
-                            driveID: targetDriveID,
-                            fileID: cached.savedFID,
-                            auth: auth
-                        )
-                        if !existing.isDirectory,
-                           (existing.parentFileID.isEmpty || existing.parentFileID == folder.fileID) {
-                            let record = self.savedRecord(
-                                identity: identity,
-                                pwdID: share.shareID,
-                                source: file,
-                                personalFile: existing,
-                                parentFileID: folder.fileID,
-                                driveID: targetDriveID
-                            )
-                            try await DriveSavedFileStore.shared.save(record)
-                            DiagnosticLog.write("[ALI_SAVED_CACHE] reused mapping cacheKey=\(identity.cacheKey) fid=\(record.savedFID)")
-                            return DriveSavedFileTransferResult(record: record, updatedCookie: "")
-                        }
-                    } catch {
-                        guard Self.isMissingPersonalFileError(error) else { throw error }
-                    }
+        let baseIdentity = DriveSavedFileNaming.identity(provider: .ali, pwdID: share.shareID, file: file)
+        try await DriveTransferCoordinator.current.checkRecovery(sourceKey: baseIdentity.cacheKey, account: targetDriveID)
+        let cached = try await DriveSavedFileStore.shared.verificationRecord(for: baseIdentity, account: targetDriveID,
+            allowUnscopedCandidate: true)
+        let legacy = try DriveMappingVerification.legacyCandidate(cached, for: baseIdentity,
+            shareID: share.shareID, sourceID: file.fileID, size: file.size)
+        let folder = try await DriveMappingVerification.target(record: cached, provider: .ali, legacy: legacy) {
+            try await self.ensureTransferFolder(for: share, driveID: targetDriveID, auth: auth)
+        }
+        let identity = baseIdentity.scoped(account: targetDriveID, target: folder.fileID)
+        if let cached {
+            do {
+                guard cached.driveID == targetDriveID, cached.parentFID == folder.fileID else {
+                    try await DriveMappingVerification.invalidate(cached, provider: .ali, legacy: legacy)
                 }
-                if cacheMatchesFolder {
-                    try? await DriveSavedFileStore.shared.invalidate(cached)
-                } else {
-                    try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
+                let existing = try await personalFile(driveID: targetDriveID, fileID: cached.savedFID, auth: auth)
+                if !existing.driveID.isEmpty && existing.driveID != targetDriveID {
+                    throw DriveMappingVerification.unconfirmed(.ali)
                 }
-                DiagnosticLog.write("[ALI_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(cached.savedFID)")
+                let verified = try await DriveMappingVerification.verified(cached, identity: identity, legacy: legacy,
+                    file: .init(id: existing.fileID, parent: existing.parentFileID,
+                                size: existing.size, isDirectory: existing.isDirectory))
+                return AliSavedFileResult(personal: personalReference(from: verified), record: verified)
+            } catch {
+                try await DriveMappingVerification.handle(error, record: cached, provider: .ali, legacy: legacy)
+                throw error
             }
-
-            let rejectedFIDs = await DriveSavedFileStore.shared.rejectedFileIDs(cacheKey: identity.cacheKey)
-            if let existing = try await self.findPersonalFile(
-                named: identity.targetFileName,
-                size: file.size,
-                parentFileID: folder.fileID,
-                driveID: targetDriveID,
-                auth: auth,
-                excludingFIDs: rejectedFIDs
-            ) {
-                let record = self.savedRecord(
-                    identity: identity,
-                    pwdID: share.shareID,
-                    source: file,
-                    personalFile: existing,
-                    parentFileID: folder.fileID,
-                    driveID: targetDriveID
-                )
-                try await DriveSavedFileStore.shared.save(record)
-                DiagnosticLog.write("[ALI_SAVED_CACHE] reused hash-file cacheKey=\(identity.cacheKey) fid=\(record.savedFID)")
-                return DriveSavedFileTransferResult(record: record, updatedCookie: "")
+        }
+        let transfer = try await DriveTransferCoordinator.current.confirmedTransfer(cacheKey: identity.cacheKey,
+            scope: .make(identity: identity, account: targetDriveID, target: folder.fileID,
+                         driveID: targetDriveID, shareID: share.shareID, sourceFileID: file.fileID,
+                         name: file.name, size: file.size, collectionName: share.collectionName)) { attempt in
+            if await attempt.needsSubmission {
+                let before = try await self.listPersonalFiles(parentFileID: folder.fileID, driveID: targetDriveID, auth: auth)
+                _ = try await attempt.submit(previousIDs: Set(before.map(\.fileID))) {
+                    try await self.copyShareFile(file: file, share: share, shareToken: shareToken,
+                        targetDriveID: targetDriveID, targetParentFileID: folder.fileID, auth: auth)
+                }
             }
-
-            let copied = try await self.copyShareFile(
-                file: file,
-                share: share,
-                shareToken: shareToken,
-                targetDriveID: targetDriveID,
-                targetParentFileID: folder.fileID,
-                auth: auth
-            )
-            _ = try await self.renamePersonalFile(
-                driveID: copied.driveID,
-                fileID: copied.fileID,
-                name: identity.targetFileName,
-                auth: auth
-            )
-            let personalFile = AliShareFile(
-                fileID: copied.fileID,
-                name: identity.targetFileName,
-                parentFileID: folder.fileID,
-                driveID: copied.driveID,
-                type: "file",
-                category: "video",
-                size: file.size,
-                contentType: file.contentType,
-                downloadURL: "",
-                playURL: "",
-                isDirectory: false
-            )
+            let personalFile = try await self.confirmTransferredFile(attempt: attempt, source: file,
+                parentID: folder.fileID, driveID: targetDriveID, auth: auth)
+            try await attempt.confirmed(personalFile.fileID)
+            try await DriveTransferContext.current.check()
             let record = self.savedRecord(
                 identity: identity,
                 pwdID: share.shareID,
                 source: file,
                 personalFile: personalFile,
                 parentFileID: folder.fileID,
-                driveID: copied.driveID
+                driveID: targetDriveID
             )
             try await DriveSavedFileStore.shared.save(record)
+            _ = try? await self.renamePersonalFile(driveID: targetDriveID, fileID: personalFile.fileID,
+                name: identity.targetFileName, auth: auth)
+            try await DriveTransferContext.current.check()
             DiagnosticLog.write("[ALI_SAVED_CACHE] saved cacheKey=\(identity.cacheKey) fid=\(record.savedFID) file=\(record.savedFileName)")
             return DriveSavedFileTransferResult(record: record, updatedCookie: "")
         }
@@ -456,7 +406,7 @@ public final class AliDriveClient: @unchecked Sendable {
         targetDriveID: String,
         targetParentFileID: String,
         auth: AliAuthenticatedCredential
-    ) async throws -> (driveID: String, fileID: String) {
+    ) async throws -> DriveTransferSubmission {
         let copyBody: [String: Any] = [
             "share_id": share.shareID,
             "file_id": file.fileID,
@@ -477,10 +427,47 @@ public final class AliDriveClient: @unchecked Sendable {
         let object = try await postJSON(
             url: Self.apiURL(path: "/adrive/v4/batch"),
             headers: requestHeaders(accessToken: auth.accessToken, shareToken: shareToken, deviceAuthorization: auth.deviceAuthorization),
-            body: body
+            body: body,
+            allowsProxyFallback: false
         )
         let copyResult = try batchCopyResult(from: object)
-        return try await savedPersonalFile(from: copyResult, fallbackDriveID: targetDriveID, auth: auth)
+        let data = copyResult["data"] as? [String: Any] ?? copyResult
+        return DriveTransferSubmission(
+            fileID: firstString(data, keys: ["file_id", "fileId", "fid"]),
+            taskID: firstString(data, keys: ["async_task_id", "asyncTaskId", "task_id", "taskId"]))
+    }
+
+    private func confirmTransferredFile(
+        attempt: DriveTransferAttempt, source: AliShareFile, parentID: String,
+        driveID: String, auth: AliAuthenticatedCredential
+    ) async throws -> AliShareFile {
+        let previous = await attempt.previousIDs
+        for poll in 0..<6 {
+            try await DriveTransferContext.current.check()
+            if let taskID = await attempt.taskID, await attempt.fileID == nil {
+                do {
+                    let task = try await postJSON(url: Self.apiURL(path: "/v2/async_task/get"),
+                        headers: requestHeaders(accessToken: auth.accessToken, shareToken: nil, deviceAuthorization: auth.deviceAuthorization),
+                        body: ["async_task_id": taskID])
+                    let data = task["data"] as? [String: Any] ?? task
+                    let result = data["result"] as? [String: Any] ?? data
+                    try await attempt.update(fileID: firstString(result, keys: ["file_id", "fileId", "fid"]))
+                } catch is CancellationError { throw CancellationError() } catch {
+                    // A task read failure still permits directory reconciliation.
+                }
+            }
+            let knownID = await attempt.fileID
+            let files = try await listPersonalFiles(parentFileID: parentID, driveID: driveID, auth: auth)
+            let matches = files.filter { candidate in
+                guard !candidate.isDirectory, candidate.parentFileID.isEmpty || candidate.parentFileID == parentID,
+                      source.size <= 0 || candidate.size == source.size else { return false }
+                if let knownID { return candidate.fileID == knownID }
+                return source.size > 0 && candidate.name == source.name && !previous.contains(candidate.fileID)
+            }
+            if matches.count == 1 { return matches[0] }
+            if poll < 5 { try await Task.sleep(for: .milliseconds(350)) }
+        }
+        throw DriveEngineError.transferConfirmationPending()
     }
 
     private func ensureTransferFolder(
@@ -518,6 +505,8 @@ public final class AliDriveClient: @unchecked Sendable {
         if let existing = files.first(where: { $0.isDirectory && $0.name == name }) {
             return AliPersonalFolder(fileID: existing.fileID)
         }
+
+        if DriveMappingVerification.readOnly { throw DriveMappingVerification.changed(.ali) }
 
         do {
             let object = try await postJSON(
@@ -573,30 +562,16 @@ public final class AliDriveClient: @unchecked Sendable {
                 body: body
             )
             let data = object["data"] as? [String: Any] ?? object
-            let rawItems = (data["items"] as? [[String: Any]])
-                ?? (data["file_list"] as? [[String: Any]])
-                ?? []
-            files.append(contentsOf: rawItems.compactMap(Self.file(from:)))
+            guard let rawItems = (data["items"] as? [[String: Any]])
+                ?? (data["file_list"] as? [[String: Any]]) else { throw DriveMappingVerification.unconfirmed(.ali) }
+            let parsed = rawItems.compactMap(Self.file(from:))
+            guard parsed.count == rawItems.count else { throw DriveMappingVerification.unconfirmed(.ali) }
+            files.append(contentsOf: parsed)
             marker = firstString(data, keys: ["next_marker", "nextMarker", "marker"])
             if marker.isEmpty { break }
         }
+        guard marker.isEmpty else { throw DriveMappingVerification.unconfirmed(.ali) }
         return files
-    }
-
-    private func findPersonalFile(
-        named name: String,
-        size: Int64,
-        parentFileID: String,
-        driveID: String,
-        auth: AliAuthenticatedCredential,
-        excludingFIDs: Set<String>
-    ) async throws -> AliShareFile? {
-        let files = try await listPersonalFiles(parentFileID: parentFileID, driveID: driveID, auth: auth)
-        let matches = files.filter { !$0.isDirectory && !excludingFIDs.contains($0.fileID) && $0.name == name }
-        if size > 0, let exact = matches.first(where: { $0.size == size }) {
-            return exact
-        }
-        return matches.first
     }
 
     private func personalFile(
@@ -611,10 +586,10 @@ public final class AliDriveClient: @unchecked Sendable {
         )
         let data = object["data"] as? [String: Any] ?? object
         if Self.isUnavailablePersonalFile(data) {
-            throw DriveEngineError.api(provider: .ali, statusCode: 404, code: nil, message: "文件不存在或已删除")
+            throw DriveServiceFailure(provider: .ali, reason: .fileMissing, operation: .fileMetadata)
         }
         guard let file = Self.file(from: data) else {
-            throw DriveEngineError.noDownloadURL(fileID)
+            throw DriveMappingVerification.unconfirmed(.ali)
         }
         return file
     }
@@ -676,50 +651,16 @@ public final class AliDriveClient: @unchecked Sendable {
         }
         let status = intValue(response["status"])
         let body = response["body"] as? [String: Any] ?? response
-        if status >= 400 {
+        let businessCode = firstString(body, keys: ["code", "Code"])
+        if status >= 400 || (!businessCode.isEmpty && businessCode != "0") {
             let message = firstNonEmpty([
                 firstString(body, keys: ["message", "msg", "display_message"]),
                 "批量转存失败"
             ])
-            throw DriveEngineError.api(provider: .ali, statusCode: status, code: nil, message: message)
+            throw DriveEngineError.api(provider: .ali, statusCode: status,
+                                       code: businessCode.isEmpty ? nil : (Int(businessCode) ?? -1), message: message)
         }
         return body
-    }
-
-    private func savedPersonalFile(from object: [String: Any], fallbackDriveID: String, auth: AliAuthenticatedCredential) async throws -> (driveID: String, fileID: String) {
-        let data = object["data"] as? [String: Any] ?? object
-        let fileID = firstNonEmpty([
-            firstString(data, keys: ["file_id", "fileId", "fid"]),
-            firstString(object, keys: ["file_id", "fileId", "fid"])
-        ])
-        if !fileID.isEmpty {
-            return (
-                firstNonEmpty([firstString(data, keys: ["drive_id", "driveId"]), fallbackDriveID]),
-                fileID
-            )
-        }
-        let taskID = firstNonEmpty([
-            firstString(data, keys: ["async_task_id", "asyncTaskId", "task_id", "taskId"]),
-            firstString(object, keys: ["async_task_id", "asyncTaskId", "task_id", "taskId"])
-        ])
-        guard !taskID.isEmpty else {
-            throw DriveEngineError.noDownloadURL("阿里云盘转存结果缺少个人文件 ID")
-        }
-        let task = try await postJSON(
-            url: Self.apiURL(path: "/v2/async_task/get"),
-            headers: requestHeaders(accessToken: auth.accessToken, shareToken: nil, deviceAuthorization: auth.deviceAuthorization),
-            body: ["async_task_id": taskID]
-        )
-        let taskData = task["data"] as? [String: Any] ?? task
-        let result = taskData["result"] as? [String: Any] ?? taskData
-        let resultFileID = firstString(result, keys: ["file_id", "fileId", "fid"])
-        guard !resultFileID.isEmpty else {
-            throw DriveEngineError.noDownloadURL("阿里云盘转存任务未返回个人文件 ID")
-        }
-        return (
-            firstNonEmpty([firstString(result, keys: ["drive_id", "driveId"]), fallbackDriveID]),
-            resultFileID
-        )
     }
 
     private func personalPlaybackLink(
@@ -734,6 +675,7 @@ public final class AliDriveClient: @unchecked Sendable {
         do {
             originalResult = .success(try await personalOriginalDownloadWaiting(personal: personal, auth: auth))
         } catch {
+            if DriveServiceFailure.stopsRecovery(error) { throw error }
             originalResult = .failure(error)
         }
 
@@ -810,7 +752,7 @@ public final class AliDriveClient: @unchecked Sendable {
         guard credential.provider == .ali else {
             throw DriveEngineError.unsupported("阿里云盘自动清理需要阿里云盘凭证。")
         }
-        await DriveTransferCoordinator.shared.beginCleanup(cacheKey: cacheKey)
+        await DriveTransferCoordinator.current.beginCleanup(cacheKey: cacheKey)
         do {
             let auth = try await authenticate(credential)
             do {
@@ -825,10 +767,10 @@ public final class AliDriveClient: @unchecked Sendable {
             if !cacheKey.isEmpty {
                 try? await DriveSavedFileStore.shared.remove(cacheKey: cacheKey)
             }
-            await DriveTransferCoordinator.shared.finishCleanup(cacheKey: cacheKey)
+            await DriveTransferCoordinator.current.finishCleanup(cacheKey: cacheKey)
             return auth.updatedCredential
         } catch {
-            await DriveTransferCoordinator.shared.finishCleanup(cacheKey: cacheKey)
+            await DriveTransferCoordinator.current.finishCleanup(cacheKey: cacheKey)
             throw error
         }
     }
@@ -964,6 +906,9 @@ public final class AliDriveClient: @unchecked Sendable {
         defaultDriveID: String,
         userID: String
     ) async throws -> AliAuthenticatedCredential {
+        if let budget = DriveRequestRecovery.budget, !(await budget.claimCredentialRefresh(.ali)) {
+            throw DriveServiceFailure(provider: .ali, reason: .credentialExpired, operation: .authentication)
+        }
         let object = try await postJSON(
             url: Self.authURL(path: "/v2/account/token"),
             headers: ["Content-Type": "application/json; charset=utf-8"],
@@ -1009,29 +954,11 @@ public final class AliDriveClient: @unchecked Sendable {
     }
 
     private static func isUnauthorized(_ error: Error) -> Bool {
-        guard let driveError = error as? DriveEngineError else { return false }
-        guard case let .api(provider, statusCode, _, _) = driveError else { return false }
-        return provider == .ali && statusCode == 401
+        DriveServiceFailure.isCredentialExpired(error, provider: .ali)
     }
 
     private static func isMissingPersonalFileError(_ error: Error) -> Bool {
-        guard let driveError = error as? DriveEngineError,
-              case let .api(provider, statusCode, _, message) = driveError,
-              provider == .ali,
-              statusCode != 410 else {
-            return false
-        }
-        if statusCode == 404 { return true }
-        let normalized = message.lowercased()
-        return [
-            "file not found",
-            "filenotfound",
-            "notfound.file",
-            "文件不存在",
-            "文件已删除",
-            "已在回收站",
-            "trashed"
-        ].contains { normalized.contains($0) }
+        DriveEngineError.invalidatesSavedRecord(error, provider: .ali)
     }
 
     private func authenticatedCredential(
@@ -1107,12 +1034,12 @@ public final class AliDriveClient: @unchecked Sendable {
         return AliShareListPage(files: items, nextMarker: nextMarker)
     }
 
-    private func postJSON(url: String, headers: [String: String], body: [String: Any]) async throws -> [String: Any] {
+    private func postJSON(url: String, headers: [String: String], body: [String: Any], allowsProxyFallback: Bool = true) async throws -> [String: Any] {
         let data = try JSONSerialization.data(withJSONObject: body)
         var requestHeaders = headers
         requestHeaders["Content-Type"] = "application/json; charset=utf-8"
         requestHeaders["User-Agent"] = Self.userAgent
-        let response = try await httpClient.post(url: url, headers: requestHeaders, body: data, timeout: 30)
+        let response = try await httpClient.post(url: url, headers: requestHeaders, body: data, timeout: try DriveTransferContext.readTimeout(30), allowsProxyFallback: allowsProxyFallback && DriveTransferContext.confirmationDeadline == nil, redactsURLInLogs: true)
         if response.statusCode == 204 { return [:] }
         if !(200..<300).contains(response.statusCode) {
             let object = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any]
@@ -1139,7 +1066,8 @@ public final class AliDriveClient: @unchecked Sendable {
             let endpoint = URL(string: url)?.path ?? "接口"
             throw DriveEngineError.api(provider: .ali, statusCode: response.statusCode, code: nil, message: "\(endpoint) 响应不是 JSON")
         }
-        if let code = Self.errorCode(from: object), code != 0 {
+        let stringCode = (object["code"] as? String) ?? (object["Code"] as? String) ?? ""
+        if let code = Self.errorCode(from: object) ?? (stringCode.isEmpty || stringCode == "0" ? nil : -1), code != 0 {
             let message = firstString(object, keys: ["message", "msg", "error"])
             throw DriveEngineError.api(provider: .ali, statusCode: response.statusCode, code: code, message: message.isEmpty ? "接口返回错误" : message)
         }
@@ -1525,4 +1453,114 @@ private func intValue(_ value: Any?) -> Int {
     if let int = value as? Int { return int }
     if let text = value as? String, let parsed = Int(text) { return parsed }
     return 0
+}
+
+extension AliDriveClient {
+    func recoverTransfer(_ record: DriveTransferTask, attempt: DriveTransferAttempt, credential: CloudCredential) async throws -> DriveRecoveredFile? {
+        let scope = record.scope
+        let auth = try await authenticate(credential)
+        guard auth.defaultDriveID == scope.driveID else { throw DriveTaskRecoveryError.scopeChanged }
+        let target = try await ensureTransferFolder(for: .init(originalURL: "", shareID: scope.shareID,
+            collectionName: scope.collectionName), driveID: auth.defaultDriveID, auth: auth)
+        guard target.fileID == scope.target else { throw DriveTaskRecoveryError.scopeChanged }
+        if !record.submitted || record.phase == .failed { return nil }
+        let source = AliShareFile(fileID: scope.sourceFileID, name: scope.name, parentFileID: "",
+            driveID: "", type: "file", category: "", size: scope.size, contentType: "", downloadURL: "", playURL: "", isDirectory: false)
+        let file = try await confirmTransferredFile(attempt: attempt, source: source, parentID: scope.target,
+            driveID: auth.defaultDriveID, auth: auth)
+        return .init(id: file.fileID, name: file.name, parent: scope.target, size: file.size)
+    }
+}
+
+extension AliDriveClient {
+    func personalDirectory(folderID: String, driveID: String, cursor: String?, credential: CloudCredential) async throws -> CloudDirectoryPage {
+        try await withDirectoryAuthorization(credential) { auth in
+        let resolvedDrive = driveID.isEmpty ? auth.defaultDriveID : driveID
+        guard !resolvedDrive.isEmpty else {
+            throw DriveEngineError.unsupported("阿里云盘授权缺少空间标识，请重新登录")
+        }
+        var body: [String: Any] = ["drive_id": resolvedDrive, "parent_file_id": folderID,
+            "limit": 100, "order_by": "name", "order_direction": "ASC"]
+        if let cursor, !cursor.isEmpty { body["marker"] = cursor }
+        let object = try await postJSON(url: Self.apiURL(path: "/adrive/v3/file/list"),
+            headers: requestHeaders(accessToken: auth.accessToken, shareToken: nil, deviceAuthorization: auth.deviceAuthorization), body: body)
+        let data = object["data"] as? [String: Any] ?? object
+        guard let raw = (data["items"] as? [[String: Any]]) ?? (data["file_list"] as? [[String: Any]]) else {
+            throw DriveMappingVerification.unconfirmed(.ali)
+        }
+        let files = raw.compactMap(Self.file(from:))
+        guard files.count == raw.count else { throw DriveMappingVerification.unconfirmed(.ali) }
+        let marker = firstString(data, keys: ["next_marker", "nextMarker"])
+        guard marker.isEmpty || (marker != cursor && !files.isEmpty) else { throw DriveMappingVerification.unconfirmed(.ali) }
+        return CloudDirectoryPage(entries: files.map {
+            .init(id: $0.fileID, name: $0.name, parentID: folderID, driveID: resolvedDrive,
+                  size: $0.size, isDirectory: $0.isDirectory)
+        }, nextCursor: marker.isEmpty ? nil : marker, driveID: resolvedDrive, updatedCredential: auth.updatedCredential)
+        }
+    }
+
+    func personalDirectoryDownload(entry: CloudDirectoryEntry, credential: CloudCredential) async throws -> CloudDriveLink {
+        try await withDirectoryAuthorization(credential) { auth in
+        let driveID = entry.driveID.isEmpty ? auth.defaultDriveID : entry.driveID
+        guard !driveID.isEmpty else { throw DriveEngineError.noDownloadURL(entry.name) }
+        let file = PersonalDriveFileReference(provider: .ali, driveID: driveID, fileID: entry.id, fileName: entry.name, size: entry.size)
+        let original = try await personalOriginalDownloadWaiting(personal: file, auth: auth)
+        return CloudDriveLink(url: original.url, headers: playbackHeaders(),
+            metadata: CloudDirectoryPaging.metadata(entry, provider: .ali), updatedCredential: auth.updatedCredential)
+        }
+    }
+
+    private func withDirectoryAuthorization<T: Sendable>(
+        _ credential: CloudCredential, operation: @Sendable (AliAuthenticatedCredential) async throws -> T
+    ) async throws -> T {
+        let auth = try await directoryAuthorization.resolve(credential) { try await self.authenticate(credential) }
+        do { return try await operation(auth) }
+        catch {
+            guard Self.isUnauthorized(error) else { throw error }
+            await directoryAuthorization.invalidate()
+            try Task.checkCancellation()
+            let current = auth.updatedCredential ?? credential
+            let fresh = try await directoryAuthorization.resolve(current) { try await self.authenticate(current) }
+            return try await operation(fresh)
+        }
+    }
+}
+
+/// Reuse a device session while scanning, and merge simultaneous refreshes for the same credential.
+/// Account changes have different keys; a completed older refresh cannot replace a newer session.
+private actor AliDirectoryAuthorization {
+    private var cached: (keys: Set<String>, value: AliAuthenticatedCredential, expires: Date)?
+    private var inFlight: [String: (id: UUID, task: Task<AliAuthenticatedCredential, Error>)] = [:]
+    private var activeKey: String?
+    private var generation = 0
+
+    func resolve(_ credential: CloudCredential,
+                 operation: @escaping @Sendable () async throws -> AliAuthenticatedCredential) async throws -> AliAuthenticatedCredential {
+        try Task.checkCancellation()
+        let key = try Self.key(credential)
+        if let cached, cached.keys.contains(key), cached.expires > Date() { return cached.value }
+        if activeKey != key { activeKey = key; generation += 1 }
+        let request: (id: UUID, task: Task<AliAuthenticatedCredential, Error>)
+        if let existing = inFlight[key] { request = existing }
+        else { request = (UUID(), Task { try await operation() }); inFlight[key] = request }
+        let currentGeneration = generation
+        defer { if inFlight[key]?.id == request.id { inFlight.removeValue(forKey: key) } }
+        let value = try await request.task.value
+        try Task.checkCancellation()
+        if currentGeneration == generation {
+            var keys: Set<String> = [key]
+            if let updated = value.updatedCredential { keys.insert(try Self.key(updated)) }
+            cached = (keys, value, Date().addingTimeInterval(300))
+        }
+        return value
+    }
+
+    func invalidate() { generation += 1; cached = nil }
+
+    private static func key(_ credential: CloudCredential) throws -> String {
+        var stable = credential
+        stable.updatedAt = Date(timeIntervalSince1970: 0)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return SHA256.hash(data: try encoder.encode(stable)).map { String(format: "%02x", $0) }.joined()
+    }
 }

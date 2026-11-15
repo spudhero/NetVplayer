@@ -3,9 +3,13 @@ import Darwin
 import Foundation
 import Networking
 
-struct CurlRangeTransportError: LocalizedError {
+struct CurlRangeTransportError: LocalizedError, CustomNSError {
     let code: Int32
     let message: String
+
+    static var errorDomain: String { "ProxyServer.CurlRangeTransportError" }
+    var errorCode: Int { Int(code) }
+    var errorUserInfo: [String: Any] { [NSLocalizedDescriptionKey: errorDescription ?? "libcurl request failed"] }
 
     var errorDescription: String? {
         message.isEmpty ? "libcurl range request failed (\(code))" : message

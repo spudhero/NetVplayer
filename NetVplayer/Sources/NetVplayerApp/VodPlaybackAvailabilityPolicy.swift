@@ -51,7 +51,20 @@ enum VodPlaybackAvailabilityPolicy {
     }
 
     static func isVisibleEpisode(_ episode: Episode) -> Bool {
-        let support = SourceManager.shared.support(for: episode.url)
-        return support.kind != "unavailable" && support.kind != "empty"
+        // Visibility only excludes placeholders; opaque Spider IDs are not URLs
+        // to resolve. Keep full protocol checks for actual availability/playback.
+        let input = episode.url.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !input.isEmpty && !input.lowercased().hasPrefix("netvplayer-unavailable:")
+    }
+
+    static func unsupportedReason(
+        for episodes: [Episode],
+        support: (Episode) -> SourceSupport
+    ) -> String? {
+        guard let first = episodes.first else { return nil }
+        let firstSupport = support(first)
+        guard firstSupport.status == .unsupported, !firstSupport.reason.isEmpty,
+              episodes.dropFirst().allSatisfy({ support($0).status == .unsupported }) else { return nil }
+        return firstSupport.reason
     }
 }

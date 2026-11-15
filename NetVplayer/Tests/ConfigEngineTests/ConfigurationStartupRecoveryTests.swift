@@ -328,6 +328,7 @@ private final class RecoveryTestContext {
             userPreferences: preferences,
             providerRuntimeRegistrationOverride: { true },
             providerRuntimeStartupOverride: { false },
+            androidProviderRegistrationOverride: { _ in },
             configurationRefreshSleeper: { delay in
                 fixture.record(delay: delay)
                 if let delayGate { await delayGate.wait() }

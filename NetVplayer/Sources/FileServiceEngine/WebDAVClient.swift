@@ -62,7 +62,7 @@ public actor WebDAVClient: FileServiceClient {
         guard !range.isEmpty, range.lowerBound >= 0, range.count <= 4 * 1024 * 1024 else { return Data() }
         let headers = headers.merging(["Range": "bytes=\(range.lowerBound)-\(range.upperBound - 1)"]) { _, new in new }
         let (data, response) = try await transport.request(url(path), headers: headers, maximumBytes: Int(range.count))
-        guard response.statusCode == 206 || range.lowerBound == 0 else { throw FileServiceError.protocolFailure("服务器不支持范围读取") }
+        try FileHTTPTransport.validateRange(data: data, response: response, requested: range)
         return data
     }
     public func resolve(path: String) async throws -> ResolvedFileResource { .init(url: try url(path), headers: headers) }

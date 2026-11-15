@@ -3,12 +3,13 @@ import http from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
 import WebTorrent from 'webtorrent'
+import { magnetIdentity } from './torrent-contract.mjs'
 
 const [magnetURI, readyPath, storagePath, parentPIDText] = process.argv.slice(2)
 const parentPID = Number(parentPIDText)
 const videoExtensions = new Set(['.mp4', '.mkv', '.m4v', '.mov', '.avi', '.webm', '.ts', '.m2ts'])
 const maximumMetadataBytes = 4 * 1024 * 1024
-const expectedInfoHash = new URL(magnetURI).searchParams.get('xt')?.split(':').pop()?.toLowerCase()
+const { infoHash: expectedInfoHash, torrentURI } = magnetIdentity(magnetURI)
 let readyWritten = false
 let server
 let metadataTimeout
@@ -69,20 +70,20 @@ function parseRange(value, length) {
 }
 
 async function resolveTorrentInput() {
-  if (!expectedInfoHash || expectedInfoHash.length !== 40) return magnetURI
+  if (!expectedInfoHash || expectedInfoHash.length !== 40) return torrentURI
   try {
     const response = await fetch(`https://itorrents.org/torrent/${expectedInfoHash.toUpperCase()}.torrent`, {
       signal: AbortSignal.timeout(10000)
     })
-    if (!response.ok) return magnetURI
+    if (!response.ok) return torrentURI
     const declaredLength = Number(response.headers.get('content-length') ?? 0)
-    if (declaredLength > maximumMetadataBytes) return magnetURI
+    if (declaredLength > maximumMetadataBytes) return torrentURI
     const bytes = new Uint8Array(await response.arrayBuffer())
-    if (!bytes.length || bytes.length > maximumMetadataBytes || bytes[0] !== 0x64) return magnetURI
+    if (!bytes.length || bytes.length > maximumMetadataBytes || bytes[0] !== 0x64) return torrentURI
     metadataSource = 'itorrents'
     return Buffer.from(bytes)
   } catch {
-    return magnetURI
+    return torrentURI
   }
 }
 
@@ -95,7 +96,7 @@ try {
   torrent = client.add(await resolveTorrentInput(), { path: storagePath, deselect: true })
 } catch {
   metadataSource = 'dht'
-  torrent = client.add(magnetURI, { path: storagePath, deselect: true })
+  torrent = client.add(torrentURI, { path: storagePath, deselect: true })
 }
 torrent.on('error', fail)
 torrent.once('ready', () => {

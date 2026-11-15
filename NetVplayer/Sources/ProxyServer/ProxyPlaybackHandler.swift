@@ -330,7 +330,23 @@ public enum ProxyPlaybackHandler {
         localURL: String,
         byteLimit: Int = 16 * 1024 * 1024,
         maxSegments: Int = 2,
-        httpClient: HTTPClient = .shared
+        httpClient: HTTPClient = .shared,
+        session: PlaybackReadSession? = nil,
+        mediaIdentity: PlaybackMediaIdentity? = nil
+    ) async throws -> HLSPlaybackPrefetchResult? {
+        let session = session ?? PlaybackReadSession()
+        let identity = mediaIdentity ?? .init(source: "hls", account: "session", item: session.id.uuidString)
+        let owner = session.makeOwner(mediaIdentity: identity, purpose: .nextEpisode,
+            expiry: ProcessInfo.processInfo.systemUptime + 120)
+        defer { owner.cancel() }
+        return try await owner.perform {
+            try await prefetchOwnedStaticHLS(localURL: localURL, byteLimit: byteLimit,
+                maxSegments: maxSegments, httpClient: httpClient)
+        }
+    }
+
+    private static func prefetchOwnedStaticHLS(localURL: String, byteLimit: Int,
+        maxSegments: Int, httpClient: HTTPClient
     ) async throws -> HLSPlaybackPrefetchResult? {
         guard byteLimit > 0,
               maxSegments > 0,
@@ -345,10 +361,9 @@ public enum ProxyPlaybackHandler {
         try await PlaybackBackgroundBudget.shared.waitForBackgroundPermission()
         let byteLimit = min(byteLimit, Int(PlaybackTransferProfile.backgroundByteLimit))
         await PlaybackPrefetchResponseCache.shared.reset(byteLimit: byteLimit)
-        let playlistResponse = try await fetchLocalPreload(
-            preloadURL(localURL),
-            httpClient: httpClient
-        )
+        let playlistResponse = try await PlaybackBackgroundBudget.shared.withRead(bytes: Int64(byteLimit)) {
+            try await fetchLocalPreload(preloadURL(localURL), httpClient: httpClient)
+        }
         guard (200..<300).contains(playlistResponse.statusCode),
               let playlist = String(data: playlistResponse.data, encoding: .utf8),
               playlist.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") else {
@@ -378,10 +393,9 @@ public enum ProxyPlaybackHandler {
                 try await PlaybackBackgroundBudget.shared.waitForBackgroundPermission()
                 let before = await PlaybackPrefetchResponseCache.shared.snapshot().bytes
                 guard before < byteLimit else { break }
-                let response = try await fetchLocalPreload(
-                    preloadURL(segmentURL),
-                    httpClient: httpClient
-                )
+                let response = try await PlaybackBackgroundBudget.shared.withRead(bytes: Int64(byteLimit - before)) {
+                    try await fetchLocalPreload(preloadURL(segmentURL), httpClient: httpClient)
+                }
                 guard (200..<300).contains(response.statusCode) else { continue }
                 let after = await PlaybackPrefetchResponseCache.shared.snapshot().bytes
                 if after > before { mediaSegments += 1 }

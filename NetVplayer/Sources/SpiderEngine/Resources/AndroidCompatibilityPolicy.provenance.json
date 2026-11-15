@@ -1,0 +1,7 @@
+{
+  "artifact_sha256": "f198970c1934a43cd32169520bc1a80c25e5b0d998e80ef97d458b25bbe1920e",
+  "generator": "Private Provider build; deterministic binary property list",
+  "schema": 1,
+  "source": "private-providers/android-compatibility/compatibility.json",
+  "source_sha256": "339923c61c4d8ccb43c5a6cd4b6b08e6ceb10621143515bd706905704397c8b7"
+}

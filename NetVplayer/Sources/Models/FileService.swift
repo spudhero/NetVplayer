@@ -1,12 +1,19 @@
 import Foundation
 
 public enum FileServiceKind: String, Codable, CaseIterable, Sendable {
-    case webDAV, alist, openList, smb, local
+    case webDAV, alist, openList, smb, ftp, sftp, local, cloudDrive
     public var title: String { switch self {
     case .webDAV: "WebDAV"; case .alist: "AList"; case .openList: "OpenList"
-    case .smb: "SMB"; case .local: "本地目录"
+    case .smb: "SMB"; case .ftp: "FTP / FTPS"; case .sftp: "SFTP"; case .local: "本地目录"; case .cloudDrive: "网盘目录"
     } }
-    public var defaultPort: Int { self == .smb ? 445 : 443 }
+    public var defaultPort: Int { switch self { case .smb: 445; case .ftp: 21; case .sftp: 22; default: 443 } }
+}
+
+/// An account connection, never a cookie or token. Reauthorizing a different account invalidates it.
+public struct CloudDirectoryBinding: Codable, Equatable, Sendable {
+    public var provider: DriveProvider
+    public var accountID: String
+    public init(provider: DriveProvider, accountID: String) { self.provider = provider; self.accountID = accountID }
 }
 
 public enum MetadataSource: String, Codable, CaseIterable, Sendable {
@@ -34,31 +41,70 @@ public struct FileServiceConfiguration: Codable, Identifiable, Equatable, Sendab
     public var share: String
     public var domain: String
     public var guest: Bool
+    /// OpenSSH SHA256 fingerprint, verified before sending SFTP credentials.
+    public var sshHostKeySHA256: String?
+    public var cloudDirectory: CloudDirectoryBinding?
     public init(id: UUID = UUID(), name: String = "", kind: FileServiceKind = .webDAV,
                 address: String = "", port: Int? = nil, rootPath: String = "/", share: String = "",
-                domain: String = "", guest: Bool = false) {
+                domain: String = "", guest: Bool = false, sshHostKeySHA256: String? = nil,
+                cloudDirectory: CloudDirectoryBinding? = nil) {
         self.id = id; self.name = name; self.kind = kind; self.address = address
         self.port = port; self.rootPath = rootPath; self.share = share; self.domain = domain; self.guest = guest
+        self.sshHostKeySHA256 = sshHostKeySHA256
+        self.cloudDirectory = cloudDirectory
     }
     public var siteKey: String { "files-" + id.uuidString.lowercased() }
-    public var endpointIdentity: String { "\(kind.rawValue)|\(address)|\(port ?? 0)|\(share)|\(domain)|\(guest)" }
+    public var endpointIdentity: String {
+        let value = "\(kind.rawValue)|\(address)|\(port ?? 0)|\(share)|\(domain)|\(guest)"
+        if let cloudDirectory, kind == .cloudDrive { return value + "|" + cloudDirectory.provider.rawValue + "|" + cloudDirectory.accountID }
+        return kind == .sftp ? value + "|" + (sshHostKeySHA256 ?? "") : value
+    }
     public func validated() throws -> Self {
         var copy = self
         copy.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !copy.name.isEmpty else { throw FileServiceError.invalidConfiguration("请填写服务名称") }
         if let port, !(1...65535).contains(port) { throw FileServiceError.invalidConfiguration("端口须为 1–65535") }
         copy.rootPath = try FileServicePath.normalize(rootPath)
-        if kind != .local {
+        if kind == .cloudDrive {
+            guard let binding = cloudDirectory, [.quark, .uc, .ali, .baidu, .p115].contains(binding.provider),
+                  UUID(uuidString: binding.accountID) != nil else {
+                throw FileServiceError.invalidConfiguration("请重新选择已登录的网盘账号")
+            }
+            copy.address = binding.provider.displayName
+            copy.port = nil; copy.share = ""; copy.domain = ""; copy.guest = false; copy.sshHostKeySHA256 = nil
+        } else if kind != .local {
             var value = address.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.contains("://") { value = (kind == .smb ? "smb://" : "https://") + value }
+            let defaultScheme: String = switch kind { case .smb: "smb"; case .ftp: "ftp"; case .sftp: "sftp"; default: "https" }
+            if !value.contains("://") { value = defaultScheme + "://" + value }
             guard var components = URLComponents(string: value), let host = components.host, !host.isEmpty,
                   components.user == nil, components.password == nil, components.query == nil,
                   components.fragment == nil else { throw FileServiceError.invalidConfiguration("地址须包含主机，账号密码请单独填写") }
-            let schemes = kind == .smb ? ["smb"] : ["http", "https"]
+            let schemes: [String] = switch kind { case .smb: ["smb"]; case .ftp: ["ftp", "ftps"]; case .sftp: ["sftp"]; default: ["http", "https"] }
             guard schemes.contains(components.scheme?.lowercased() ?? "") else {
                 throw FileServiceError.invalidConfiguration("地址协议与服务类型不符")
             }
             if let port { components.port = port }
+            if let resolvedPort = components.port, !(1...65535).contains(resolvedPort) {
+                throw FileServiceError.invalidConfiguration("端口须为 1–65535")
+            }
+            if kind == .ftp || kind == .sftp {
+                // Keep endpoint and root separate so relative paths never escape the configured root.
+                if !components.path.isEmpty && components.path != "/" {
+                    copy.rootPath = try FileServicePath.join(components.path, copy.rootPath)
+                }
+                components.path = ""
+                if kind == .sftp, sshHostKeySHA256?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                    copy.sshHostKeySHA256 = nil
+                }
+                if kind == .sftp, let fingerprint = sshHostKeySHA256?.trimmingCharacters(in: .whitespacesAndNewlines), !fingerprint.isEmpty {
+                    let raw = fingerprint.hasPrefix("SHA256:") ? String(fingerprint.dropFirst(7)) : fingerprint
+                    let padded = raw + String(repeating: "=", count: (4 - raw.count % 4) % 4)
+                    guard let digest = Data(base64Encoded: padded), digest.count == 32 else {
+                        throw FileServiceError.invalidConfiguration("SSH 主机指纹须为 SHA256 格式")
+                    }
+                    copy.sshHostKeySHA256 = "SHA256:" + digest.base64EncodedString().replacingOccurrences(of: "=", with: "")
+                }
+            }
             if kind == .smb {
                 guard !share.isEmpty, !share.contains("/"), !share.contains("\\") else {
                     throw FileServiceError.invalidConfiguration("请填写共享名，例如 Movies")

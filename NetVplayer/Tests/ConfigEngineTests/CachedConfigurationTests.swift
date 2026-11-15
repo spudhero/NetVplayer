@@ -94,7 +94,8 @@ struct CachedConfigurationTests {
             storageManager: storage,
             userPreferences: preferences,
             providerRuntimeRegistrationOverride: { true },
-            providerRuntimeStartupOverride: { false }
+            providerRuntimeStartupOverride: { false },
+            androidProviderRegistrationOverride: { _ in }
         )
         await state.initialConfigTask?.value
         #expect(state.isConfigLoaded)

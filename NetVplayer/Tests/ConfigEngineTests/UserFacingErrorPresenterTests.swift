@@ -3,6 +3,7 @@ import Testing
 import DriveEngine
 import Models
 import Networking
+import ProviderSDK
 import SpiderEngine
 @testable import NetVplayerApp
 
@@ -72,6 +73,37 @@ import SpiderEngine
     #expect(!copy.contains("抓包"))
 }
 
+@Test func incompleteConfigurationDoesNotDeclareUnregisteredSourcesUnsupported() {
+    let pending = SitePickerMenuItem.unregisteredAndroidStatus(configurationLoaded: false)
+    #expect(pending.text == "尚未检查")
+    #expect(pending.icon == "questionmark.circle")
+    #expect(!pending.detail.contains("格式当前无法加载"))
+    let checked = SitePickerMenuItem.unregisteredAndroidStatus(configurationLoaded: true)
+    #expect(checked.text == ExternalSourceSupportStatus.unsupportedAndroidCsp.userFacingTitle)
+}
+
+@Test func sourceComponentFailureTakesPriorityOverAnOlderSupportedReport() {
+    let failed = SitePickerMenuItem.statusPresentation(for: .native, backend: .androidUnavailable)
+    #expect(failed.text == "组件不可用")
+    #expect(failed.icon == "exclamationmark.triangle")
+    #expect(failed.detail.contains("刷新配置"))
+    let available = SitePickerMenuItem.statusPresentation(for: .native, backend: .androidOriginal)
+    #expect(available.text == nil)
+    #expect(available.icon == "checkmark.circle")
+}
+
+@Test func sourceArtifactFailuresExplainTheComponentWithoutGenericNetworkAdvice() {
+    let errors: [DevelopmentAndroidArtifactError] = [.invalidReference, .downloadFailed, .checksumMismatch, .invalidArchive, .conversionFailed]
+    for error in errors {
+        let presentation = UserFacingErrorPresenter.presentation(for: error, context: .configuration)
+        #expect(presentation.message.contains("视频源组件"))
+        #expect(presentation.recoverySuggestion.isEmpty)
+        #expect(!presentation.combinedMessage.contains("检查配置地址和网络"))
+        #expect(!presentation.combinedMessage.contains("Provider"))
+        #expect(!presentation.combinedMessage.contains("invalidArchive"))
+    }
+}
+
 @Test func playbackDiagnosticsExplainTheFailureWithoutCopyingPrivateDetails() {
     let cases: [(diagnostic: String, expected: String)] = [
         ("HTTP 401 Unauthorized", "播放地址已失效或需要重新授权。请重新打开内容，必要时完成授权后重试。"),
@@ -97,6 +129,19 @@ import SpiderEngine
         #expect(message == item.expected)
         #expect(!message.contains("private-sentinel"))
         #expect(!message.contains("media.example.test"))
+    }
+}
+
+@Test func magnetFailuresExplainTheStageWithoutExposingBridgeDetails() {
+    let timeout = UserFacingErrorPresenter.message(for: WebTorrentMagnetPlaybackError.timedOut, context: .playback)
+    #expect(timeout.contains("等待磁力文件信息超时"))
+    #expect(!timeout.contains("当前内容暂时无法播放"))
+    for failure in [WebTorrentMagnetPlaybackError.invalidMagnet, .bridgeResourcesMissing, .nodeRuntimeMissing,
+                    .launchFailed("/private/account?token=private-sentinel"),
+                    .bridgeFailed("https://private.example/?cookie=private-sentinel")] {
+        let message = UserFacingErrorPresenter.message(for: failure, context: .playback)
+        #expect(!message.contains("private") && !message.contains("token") && !message.contains("cookie"))
+        #expect(message.contains("磁力"))
     }
 }
 
@@ -246,4 +291,20 @@ import SpiderEngine
     #expect(object["androidRuntimeDiagnostic"] == nil)
     #expect(object["status"] as? String == "unsupported-android-csp")
     #expect(try JSONDecoder().decode(ExternalSourceReport.self, from: encoded) == report)
+}
+
+@Test func userFacingOriginalComponentFailuresAreActionableWithoutRemoteDetails() {
+    let cases = [
+        ("android_original_runtimeUnavailable", "请先在设置中安装 Android 原版运行组件。"),
+        ("android_original_runtimeInvalid", "Android 原版运行组件校验失败，请重新安装或回滚组件。"),
+        ("android_player_address_missing", "视频源未返回播放地址，请重试或切换线路。")
+    ]
+    for (code, expected) in cases {
+        let error = ProviderErrorPayload(code: code, message: "token=private-sentinel /Users/private/file")
+        for context: UserFacingErrorContext in [.configuration, .content(sourceName: "Fixture"), .playback] {
+            #expect(UserFacingErrorPresenter.message(for: error, context: context) == expected)
+        }
+    }
+    let unknown = ProviderErrorPayload(code: "remote_unknown", message: "token=private-sentinel")
+    #expect(!UserFacingErrorPresenter.message(for: unknown, context: .playback).contains("private-sentinel"))
 }

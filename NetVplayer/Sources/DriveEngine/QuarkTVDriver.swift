@@ -23,12 +23,12 @@ public struct QuarkTVQRCodeSession: Equatable, Sendable {
 public final class QuarkTVDriver: @unchecked Sendable {
     public let provider: DriveProvider
 
-    private let httpClient: HTTPClient
+    private let httpClient: DriveHTTPClient
     private let profile: TVDriveProfile
 
     public init(provider: DriveProvider = .quark, httpClient: HTTPClient = .shared) {
         self.provider = provider
-        self.httpClient = httpClient
+        self.httpClient = DriveHTTPClient(httpClient, provider: provider)
         self.profile = TVDriveProfile(provider: provider)
     }
 
@@ -77,6 +77,14 @@ public final class QuarkTVDriver: @unchecked Sendable {
     }
 
     public func validate(_ credential: CloudCredential, reference _: DriveFileReference?) async throws -> CloudCredential {
+        try await DriveRequestRecovery.withBudget {
+            try await DriveRequestRecovery.withAccountOperation(credential: credential) {
+                try await self.validateCredential(credential)
+            }
+        }
+    }
+
+    private func validateCredential(_ credential: CloudCredential) async throws -> CloudCredential {
         guard credential.provider == provider else {
             throw DriveEngineError.unsupported(L10n.text("QuarkTVDriver 当前实例只支持{0}。", ["\(provider.localizedDisplayName)"]))
         }
@@ -99,7 +107,8 @@ public final class QuarkTVDriver: @unchecked Sendable {
             validated.updatedAt = Date()
             return validated
         } catch {
-            if let refreshToken = credential.refreshToken, !refreshToken.isEmpty {
+            if DriveServiceFailure.isCredentialExpired(error, provider: provider),
+               let refreshToken = credential.refreshToken, !refreshToken.isEmpty {
                 let refreshed = try await exchangeToken(code: refreshToken, deviceID: deviceID, queryToken: credential.queryToken, isRefresh: true)
                 _ = try await requestOpenAPI(
                     path: "/user",
@@ -407,6 +416,9 @@ private extension QuarkTVDriver {
     }
 
     func exchangeToken(code: String, deviceID: String, queryToken: String?, isRefresh: Bool) async throws -> CloudCredential {
+        if isRefresh, let budget = DriveRequestRecovery.budget, !(await budget.claimCredentialRefresh(provider)) {
+            throw DriveServiceFailure(provider: provider, reason: .credentialExpired, operation: .authentication)
+        }
         let (_, _, reqID) = Self.requestSignature(method: "POST", path: "/token", signKey: profile.signKey, deviceID: deviceID)
         var body: [String: String] = [
             "req_id": reqID,

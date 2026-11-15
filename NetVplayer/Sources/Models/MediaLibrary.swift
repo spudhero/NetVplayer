@@ -136,6 +136,7 @@ public struct MediaRecord: Codable, Identifiable, Equatable, Sendable {
 }
 
 public struct MediaScanProgress: Equatable, Sendable {
+    public var metrics: MediaLibraryMetrics?
     public var libraryID: UUID
     public var files: Int
     public var directories: Int
@@ -143,6 +144,9 @@ public struct MediaScanProgress: Equatable, Sendable {
     public var failedDirectories: [String]
     public var isRunning: Bool
     public var message: String?
+    public var recoveryError: MediaScanRecoveryError?
+    public var taskIssue: TaskDiagnosticIssue?
+    public var isCancelled = false
     public init(libraryID: UUID, files: Int = 0, directories: Int = 0, currentPath: String = "/", failedDirectories: [String] = [], isRunning: Bool = true, message: String? = nil) {
         self.libraryID = libraryID; self.files = files; self.directories = directories; self.currentPath = currentPath
         self.failedDirectories = failedDirectories; self.isRunning = isRunning; self.message = message
@@ -150,12 +154,14 @@ public struct MediaScanProgress: Equatable, Sendable {
 }
 
 public struct MetadataMatchProgress: Equatable, Sendable {
+    public var metrics: MediaLibraryMetrics?
     public var libraryID: UUID
     public var completed: Int
     public var total: Int
     public var matched = 0
     public var needsConfirmation = 0
     public var unmatched = 0
+    public var failed = 0
     public var isRunning: Bool
     public var message: String
     public init(libraryID: UUID, completed: Int = 0, total: Int, isRunning: Bool = true, message: String = "正在匹配影视信息") {

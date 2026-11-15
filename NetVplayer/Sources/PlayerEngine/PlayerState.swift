@@ -28,6 +28,7 @@ public struct PlayerTrackInfo: Identifiable, Equatable, Codable, Sendable {
     public var language: String
     public var format: String
     public var isExternal: Bool
+    public var sourceIndex: Int?
 
     public init(
         id: String,
@@ -35,7 +36,8 @@ public struct PlayerTrackInfo: Identifiable, Equatable, Codable, Sendable {
         name: String = "",
         language: String = "",
         format: String = "",
-        isExternal: Bool = false
+        isExternal: Bool = false,
+        sourceIndex: Int? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -43,6 +45,7 @@ public struct PlayerTrackInfo: Identifiable, Equatable, Codable, Sendable {
         self.language = language
         self.format = format
         self.isExternal = isExternal
+        self.sourceIndex = sourceIndex
     }
 
     public var subtitleKind: SubtitleTrackFormat {
@@ -73,6 +76,8 @@ public final class PlayerState: ObservableObject {
     @Published public var isPlaying: Bool = false
     @Published public var position: Double = 0
     @Published public var duration: Double = 0
+    /// Actual demuxer capability; a duration alone does not prove seek support.
+    @Published public var isSeekable: Bool? = nil
     @Published public var bufferedUntil: Double = 0
     @Published public var isMediaLoading: Bool = false
     @Published public var isSeeking: Bool = false
@@ -84,9 +89,23 @@ public final class PlayerState: ObservableObject {
     @Published public var speed: Float = 1.0
     @Published public var volume: Float = 1.0
     @Published public var isMuted: Bool = false
+    @Published public var volumeControl: PlaybackVolumeControl = .player
     @Published public var videoAspectMode: PlayerVideoAspectMode = .fit
+    @Published public var videoDisplayAspectRatio: Double?
     @Published public var errorMessage: String?
     @Published public var mpvOptionDiagnostics: [MPVOptionDiagnostic] = []
+    @Published public var playbackDiagnostics: PlaybackDiagnostics?
+    @Published public var playbackStatistics: PlaybackStatistics?
+    public var statisticsVisibility = PlaybackStatisticsVisibility()
+    public let playbackSummaries = PlaybackSummaryStore()
+
+    public func setPlaybackInformationVisible(_ visible: Bool, consumer: UUID) {
+        statisticsVisibility.setVisible(visible, consumer: consumer)
+        if !statisticsVisibility.isVisible, playbackStatistics != nil { playbackStatistics = nil }
+    }
+    @Published public var videoCompatibilityMessage: String?
+    @Published public var audioOutputMessage: String?
+    @Published public var audioOutputDevices: [PlaybackAudioOutputDevice] = []
     @Published public var chapters: [PlayerChapter] = []
     @Published public var chapterOwnerID: UUID?
     @Published public var containerEditions: [PlayerEdition] = []

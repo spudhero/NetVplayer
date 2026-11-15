@@ -161,6 +161,8 @@ struct MacCMSInputTests {
     @Test func appStateUsesInitialResultOnceAndDoesNotPersistInvalidInput() async throws {
         let preferenceSuite = "MacCMSInputTests.\(UUID().uuidString)"
         let preferences = UserPreferences(defaults: UserDefaults(suiteName: preferenceSuite)!)
+        preferences.currentVodConfigUrl = ""
+        preferences.currentLiveConfigUrl = ""
         let storageURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("NetVplayer-MacCMS-\(UUID().uuidString)", isDirectory: true)
         let storage = StorageManager(storageDirectory: storageURL)
@@ -180,7 +182,8 @@ struct MacCMSInputTests {
             startProxyServer: false,
             configResolver: ConfigResolver(httpClient: makeHTTPClient()),
             storageManager: storage,
-            userPreferences: preferences
+            userPreferences: preferences,
+            androidProviderRegistrationOverride: { _ in }
         )
         let sourceURL = "https://www.direct.example.test/direct?ac=list&token=keep"
         await appState.loadConfig(url: sourceURL, waitForProviderRuntime: false)

@@ -27,6 +27,10 @@ final class FileServicesState: ObservableObject {
     @Published var mediaFilter = MediaLibraryFilter()
     @Published private(set) var mediaFacets = MediaLibraryFacets()
     @Published var scanProgress: [UUID: MediaScanProgress] = [:]
+    @Published private(set) var scanCheckpoints: [UUID: MediaScanCheckpoint] = [:]
+    @Published private(set) var scanCheckpointError: String?
+    @Published private(set) var scanTaskIssues: [UUID: TaskDiagnosticIssue] = [:]
+    @Published private(set) var scanRequestsInFlight = Set<UUID>()
     @Published var matchProgress: [UUID: MetadataMatchProgress] = [:]
     @Published var verificationURL: URL?
     private var indexTask: Task<Void, Never>?
@@ -34,6 +38,8 @@ final class FileServicesState: ObservableObject {
     private let index: MediaIndex
     private let store: FileServiceStore
     private let runtime: FileServiceRuntime
+    private let cloudPreferences: UserPreferences
+    private let scanner: MediaLibraryScanner
     private let startLibraryScan: @Sendable (MediaLibraryConfiguration) async -> Void
     private var mediaGeneration = 0
     private var loadedLibraryID: UUID?
@@ -47,10 +53,16 @@ final class FileServicesState: ObservableObject {
     enum FileViewMode: String, CaseIterable { case library = "媒体库", files = "文件" }
     init(catalog: FileServiceCatalog? = nil, index: MediaIndex = .shared, serviceID: UUID? = nil,
          store: FileServiceStore = .shared, runtime: FileServiceRuntime? = nil,
-         startLibraryScan: @escaping @Sendable (MediaLibraryConfiguration) async -> Void = { await MediaLibraryScanner.shared.start($0) }) {
+         startLibraryScan: (@Sendable (MediaLibraryConfiguration) async -> Void)? = nil,
+         scanner: MediaLibraryScanner? = nil, cloudPreferences: UserPreferences = .shared) {
         self.index = index; self.serviceID = serviceID; self.store = store
-        self.runtime = runtime ?? (store === FileServiceStore.shared ? .shared : FileServiceRuntime(store: store))
-        self.startLibraryScan = startLibraryScan
+        self.cloudPreferences = cloudPreferences
+        self.runtime = runtime ?? (store === FileServiceStore.shared && cloudPreferences === UserPreferences.shared
+            ? .shared : FileServiceRuntime(store: store, cloudPreferences: cloudPreferences))
+        let scanEngine = scanner ?? (store === FileServiceStore.shared && index === MediaIndex.shared
+            ? .shared : MediaLibraryScanner(index: index, store: store, runtime: self.runtime))
+        self.scanner = scanEngine
+        self.startLibraryScan = startLibraryScan ?? { await scanEngine.start($0) }
         self.catalog = catalog ?? store.load()
         NotificationCenter.default.publisher(for: .mediaLibraryIndexDidChange).receive(on: DispatchQueue.main)
             .sink { [weak self] notification in
@@ -59,7 +71,10 @@ final class FileServicesState: ObservableObject {
             }.store(in: &observers)
         NotificationCenter.default.publisher(for: .mediaLibraryScanDidChange).receive(on: DispatchQueue.main)
             .sink { [weak self] notification in
-                if let progress = notification.object as? MediaScanProgress { self?.scanProgress[progress.libraryID] = progress }
+                if let progress = notification.object as? MediaScanProgress {
+                    self?.scanProgress[progress.libraryID] = progress
+                    self?.scanTaskIssues[progress.libraryID] = progress.taskIssue
+                }
             }.store(in: &observers)
         NotificationCenter.default.publisher(for: .metadataVerificationRequired).receive(on: DispatchQueue.main)
             .sink { [weak self] notification in self?.verificationURL = notification.object as? URL }.store(in: &observers)
@@ -72,7 +87,7 @@ final class FileServicesState: ObservableObject {
     var isRefreshing: Bool {
         if mode == .files { return busy }
         guard let id = selectedLibraryID else { return false }
-        return scanProgress[id]?.isRunning == true || matchProgress[id]?.isRunning == true
+        return scanRequestsInFlight.contains(id) || scanProgress[id]?.isRunning == true || matchProgress[id]?.isRunning == true
     }
     var visibleEntries: [FileEntry] {
         entries.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }.sorted { lhs, rhs in
@@ -107,7 +122,7 @@ final class FileServicesState: ObservableObject {
         self.path = path; search = ""; error = nil; directoryError = nil; busy = true
         directoryTask = Task {
             do {
-                let client = try await FileServiceRuntime.shared.client(for: id)
+                let client = try await runtime.client(for: id)
                 let entries = try await client.allEntries(path: path)
                 try Task.checkCancellation()
                 guard requestGeneration == self.generation else { return }
@@ -123,6 +138,30 @@ final class FileServicesState: ObservableObject {
     func directoryEntries(serviceID: UUID, path: String) async throws -> [FileEntry] {
         let client = try await runtime.client(for: serviceID)
         return try await client.allEntries(path: path)
+    }
+    /// Reuses an authorized account connection; folder selection happens before any scan starts.
+    func connectCloudDirectory(_ provider: DriveProvider) async throws -> FileServiceConfiguration {
+        let preferences = cloudPreferences
+        let account = try await Task.detached { try preferences.cloudDirectoryAccount(provider) }.value
+        let existing = store.load().services.first { $0.kind == .cloudDrive && $0.cloudDirectory == account.binding }
+        let service = try (existing ?? FileServiceConfiguration(name: provider.displayName, kind: .cloudDrive,
+            cloudDirectory: account.binding)).validated()
+        try await runtime.test(configuration: service, credentials: .init())
+        try Task.checkCancellation()
+        guard try preferences.cloudDirectoryAccount(provider).binding == account.binding else {
+            throw FileServiceError.authorizationExpired
+        }
+        var latest = store.load()
+        if let existing {
+            guard latest.services.contains(existing) else { throw FileServiceError.unavailable }
+        } else if let saved = latest.services.first(where: { $0.kind == .cloudDrive && $0.cloudDirectory == account.binding }) {
+            reload(); return saved
+        } else {
+            latest.services.append(service)
+            try store.save(latest)
+        }
+        reload()
+        return service
     }
     func cancelMediaLoad(clear: Bool = false) {
         mediaGeneration += 1; indexTask?.cancel(); indexTask = nil; mediaLoading = false
@@ -156,6 +195,7 @@ final class FileServicesState: ObservableObject {
         let targetCount = append ? 100 : max(100, mediaRecords.count)
         indexTask = Task {
             do {
+                if !isRefreshing { await loadScanCheckpoint(libraryID: id) }
                 let resolvedFilter = try await index.canonicalFilter(libraryID: id, filter: filter)
                 let facets = try await index.facets(libraryID: id)
                 var records: [MediaRecord] = []
@@ -206,29 +246,60 @@ final class FileServicesState: ObservableObject {
     }
     func refreshCurrentView() {
         if mode == .files { load(path: path) }
-        else if let library = selectedLibrary { Task { await MediaLibraryScanner.shared.start(library) } }
+        else { requestMediaScan(.rescan) }
+    }
+    var selectedScanCheckpoint: MediaScanCheckpoint? { selectedLibraryID.flatMap { scanCheckpoints[$0] } }
+    func canContinueScan(_ checkpoint: MediaScanCheckpoint) -> Bool {
+        guard let library = catalog.libraries.first(where: { $0.id == checkpoint.libraryID }),
+              let revision = try? MediaLibraryScanner.configurationRevision(library, store: store) else { return false }
+        return checkpoint.canContinue(revision: revision)
+    }
+    func scanCheckpointMatchesConfiguration(_ checkpoint: MediaScanCheckpoint) -> Bool {
+        guard let library = catalog.libraries.first(where: { $0.id == checkpoint.libraryID }),
+              let revision = try? MediaLibraryScanner.configurationRevision(library, store: store) else { return false }
+        return checkpoint.configurationRevision == revision
+    }
+    private func loadScanCheckpoint(libraryID: UUID) async {
+        do {
+            let checkpoint = try await scanner.checkpoint(libraryID: libraryID)
+            scanCheckpoints[libraryID] = checkpoint; scanCheckpointError = nil
+            scanTaskIssues[libraryID] = await scanner.diagnosticIssue(libraryID: libraryID)
+        } catch {
+            scanCheckpointError = UserFacingErrorPresenter.message(for: error, context: .storage(operation: L10n.text("读取扫描检查点")))
+        }
+    }
+    func requestMediaScan(_ request: MediaScanRequest) {
+        guard let library = selectedLibrary, !isRefreshing else { return }
+        scanRequestsInFlight.insert(library.id)
+        Task {
+            if request == .rescan { await startLibraryScan(library) }
+            else { await scanner.start(library, request: request) }
+            await scanner.waitForScan(libraryID: library.id)
+            await loadScanCheckpoint(libraryID: library.id)
+            scanRequestsInFlight.remove(library.id)
+        }
     }
     func cancelCurrentRefresh() {
         if mode == .files { cancel() }
-        else if let id = selectedLibraryID { Task { await MediaLibraryScanner.shared.cancel(libraryID: id); await MetadataMatcher.shared.cancel(libraryID: id) } }
+        else if let id = selectedLibraryID { Task { await scanner.cancel(libraryID: id); await MetadataMatcher.shared.cancel(libraryID: id) } }
     }
     func saveLibrary(_ library: MediaLibraryConfiguration) async throws {
         var library = library; library.path = try FileServicePath.normalize(library.path)
         guard !library.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw FileServiceError.invalidConfiguration("请填写媒体库名称") }
         let client = try await FileServiceRuntime.shared.client(for: library.serviceID)
         _ = try await client.allEntries(path: library.path)
-        await MediaLibraryScanner.shared.cancel(libraryID: library.id)
+        await scanner.cancel(libraryID: library.id)
         await MetadataMatcher.shared.cancel(libraryID: library.id)
-        await MediaLibraryScanner.shared.waitForScan(libraryID: library.id)
+        await scanner.waitForScan(libraryID: library.id)
         await MetadataMatcher.shared.waitForMatching(libraryID: library.id)
         var updated = catalog; updated.libraries.removeAll { $0.id == library.id }; updated.libraries.append(library)
         try FileServiceStore.shared.save(updated); reload()
         selectedLibraryID = library.id; loadMedia()
-        await MediaLibraryScanner.shared.start(library)
+        await scanner.start(library)
     }
     func removeLibrary(_ library: MediaLibraryConfiguration) async throws {
-        await MediaLibraryScanner.shared.cancel(libraryID: library.id); await MetadataMatcher.shared.cancel(libraryID: library.id)
-        await MediaLibraryScanner.shared.waitForScan(libraryID: library.id)
+        await scanner.cancel(libraryID: library.id); await MetadataMatcher.shared.cancel(libraryID: library.id)
+        await scanner.waitForScan(libraryID: library.id)
         await MetadataMatcher.shared.waitForMatching(libraryID: library.id)
         var updated = catalog; updated.libraries.removeAll { $0.id == library.id }; try FileServiceStore.shared.save(updated)
         try await index.removeLibrary(library.id); reload()
@@ -267,9 +338,9 @@ final class FileServicesState: ObservableObject {
         guard let libraryID = target.reference.libraryID, catalog.libraries.contains(where: { $0.id == libraryID }), groups.count >= 2 else {
             throw FileServiceError.invalidConfiguration("请选择至少两个剧集条目")
         }
-        await MediaLibraryScanner.shared.cancel(libraryID: libraryID)
+        await scanner.cancel(libraryID: libraryID)
         await MetadataMatcher.shared.cancel(libraryID: libraryID)
-        await MediaLibraryScanner.shared.waitForScan(libraryID: libraryID)
+        await scanner.waitForScan(libraryID: libraryID)
         await MetadataMatcher.shared.waitForMatching(libraryID: libraryID)
         var records: [MediaRecord] = []
         for group in groups {
@@ -286,6 +357,12 @@ final class FileServicesState: ObservableObject {
         let configuration = try configuration.validated()
         // Saving always verifies the exact draft, including any changed endpoint or password.
         try await FileServiceRuntime.shared.test(configuration: configuration, credentials: credentials, bookmark: bookmark)
+        await scanner.cancel(serviceID: configuration.id)
+        await MetadataMatcher.shared.cancel(serviceID: configuration.id)
+        for library in catalog.libraries where library.serviceID == configuration.id {
+            await scanner.waitForScan(libraryID: library.id)
+            await MetadataMatcher.shared.waitForMatching(libraryID: library.id)
+        }
         try await Task.detached {
             try FileServiceStore.shared.saveCredentials(credentials, for: configuration)
             if let bookmark { try FileServiceStore.shared.saveBookmark(bookmark, for: configuration.id) }
@@ -293,22 +370,16 @@ final class FileServicesState: ObservableObject {
         var updated = catalog
         updated.services.removeAll { $0.id == configuration.id }; updated.services.append(configuration)
         try FileServiceStore.shared.save(updated)
-        await MediaLibraryScanner.shared.cancel(serviceID: configuration.id)
-        await MetadataMatcher.shared.cancel(serviceID: configuration.id)
-        for library in catalog.libraries where library.serviceID == configuration.id {
-            await MediaLibraryScanner.shared.waitForScan(libraryID: library.id)
-            await MetadataMatcher.shared.waitForMatching(libraryID: library.id)
-        }
         await FileServiceRuntime.shared.invalidate(serviceID: configuration.id)
         reload()
         if serviceID == configuration.id { load(path: "/") }
     }
     func remove(_ configuration: FileServiceConfiguration) async throws {
         if serviceID == configuration.id { cancel(); cancelMediaLoad(clear: true); selectedLibraryID = nil; serviceID = nil; entries = [] }
-        await MediaLibraryScanner.shared.cancel(serviceID: configuration.id)
+        await scanner.cancel(serviceID: configuration.id)
         await MetadataMatcher.shared.cancel(serviceID: configuration.id)
         for library in catalog.libraries where library.serviceID == configuration.id {
-            await MediaLibraryScanner.shared.waitForScan(libraryID: library.id)
+            await scanner.waitForScan(libraryID: library.id)
             await MetadataMatcher.shared.waitForMatching(libraryID: library.id)
             try await index.removeLibrary(library.id)
         }

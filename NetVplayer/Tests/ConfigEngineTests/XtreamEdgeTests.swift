@@ -91,6 +91,35 @@ private struct XtreamEdgeFixture {
 }
 
 final class XtreamEdgeTests: XCTestCase {
+    func testPreviewRevalidatesQuotaAndRetiresOldCredentialChannel() async throws {
+        let fixture = try XtreamEdgeFixture(authJSON: "{\"user_info\":{\"auth\":1,\"status\":\"Active\",\"max_connections\":3,\"active_cons\":1}}",
+            liveRows: "[{\"stream_id\":41,\"name\":\"Fixture\",\"category_id\":\"1\"}]")
+        defer { fixture.cleanup() }
+        let groups = try await fixture.provider.liveGroups()
+        let channel = try XCTUnwrap(groups.first?.channels.first)
+        let spec = try await fixture.provider.livePreviewSpec(channel: channel)
+        XCTAssertTrue(spec.url.hasSuffix("/live/alice/fictional-secret/41.ts"))
+        XCTAssertTrue(spec.metadata.isEmpty)
+        // Replace only the auth response. A cached successful login must not admit another preview.
+        XtreamEdgeProtocol.install(host: fixture.host) { _ in
+            "{\"user_info\":{\"auth\":1,\"status\":\"Active\",\"max_connections\":1,\"active_cons\":0}}"
+        }
+        do { _ = try await fixture.provider.livePreviewSpec(channel: channel); XCTFail("single connection") }
+        catch { XCTAssertTrue(error is LivePreviewError) }
+        fixture.credentials.set(.init(username: "bob", password: "new-secret"))
+        do { _ = try await fixture.provider.livePreviewSpec(channel: channel); XCTFail("stale credential channel") }
+        catch { XCTAssertTrue(error is CancellationError) }
+    }
+
+    func testUnknownPreviewQuotaDoesNotExposePlaybackURL() async throws {
+        let fixture = try XtreamEdgeFixture(liveRows: "[{\"stream_id\":41,\"name\":\"Fixture\",\"category_id\":\"1\"}]")
+        defer { fixture.cleanup() }
+        let groups = try await fixture.provider.liveGroups()
+        let channel = try XCTUnwrap(groups.first?.channels.first)
+        do { _ = try await fixture.provider.livePreviewSpec(channel: channel); XCTFail("missing quota") }
+        catch { XCTAssertEqual((error as? LivePreviewError)?.errorDescription, LivePreviewError.connectionLimit.errorDescription) }
+    }
+
     func testAuthorizationRequiresExplicitPositiveAuthValue() async throws {
         for auth in ["", "\"auth\":null,", "\"auth\":0,", "\"auth\":false,", "\"auth\":2,", "\"auth\":\"false\","] {
             let fixture = try XtreamEdgeFixture(authJSON: "{\"user_info\":{\(auth)\"status\":\"Active\"}}")
@@ -294,7 +323,8 @@ final class XtreamEdgeTests: XCTestCase {
             storageManager: StorageManager(storageDirectory: directory),
             userPreferences: preferences,
             providerRuntimeRegistrationOverride: { false },
-            providerRuntimeStartupOverride: { false }
+            providerRuntimeStartupOverride: { false },
+            androidProviderRegistrationOverride: { _ in }
         )
         await state.initialConfigTask?.value
         XCTAssertTrue(state.isConfigLoaded)

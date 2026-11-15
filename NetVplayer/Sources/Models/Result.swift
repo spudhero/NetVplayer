@@ -58,6 +58,12 @@ public struct PlaybackVerificationResult: Codable, Equatable, Sendable {
 
 /// Spider/CMS API 统一返回结果
 public struct Result: Codable, Sendable {
+    /// Local observation of the Android category parser, excluded from Provider JSON.
+    public enum AndroidCategoryPayload: String, Codable, Sendable {
+        case object, emptyText, nullValue, invalidJSON, invalidObject
+    }
+    public var androidCategoryPayload: AndroidCategoryPayload? = nil
+
     /// 分类列表
     public var types: [VodClass]
     /// 视频列表
@@ -95,8 +101,14 @@ public struct Result: Codable, Sendable {
 
     /// 外挂字幕列表
     public var subs: [Sub]
+    /// Original player-provided danmaku descriptor; distinct from configuration search.
+    public var danmaku: [ProviderDanmaku]
     /// Session-only ownership of file-service connections and local directory authorization.
     public var fileResourceLeaseID: String?
+    /// Trusted in-process file provider output; excluded from Provider JSON.
+    public var mediaServer: MediaServerPlayback? = nil
+    public var disc: DiscPlayback? = nil
+    public var hostMagnet: HostMagnetPlayback? = nil
     /// DRM 配置
     public var drm: Drm?
     /// 可供用户选择的播放候选；旧 Provider 默认留空
@@ -133,6 +145,7 @@ public struct Result: Codable, Sendable {
         jxFrom: String = "",
         key: String = "",
         subs: [Sub] = [],
+        danmaku: [ProviderDanmaku] = [],
         fileResourceLeaseID: String? = nil,
         drm: Drm? = nil,
         playbackCandidates: [PlaybackCandidate] = [],
@@ -160,6 +173,7 @@ public struct Result: Codable, Sendable {
         self.jxFrom = jxFrom
         self.key = key
         self.subs = subs
+        self.danmaku = danmaku
         self.fileResourceLeaseID = fileResourceLeaseID
         self.drm = drm
         self.playbackCandidates = playbackCandidates
@@ -176,7 +190,7 @@ public struct Result: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case pageCountIsKnown, pageIsKnown
         case fileResourceLeaseID
-        case types, list, filters, url, parse, jx, flag, header, playUrl, externalAudioURL, contentLength, format, artwork, click, jxFrom, key, subs, drm, playbackCandidates, interaction, page, pagecount, total, msg, code
+        case types, list, filters, url, parse, jx, flag, header, playUrl, externalAudioURL, contentLength, format, artwork, click, jxFrom, key, subs, danmaku, drm, playbackCandidates, interaction, page, pagecount, total, msg, code
     }
 
     private struct ClassKey: CodingKey {
@@ -227,6 +241,7 @@ public struct Result: Codable, Sendable {
         self.subs = (try? container.decode([Sub].self, forKey: .subs))
             ?? (try? legacyPlayer.decode([Sub].self, forKey: .sub))
             ?? []
+        self.danmaku = (try? ProviderDanmaku.decodeList(from: container.superDecoder(forKey: .danmaku))) ?? []
         self.drm = try? container.decode(Drm.self, forKey: .drm)
         self.fileResourceLeaseID = try? container.decode(String.self, forKey: .fileResourceLeaseID)
         self.playbackCandidates = (try? container.decode([PlaybackCandidate].self, forKey: .playbackCandidates)) ?? []

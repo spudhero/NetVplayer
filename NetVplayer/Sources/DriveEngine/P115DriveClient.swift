@@ -44,10 +44,6 @@ public struct P115ShareFile: Sendable {
         DriveMediaClassifier.isPlayableMedia(name: name, formatType: category, isDirectory: isDirectory, isFile: !isDirectory)
     }
 
-    public var isPlayableVideo: Bool {
-        DriveMediaClassifier.isPlayableVideo(name: name, formatType: category, isDirectory: isDirectory, isFile: !isDirectory)
-    }
-
     public var isKnownNonVideoAsset: Bool {
         DriveMediaClassifier.isKnownNonVideoAsset(name: name)
     }
@@ -74,10 +70,10 @@ public final class P115DriveClient: @unchecked Sendable {
     }()
     private static let userAgent = currentWebUserAgent
 
-    private let httpClient: HTTPClient
+    private let httpClient: DriveHTTPClient
 
     public init(httpClient: HTTPClient = .shared) {
-        self.httpClient = httpClient
+        self.httpClient = DriveHTTPClient(httpClient, provider: .p115)
     }
 
     public func validate(_ credential: CloudCredential) async throws -> CloudCredential {
@@ -213,11 +209,15 @@ public final class P115DriveClient: @unchecked Sendable {
             fid: playable.file.fileID,
             fidToken: playable.file.pickCode.isEmpty ? playable.file.fileID : playable.file.pickCode,
             fileName: playable.file.name,
-            collectionName: collectionName
+            collectionName: collectionName,
+            size: playable.file.size
         )
     }
 
     public func link(reference: DriveFileReference, cookie: String, accessToken: String? = nil) async throws -> CloudDriveLink {
+        if DriveRequestRecovery.budget == nil {
+            return try await DriveRequestRecovery.withBudget { try await self.link(reference: reference, cookie: cookie, accessToken: accessToken) }
+        }
         guard reference.provider == .p115 else {
             throw DriveEngineError.unsupported("P115DriveClient 只能处理 115 网盘文件引用。")
         }
@@ -227,49 +227,40 @@ public final class P115DriveClient: @unchecked Sendable {
             name: reference.fileName,
             parentID: "",
             pickCode: reference.fidToken,
-            size: 0,
+            size: reference.size,
             category: "video",
             downloadURL: "",
             isDirectory: false
         )
-        if let token = normalizedAccessToken(accessToken),
-           !reference.personalFileID.isEmpty || !reference.pickCode.isEmpty {
-            let personal = PersonalDriveFileReference(
-                provider: .p115,
-                driveID: reference.personalDriveID.isEmpty ? "115" : reference.personalDriveID,
-                fileID: reference.personalFileID.isEmpty ? reference.fid : reference.personalFileID,
-                pickCode: firstNonEmpty([reference.pickCode, reference.fidToken]),
-                fileName: reference.fileName
-            )
-            if let personalLink = try? await personalPlaybackLink(file: file, personal: personal, cookie: cookie, accessToken: token) {
-                return personalLink
+        if !reference.personalFileID.isEmpty || !reference.pickCode.isEmpty {
+            guard let token = normalizedAccessToken(accessToken), !DriveRequestRecovery.background else {
+                throw DriveMappingVerification.unconfirmed(.p115)
             }
+            let id = reference.personalFileID.isEmpty ? reference.fid : reference.personalFileID
+            let personal = try await personalFileReference(fileID: id, fallbackFile: file, accessToken: token)
+            return try await personalPlaybackLink(file: file, personal: personal, cookie: cookie, accessToken: token)
         }
         return try await link(file: file, share: share, cookie: cookie, accessToken: accessToken)
     }
 
     public func link(file: P115ShareFile, share: P115ShareRequest, cookie: String, accessToken: String? = nil) async throws -> CloudDriveLink {
+        if DriveRequestRecovery.budget == nil {
+            return try await DriveRequestRecovery.withBudget { try await self.link(file: file, share: share, cookie: cookie, accessToken: accessToken) }
+        }
         let normalizedCookie = cookie.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedCookie.isEmpty else {
             throw DriveEngineError.loginRequired(.p115)
         }
-        if let token = normalizedAccessToken(accessToken),
-           let personal = try? await saveShareFile(file: file, share: share, cookie: normalizedCookie, accessToken: token),
-           let personalLink = try? await personalPlaybackLink(
-               file: file,
-               personal: personal,
-               cookie: normalizedCookie,
-               accessToken: token,
-               temporarySavedFile: true
-           ) {
-            if let fallbackLink = try? await shareFallbackLink(
-                file: file,
-                share: share,
-                cookie: normalizedCookie
-            ) {
-                return appendingShareFallback(fallbackLink, to: personalLink)
+        if let token = normalizedAccessToken(accessToken) {
+            let saved = try await saveShareFileWithCookie(file: file, share: share, cookie: normalizedCookie)
+            if let personalLink = try? await personalPlaybackLink(file: file, personal: saved.reference,
+                cookie: normalizedCookie, accessToken: token, temporarySavedFile: saved.temporary) {
+                try await DriveTransferContext.current.check()
+                if let fallback = try? await shareFallbackLink(file: file, share: share, cookie: normalizedCookie) {
+                    return appendingShareFallback(fallback, to: personalLink)
+                }
+                return personalLink
             }
-            return personalLink
         }
 
         do {
@@ -288,6 +279,9 @@ public final class P115DriveClient: @unchecked Sendable {
             return personalLink
         } catch {
             let personalPlaybackError = error
+            if DriveServiceFailure.stopsRecovery(error) { throw error }
+            if case DriveEngineError.transferConfirmationPending = error { throw error }
+            if case DriveEngineError.officialPlayURLPending = error { throw error }
             DiagnosticLog.write(
                 "[P115_COOKIE_TRANSFER] failed stage=playback tag=\(Self.diagnosticTag(for: error))"
             )
@@ -360,6 +354,7 @@ public final class P115DriveClient: @unchecked Sendable {
                 return CloudDriveLink(url: url, headers: playbackHeaders(cookie: normalizedCookie), metadata: metadata(file: file, route: DrivePlaybackRoute.shareFallback))
             }
         } catch {
+            if DriveServiceFailure.stopsRecovery(error) { throw error }
             if let original = try? await legacyAppShareDownloadLink(
                 file: file,
                 share: share,
@@ -426,34 +421,10 @@ public final class P115DriveClient: @unchecked Sendable {
         share: P115ShareRequest,
         cookie: String
     ) async throws -> CloudDriveLink {
-        var lastError: Error?
-        var decrypted: [String: Any]?
-        for attempt in 0..<3 {
-            do {
-                decrypted = try await cookieEncryptedDownloadData(
-                    payload: [
-                        "file_id": file.fileID,
-                        "receive_code": share.receiveCode,
-                        "share_code": share.shareCode
-                    ],
-                    cookie: cookie,
-                    endpoint: "/app/share/downurl"
-                )
-                break
-            } catch {
-                lastError = error
-                DiagnosticLog.write(
-                    "[P115_SHARE_ORIGINAL] encrypted_failed attempt=\(attempt + 1) tag=\(Self.diagnosticTag(for: error))"
-                )
-                if attempt < 2 {
-                    try await Task.sleep(for: .milliseconds(300))
-                }
-            }
-        }
-        guard let decrypted else {
-            if let lastError { throw lastError }
-            throw DriveEngineError.noDownloadURL(file.name)
-        }
+        let decrypted = try await cookieEncryptedDownloadData(
+            payload: ["file_id": file.fileID, "receive_code": share.receiveCode, "share_code": share.shareCode],
+            cookie: cookie, endpoint: "/app/share/downurl"
+        )
         guard let url = Self.downloadURL(from: ["data": decrypted], fileID: file.fileID) else {
             throw DriveEngineError.noDownloadURL(file.name)
         }
@@ -573,6 +544,7 @@ public final class P115DriveClient: @unchecked Sendable {
                     temporarySavedFile: savedFile.temporary
                 )
             } catch {
+                if DriveServiceFailure.stopsRecovery(error) { throw error }
                 do {
                     link = try await cookieVideoPlaybackLink(
                         file: file,
@@ -581,6 +553,7 @@ public final class P115DriveClient: @unchecked Sendable {
                         temporarySavedFile: savedFile.temporary
                     )
                 } catch {
+                    if DriveServiceFailure.stopsRecovery(error) { throw error }
                     DiagnosticLog.write(
                         "[P115_COOKIE_VIDEO] failed tag=\(Self.diagnosticTag(for: error))"
                     )
@@ -602,12 +575,9 @@ public final class P115DriveClient: @unchecked Sendable {
             DiagnosticLog.write("[P115_COOKIE_TRANSFER] playback_ready")
             return link
         } catch {
-            if savedFile.temporary {
-                _ = try? await postForm(
-                    url: Self.webAPIURL(path: "/rb/delete"),
-                    headers: requestHeaders(cookie: cookie),
-                    body: ["fid[0]": personal.fileID]
-                )
+            if error is CancellationError { throw error }
+            if case DriveEngineError.noDownloadURL = error {
+                throw DriveEngineError.officialPlayURLPending(file.name)
             }
             throw error
         }
@@ -679,6 +649,7 @@ public final class P115DriveClient: @unchecked Sendable {
                 userAgentOverride: ""
             )
         } catch {
+            if DriveServiceFailure.stopsRecovery(error) { throw error }
             DiagnosticLog.write(
                 "[P115_COOKIE_ORIGINAL] chrome_failed tag=\(Self.diagnosticTag(for: error))"
             )
@@ -792,6 +763,8 @@ public final class P115DriveClient: @unchecked Sendable {
             return existing.fileID
         }
 
+        if DriveMappingVerification.readOnly { throw DriveMappingVerification.changed(.p115) }
+
         do {
             let object = try await postForm(
                 url: Self.webAPIURL(path: "/files/add"),
@@ -829,9 +802,9 @@ public final class P115DriveClient: @unchecked Sendable {
                 cookie: cookie
             )
             files.append(contentsOf: pageFiles)
-            if pageFiles.count < Self.pageSize { break }
+            if pageFiles.count < Self.pageSize { return files }
         }
-        return files
+        throw DriveMappingVerification.unconfirmed(.p115)
     }
 
     private func loadPersonalFilesPage(
@@ -853,245 +826,138 @@ public final class P115DriveClient: @unchecked Sendable {
         let response = try await httpClient.get(
             url: components?.url?.absoluteString ?? Self.webAPIURL(path: "/files"),
             headers: requestHeaders(cookie: cookie),
-            timeout: 30
+            timeout: try DriveTransferContext.readTimeout(30),
+            allowsProxyFallback: DriveTransferContext.confirmationDeadline == nil,
+            redactsURLInLogs: true
         )
         let object = try Self.parseJSONResponse(
             data: response.data,
             statusCode: response.statusCode,
             fallbackMessage: "个人文件列表失败"
         )
-        return Self.files(from: object)
-    }
-
-    private func saveShareFile(file: P115ShareFile, share: P115ShareRequest, cookie: String, accessToken: String) async throws -> PersonalDriveFileReference {
-        let targetFolderID = try await ensureTransferFolder(share: share, cookie: cookie)
-        let object = try await postForm(
-            url: Self.webAPIURL(path: "/share/receive"),
-            headers: requestHeaders(cookie: cookie),
-            body: [
-                "share_code": share.shareCode,
-                "receive_code": share.receiveCode,
-                "cid": targetFolderID,
-                "file_id": file.fileID
-            ]
-        )
-        let savedFileID = Self.savedFileID(from: object)
-        guard !savedFileID.isEmpty else {
-            throw DriveEngineError.noDownloadURL("115 转存结果缺少个人文件 ID")
+        let data = object["data"] as? [String: Any] ?? object
+        guard let raw = (data["list"] as? [[String: Any]]) ?? (data["file_list"] as? [[String: Any]])
+            ?? (data["items"] as? [[String: Any]]) ?? (object["data"] as? [[String: Any]]) else {
+            throw DriveMappingVerification.unconfirmed(.p115)
         }
-        return try await personalFileReference(
-            fileID: savedFileID,
-            fallbackFile: file,
-            accessToken: accessToken
-        )
+        let files = Self.files(from: object)
+        guard files.count == raw.count else { throw DriveMappingVerification.unconfirmed(.p115) }
+        if files.count < limit,
+           intValue(data["count"] ?? object["count"]) > offset + files.count
+            || boolValue(data["has_more"] ?? object["has_more"]) {
+            throw DriveMappingVerification.unconfirmed(.p115)
+        }
+        return files
     }
 
     private func saveShareFileWithCookie(
-        file: P115ShareFile,
-        share: P115ShareRequest,
-        cookie: String
+        file: P115ShareFile, share: P115ShareRequest, cookie: String
     ) async throws -> (reference: PersonalDriveFileReference, temporary: Bool) {
-        let targetFolderID: String
+        let baseIdentity = DriveSavedFileNaming.identity(provider: .p115, pwdID: share.shareCode,
+            fid: file.fileID, name: file.name, size: file.size)
+        let account = DriveTransferContext.account(provider: .p115, cookie: cookie)
+        try await DriveTransferCoordinator.current.checkRecovery(sourceKey: baseIdentity.cacheKey, account: account)
+        let cached = try await DriveSavedFileStore.shared.verificationRecord(for: baseIdentity, account: account,
+            allowUnscopedCandidate: true)
+        let legacy = try DriveMappingVerification.legacyCandidate(cached, for: baseIdentity,
+            shareID: share.shareCode, sourceID: file.fileID, size: file.size)
+        let folder: String
         do {
-            targetFolderID = try await ensureTransferFolder(share: share, cookie: cookie)
-        } catch {
-            DiagnosticLog.write(
-                "[P115_COOKIE_TRANSFER] failed stage=ensure_folder tag=\(Self.diagnosticTag(for: error))"
-            )
-            throw error
-        }
-
-        let savedFileID: String?
-        let temporarySavedFile: Bool
-        let wasAlreadyReceived: Bool
-        do {
-            let object = try await postForm(
-                url: Self.webAPIURL(path: "/share/receive"),
-                headers: requestHeaders(cookie: cookie),
-                body: [
-                    "share_code": share.shareCode,
-                    "receive_code": share.receiveCode,
-                    "cid": targetFolderID,
-                    "file_id": file.fileID
-                ]
-            )
-            let receivedFileID = Self.savedFileID(from: object)
-            if receivedFileID.isEmpty {
-                DiagnosticLog.write("[P115_COOKIE_TRANSFER] receive_accepted_without_id")
-                savedFileID = nil
-            } else {
-                savedFileID = receivedFileID
+            folder = try await DriveMappingVerification.target(record: cached, provider: .p115, legacy: legacy) {
+                try await ensureTransferFolder(share: share, cookie: cookie)
             }
-            temporarySavedFile = true
-            wasAlreadyReceived = false
-        } catch {
-            if Self.isAlreadyReceived(error) {
-                DiagnosticLog.write("[P115_COOKIE_TRANSFER] receive_already_completed")
-                savedFileID = nil
-                temporarySavedFile = false
-                wasAlreadyReceived = true
-            } else {
-                DiagnosticLog.write(
-                    "[P115_COOKIE_TRANSFER] failed stage=receive tag=\(Self.diagnosticTag(for: error))"
-                )
-                throw error
-            }
+        } catch let failure as DriveServiceFailure where cached == nil && failure.reason == .mappingUnconfirmed {
+            // No saved mapping and no write yet: preserve the existing read-only
+            // share playback fallback when personal-folder discovery is unavailable.
+            throw DriveEngineError.noDownloadURL(file.name)
         }
-
-        for attempt in 0..<8 {
-            let files: [P115ShareFile]
+        let identity = baseIdentity.scoped(account: account, target: folder)
+        if let cached {
             do {
-                files = try await listPersonalFiles(parentID: targetFolderID, cookie: cookie)
+                guard cached.parentFID == folder, cached.driveID == "115" else {
+                    try await DriveMappingVerification.invalidate(cached, provider: .p115, legacy: legacy)
+                }
+                let files = try await self.listPersonalFiles(parentID: folder, cookie: cookie)
+                let matches = files.filter { $0.fileID == cached.savedFID }
+                guard matches.count <= 1 else { throw DriveMappingVerification.unconfirmed(.p115) }
+                if legacy != nil && (matches.first?.pickCode.isEmpty ?? true) {
+                    throw DriveMappingVerification.unconfirmed(.p115)
+                }
+                let verified = try await DriveMappingVerification.verified(cached, identity: identity, legacy: legacy,
+                    file: matches.first.map { .init(id: $0.fileID,
+                        parent: $0.parentID.isEmpty ? folder : $0.parentID,
+                        size: $0.size, isDirectory: $0.isDirectory) }, listingComplete: true)
+                guard let saved = matches.first, !saved.pickCode.isEmpty else {
+                    throw DriveMappingVerification.unconfirmed(.p115)
+                }
+                let record = DriveSavedFileRecord(provider: .p115, cacheKey: identity.cacheKey,
+                    pwdID: cached.pwdID, shareFID: cached.shareFID, fidToken: cached.fidToken,
+                    size: saved.size, originalName: cached.originalName, savedFID: saved.fileID,
+                    savedFileName: saved.name, parentFID: folder, driveID: "115",
+                    targetRootFID: cached.targetRootFID,
+                    savedPickCode: saved.pickCode, isTemporary: cached.isTemporary,
+                    contentFingerprint: cached.contentFingerprint)
+                try await DriveSavedFileStore.shared.replaceVerified(verified, with: record)
+                return (PersonalDriveFileReference(provider: .p115, driveID: "115", fileID: record.savedFID,
+                    pickCode: record.savedPickCode ?? "", fileName: record.savedFileName, size: record.size),
+                    record.isTemporary ?? true)
             } catch {
-                DiagnosticLog.write(
-                    "[P115_COOKIE_TRANSFER] failed stage=lookup tag=\(Self.diagnosticTag(for: error))"
-                )
+                try await DriveMappingVerification.handle(error, record: cached, provider: .p115, legacy: legacy)
                 throw error
             }
-            let saved = files.first { candidate in
-                guard !candidate.isDirectory, !candidate.pickCode.isEmpty else { return false }
-                if let savedFileID { return candidate.fileID == savedFileID }
-                guard candidate.name == file.name else { return false }
-                return file.size <= 0 || candidate.size == file.size
-            }
-            if let saved,
-               !saved.pickCode.isEmpty {
-                DiagnosticLog.write(temporarySavedFile
-                    ? "[P115_COOKIE_TRANSFER] saved"
-                    : "[P115_COOKIE_TRANSFER] reused")
-                return (
-                    reference: PersonalDriveFileReference(
-                        provider: .p115,
-                        driveID: "115",
-                        fileID: saved.fileID,
-                        pickCode: saved.pickCode,
-                        fileName: saved.name,
-                        size: saved.size
-                    ),
-                    temporary: temporarySavedFile
-                )
-            }
-            if attempt == 0,
-               wasAlreadyReceived,
-               let recovered = try await recoverPreviouslyReceivedFile(
-                   file: file,
-                   parentID: targetFolderID,
-                   cookie: cookie
-               ) {
-                return recovered
-            }
-            if attempt < 7 {
-                try await Task.sleep(for: .milliseconds(350))
-            }
         }
-        DiagnosticLog.write("[P115_COOKIE_TRANSFER] failed stage=lookup tag=timeout")
-        throw DriveEngineError.noDownloadURL("115 转存文件尚未出现在个人盘")
-    }
-
-    private func recoverPreviouslyReceivedFile(
-        file: P115ShareFile,
-        parentID: String,
-        cookie: String
-    ) async throws -> (reference: PersonalDriveFileReference, temporary: Bool)? {
-        let activeFiles = try await searchPersonalFiles(
-            named: file.name,
-            areaID: "1",
-            cookie: cookie
-        )
-        let activeMatches = activeFiles.filter { candidate in
-            guard !candidate.isDirectory,
-                  !candidate.pickCode.isEmpty,
-                  candidate.name == file.name else {
-                return false
+        let transfer = try await DriveTransferCoordinator.current.confirmedTransfer(cacheKey: identity.cacheKey,
+            scope: .make(identity: identity, account: account, target: folder,
+                         driveID: "115", shareID: share.shareCode, sourceFileID: file.fileID,
+                         name: file.name, size: file.size, collectionName: share.collectionName)) { attempt in
+            if await attempt.needsSubmission {
+                let before = try await self.listPersonalFiles(parentID: folder, cookie: cookie)
+                _ = try await attempt.submit(previousIDs: Set(before.map(\.fileID))) {
+                    do {
+                        let object = try await self.postForm(url: Self.webAPIURL(path: "/share/receive"),
+                            headers: self.requestHeaders(cookie: cookie), body: [
+                                "share_code": share.shareCode, "receive_code": share.receiveCode,
+                                "cid": folder, "file_id": file.fileID
+                            ], allowsProxyFallback: false)
+                        return DriveTransferSubmission(fileID: Self.savedFileID(from: object))
+                    } catch {
+                        // Already received is not permission to select an arbitrary
+                        // namesake or restore a file from the user's recycle bin.
+                        if Self.isAlreadyReceived(error) { return DriveTransferSubmission() }
+                        throw error
+                    }
+                }
             }
-            return file.size <= 0 || candidate.size == file.size
-        }
-        DiagnosticLog.write(
-            "[P115_COOKIE_TRANSFER] active_search candidates=\(activeFiles.count) matches=\(activeMatches.count)"
-        )
-        if let active = activeMatches.first {
-            DiagnosticLog.write("[P115_COOKIE_TRANSFER] reused_from_search")
-            return (
-                reference: PersonalDriveFileReference(
-                    provider: .p115,
-                    driveID: "115",
-                    fileID: active.fileID,
-                    pickCode: active.pickCode,
-                    fileName: active.name,
-                    size: active.size
-                ),
-                temporary: false
-            )
-        }
-
-        let recycledFiles = try await searchPersonalFiles(
-            named: file.name,
-            areaID: "7",
-            cookie: cookie
-        )
-        let recycledMatches = recycledFiles.filter { candidate in
-            guard !candidate.isDirectory,
-                  !candidate.pickCode.isEmpty,
-                  candidate.name == file.name else {
-                return false
+            let knownID = await attempt.fileID
+            let previous = await attempt.previousIDs
+            for poll in 0..<8 {
+                try await DriveTransferContext.current.check()
+                let files = try await self.listPersonalFiles(parentID: folder, cookie: cookie)
+                let matches = files.filter { candidate in
+                    guard !candidate.isDirectory, !candidate.pickCode.isEmpty,
+                          candidate.parentID.isEmpty || candidate.parentID == folder,
+                          file.size <= 0 || candidate.size == file.size else { return false }
+                    if let knownID { return candidate.fileID == knownID }
+                    return file.size > 0 && candidate.name == file.name && !previous.contains(candidate.fileID)
+                }
+                if matches.count == 1 {
+                    let saved = matches[0]
+                    try await attempt.confirmed(saved.fileID)
+                    try await DriveTransferContext.current.check()
+                    let record = DriveSavedFileRecord(provider: .p115, cacheKey: identity.cacheKey,
+                        pwdID: share.shareCode, shareFID: file.fileID, fidToken: file.pickCode,
+                        size: saved.size, originalName: file.name, savedFID: saved.fileID,
+                        savedFileName: saved.name, parentFID: folder, driveID: "115", savedPickCode: saved.pickCode, isTemporary: true)
+                    try await DriveSavedFileStore.shared.save(record)
+                    return DriveSavedFileTransferResult(record: record, updatedCookie: "")
+                }
+                if poll < 7 { try await Task.sleep(for: .milliseconds(350)) }
             }
-            let matchesOriginalParent = candidate.parentID == parentID
-            let matchesKnownSize = file.size > 0 && candidate.size == file.size
-            return matchesOriginalParent || matchesKnownSize
+            throw DriveEngineError.transferConfirmationPending()
         }
-        DiagnosticLog.write(
-            "[P115_COOKIE_TRANSFER] recycle_search candidates=\(recycledFiles.count) matches=\(recycledMatches.count)"
-        )
-        guard let recycled = recycledMatches.first else { return nil }
-
-        _ = try await postForm(
-            url: Self.webAPIURL(path: "/rb/revert"),
-            headers: requestHeaders(cookie: cookie),
-            body: ["rid[0]": recycled.fileID]
-        )
-
-        for attempt in 0..<4 {
-            let files = try await listPersonalFiles(parentID: parentID, cookie: cookie)
-            if let restored = files.first(where: { $0.fileID == recycled.fileID && !$0.pickCode.isEmpty }) {
-                DiagnosticLog.write("[P115_COOKIE_TRANSFER] restored_from_recycle_bin")
-                return (
-                    reference: PersonalDriveFileReference(
-                        provider: .p115,
-                        driveID: "115",
-                        fileID: restored.fileID,
-                        pickCode: restored.pickCode,
-                        fileName: restored.name,
-                        size: restored.size
-                    ),
-                    temporary: true
-                )
-            }
-            if attempt < 3 {
-                try await Task.sleep(for: .milliseconds(350))
-            }
-        }
-        return nil
-    }
-
-    private func searchPersonalFiles(
-        named name: String,
-        areaID: String,
-        cookie: String
-    ) async throws -> [P115ShareFile] {
-        var components = URLComponents(string: Self.webAPIURL(path: "/files/search"))
-        components?.queryItems = [
-            URLQueryItem(name: "aid", value: areaID),
-            URLQueryItem(name: "cid", value: "0"),
-            URLQueryItem(name: "offset", value: "0"),
-            URLQueryItem(name: "limit", value: "100"),
-            URLQueryItem(name: "show_dir", value: "0"),
-            URLQueryItem(name: "search_value", value: name)
-        ]
-        let object = try await getJSON(
-            url: components?.url?.absoluteString ?? Self.webAPIURL(path: "/files/search"),
-            headers: requestHeaders(cookie: cookie)
-        )
-        return Self.files(from: object)
+        let record = transfer.record
+        return (PersonalDriveFileReference(provider: .p115, driveID: "115", fileID: record.savedFID,
+            pickCode: record.savedPickCode ?? "", fileName: record.savedFileName, size: record.size), record.isTemporary ?? true)
     }
 
     private func personalFileReference(fileID: String, fallbackFile: P115ShareFile, accessToken: String) async throws -> PersonalDriveFileReference {
@@ -1102,13 +968,17 @@ public final class P115DriveClient: @unchecked Sendable {
             headers: openAPIHeaders(accessToken: accessToken)
         )
         let data = object["data"] as? [String: Any] ?? object
+        let observedID = firstString(data, keys: ["file_id", "fileId", "fid", "id"])
+        guard observedID == fileID else { throw DriveMappingVerification.unconfirmed(.p115) }
+        let observedSize = firstNonZeroInt64([int64Value(data["size_byte"]), int64Value(data["size"])])
+        if fallbackFile.size > 0 {
+            guard observedSize > 0 else { throw DriveMappingVerification.unconfirmed(.p115) }
+            guard observedSize == fallbackFile.size else { throw DriveMappingVerification.changed(.p115) }
+        }
         return PersonalDriveFileReference(
             provider: .p115,
             driveID: "115",
-            fileID: firstNonEmpty([
-                firstString(data, keys: ["file_id", "fileId", "fid", "id"]),
-                fileID
-            ]),
+            fileID: observedID,
             pickCode: firstNonEmpty([
                 firstString(data, keys: ["pick_code", "pickCode", "pickcode", "pc"]),
                 fallbackFile.pickCode
@@ -1199,11 +1069,21 @@ public final class P115DriveClient: @unchecked Sendable {
         guard !cookie.isEmpty else {
             throw DriveEngineError.loginRequired(.p115)
         }
-        _ = try await postForm(
-            url: Self.webAPIURL(path: "/rb/delete"),
-            headers: requestHeaders(cookie: cookie),
-            body: ["fid[0]": fileID]
-        )
+        let records = await DriveSavedFileStore.shared.confirmedRecords(provider: .p115, fileID: fileID,
+            account: DriveTransferContext.account(provider: .p115, cookie: cookie))
+        for record in records { await DriveTransferCoordinator.current.beginCleanup(cacheKey: record.cacheKey) }
+        do {
+            _ = try await postForm(
+                url: Self.webAPIURL(path: "/rb/delete"),
+                headers: requestHeaders(cookie: cookie),
+                body: ["fid[0]": fileID], allowsProxyFallback: false
+            )
+            for record in records { try? await DriveSavedFileStore.shared.invalidate(record) }
+        } catch {
+            for record in records { await DriveTransferCoordinator.current.finishCleanup(cacheKey: record.cacheKey) }
+            throw error
+        }
+        for record in records { await DriveTransferCoordinator.current.finishCleanup(cacheKey: record.cacheKey) }
     }
 
     private func personalVideoPlay(personal: PersonalDriveFileReference, accessToken: String) async throws -> CloudDrivePersonalPlayback {
@@ -1252,18 +1132,18 @@ public final class P115DriveClient: @unchecked Sendable {
         return Self.files(from: object)
     }
 
-    private func postForm(url: String, headers: [String: String], body: [String: String]) async throws -> [String: Any] {
+    private func postForm(url: String, headers: [String: String], body: [String: String], allowsProxyFallback: Bool = true) async throws -> [String: Any] {
         var components = URLComponents()
         components.queryItems = body.map { URLQueryItem(name: $0.key, value: $0.value) }
         let data = Data((components.percentEncodedQuery ?? "").utf8)
         var requestHeaders = headers
         requestHeaders["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8"
-        let response = try await httpClient.post(url: url, headers: requestHeaders, body: data, timeout: 30)
+        let response = try await httpClient.post(url: url, headers: requestHeaders, body: data, timeout: 30, allowsProxyFallback: allowsProxyFallback && DriveTransferContext.confirmationDeadline == nil, redactsURLInLogs: true)
         return try Self.parseJSONResponse(data: response.data, statusCode: response.statusCode)
     }
 
     private func getJSON(url: String, headers: [String: String]) async throws -> [String: Any] {
-        let response = try await httpClient.get(url: url, headers: headers, timeout: 30)
+        let response = try await httpClient.get(url: url, headers: headers, timeout: try DriveTransferContext.readTimeout(30), allowsProxyFallback: DriveTransferContext.confirmationDeadline == nil, redactsURLInLogs: true)
         return try Self.parseJSONResponse(data: response.data, statusCode: response.statusCode)
     }
 
@@ -1354,7 +1234,7 @@ private extension P115DriveClient {
         statusCode: Int,
         fallbackMessage: String = "接口返回错误"
     ) throws -> [String: Any] {
-        if statusCode == 401 || statusCode == 403 {
+        if statusCode == 401 {
             throw DriveEngineError.loginRequired(.p115)
         }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -1362,9 +1242,6 @@ private extension P115DriveClient {
         }
         let code = Self.errorCode(from: object)
         let message = firstString(object, keys: ["message", "msg", "error", "error_msg"])
-        if Self.isAuthenticationFailure(statusCode: statusCode, message: message) {
-            throw DriveEngineError.loginRequired(.p115)
-        }
         let explicitlyFailed = (object["state"] as? Bool) == false || (object["success"] as? Bool) == false
         guard (200..<300).contains(statusCode) else {
             throw DriveEngineError.api(
@@ -1393,15 +1270,6 @@ private extension P115DriveClient {
         return object
     }
 
-    static func isAuthenticationFailure(statusCode: Int, message: String) -> Bool {
-        if statusCode == 401 || statusCode == 403 { return true }
-        let normalized = message.lowercased()
-        return [
-            "未登录", "请先登录", "请登录", "重新登录", "登录失效", "登录已失效",
-            "cookie", "not logged", "login required", "unauthorized"
-        ].contains { normalized.contains($0) }
-    }
-
     static func files(from object: [String: Any]) -> [P115ShareFile] {
         let data = object["data"] as? [String: Any] ?? object
         let rawItems = (data["list"] as? [[String: Any]])
@@ -1419,6 +1287,7 @@ private extension P115DriveClient {
         let directoryFlag = firstString(item, keys: ["fc", "is_dir", "is_directory", "type"])
         let isDirectory = boolValue(item["is_directory"])
             || boolValue(item["is_dir"])
+            || (item["fid"] == nil && item["file_id"] == nil && item["cid"] != nil && item["pid"] != nil)
             || directoryFlag == "0"
             || directoryFlag.lowercased() == "folder"
             || directoryFlag.lowercased() == "directory"
@@ -1665,6 +1534,8 @@ private extension P115DriveClient {
             return String(describing: type(of: error))
         }
         switch driveError {
+        case .transferConfirmationPending:
+            return "transfer-confirmation-pending"
         case .api(let provider, let statusCode, let code, _):
             return "api-\(provider.rawValue)-\(statusCode)-\(code.map(String.init) ?? "none")"
         case .loginRequired(let provider):
@@ -1741,4 +1612,51 @@ private func normalizedAccessToken(_ value: String?) -> String? {
     guard let value else { return nil }
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.isEmpty ? nil : trimmed
+}
+
+extension P115DriveClient {
+    func recoverTransfer(_ record: DriveTransferTask, cookie: String) async throws -> DriveRecoveredFile? {
+        let scope = record.scope
+        let target = try await ensureTransferFolder(share: .init(originalURL: "", shareCode: scope.shareID,
+            collectionName: scope.collectionName), cookie: cookie)
+        guard target == scope.target else { throw DriveTaskRecoveryError.scopeChanged }
+        if !record.submitted || record.phase == .failed { return nil }
+        let files = try await listPersonalFiles(parentID: target, cookie: cookie)
+        let matches = files.filter { file in
+            !file.isDirectory && !file.pickCode.isEmpty && (file.parentID.isEmpty || file.parentID == target)
+                && (scope.size <= 0 || file.size == scope.size)
+                && (record.fileID.map { file.fileID == $0 } ?? (record.allowsNameInference && scope.size > 0
+                    && file.name == scope.name && !record.previousIDs.contains(file.fileID)))
+        }
+        guard matches.count == 1, let file = matches.first else { throw DriveTaskRecoveryError.requiresReview }
+        return .init(id: file.fileID, name: file.name, parent: target, size: file.size, pickCode: file.pickCode)
+    }
+}
+
+extension P115DriveClient {
+    func personalDirectory(folderID: String, cursor: String?, credential: CloudCredential) async throws -> CloudDirectoryPage {
+        let offset = try CloudDirectoryPaging.integer(cursor, first: 0, provider: .p115)
+        let files = try await loadPersonalFilesPage(parentID: folderID, offset: offset, limit: Self.pageSize, cookie: credential.secret)
+        return CloudDirectoryPage(entries: files.map {
+            .init(id: $0.fileID, name: $0.name, parentID: folderID, driveID: "115",
+                  pickCode: $0.pickCode, size: $0.size, isDirectory: $0.isDirectory)
+        }, nextCursor: files.count == Self.pageSize ? String(offset + files.count) : nil, driveID: "115")
+    }
+
+    func personalDirectoryDownload(entry: CloudDirectoryEntry, credential: CloudCredential) async throws -> CloudDriveLink {
+        let personal = PersonalDriveFileReference(provider: .p115, driveID: "115", fileID: entry.id,
+            pickCode: entry.pickCode, fileName: entry.name, size: entry.size)
+        let accessToken = credential.metadata["access_token"] ?? ""
+        if !accessToken.isEmpty {
+            let original = try await personalOriginalDownload(personal: personal, accessToken: accessToken)
+            return CloudDriveLink(url: original.url, headers: playbackHeaders(cookie: credential.secret),
+                metadata: CloudDirectoryPaging.metadata(entry, provider: .p115))
+        }
+        let file = P115ShareFile(fileID: entry.id, name: entry.name, parentID: entry.parentID, pickCode: entry.pickCode,
+            size: entry.size, category: "", downloadURL: "", isDirectory: false)
+        // Reuse only the original download endpoint. No save-to-drive or HLS fallback.
+        let link = try await cookieOriginalDownloadLink(file: file, personal: personal, cookie: credential.secret, temporarySavedFile: false)
+        return CloudDriveLink(url: link.url, headers: link.headers,
+            metadata: link.metadata.merging(CloudDirectoryPaging.metadata(entry, provider: .p115)) { _, current in current })
+    }
 }

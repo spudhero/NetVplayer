@@ -14,6 +14,7 @@ public struct StorageBackup: Codable, Sendable {
     public var tracks: [Track]
     public var preferences: UserPreferenceSnapshot?
     public var fileServices: FileServiceCatalog?
+    public var mediaServers: [MediaServerConfiguration]?
     public var mediaCorrections: [MediaManualCorrection]?
 
     public init(
@@ -25,6 +26,7 @@ public struct StorageBackup: Codable, Sendable {
         tracks: [Track] = [],
         preferences: UserPreferenceSnapshot? = nil,
         fileServices: FileServiceCatalog? = nil,
+        mediaServers: [MediaServerConfiguration]? = nil,
         mediaCorrections: [MediaManualCorrection]? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -35,11 +37,12 @@ public struct StorageBackup: Codable, Sendable {
         self.tracks = tracks
         self.preferences = preferences
         self.fileServices = fileServices
+        self.mediaServers = mediaServers
         self.mediaCorrections = mediaCorrections
     }
 
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, exportedAt, configs, history, keeps, tracks, preferences, fileServices, mediaCorrections
+        case schemaVersion, exportedAt, configs, history, keeps, tracks, preferences, fileServices, mediaServers, mediaCorrections
     }
 
     public init(from decoder: Decoder) throws {
@@ -52,6 +55,7 @@ public struct StorageBackup: Codable, Sendable {
         self.tracks = try container.decodeIfPresent([Track].self, forKey: .tracks) ?? []
         self.preferences = try container.decodeIfPresent(UserPreferenceSnapshot.self, forKey: .preferences)
         self.fileServices = try container.decodeIfPresent(FileServiceCatalog.self, forKey: .fileServices)
+        self.mediaServers = try container.decodeIfPresent([MediaServerConfiguration].self, forKey: .mediaServers)
         self.mediaCorrections = try container.decodeIfPresent([MediaManualCorrection].self, forKey: .mediaCorrections)
     }
 }
@@ -179,6 +183,13 @@ public enum StorageBackupCodec {
             throw StorageError.backupCollectionLimitExceeded
         }
         var result = backup
+        if let accounts = backup.mediaServers {
+            guard accounts.count <= 1000, Set(accounts.map(\.id)).count == accounts.count else { throw StorageError.backupCollectionLimitExceeded }
+            for account in accounts {
+                _ = try account.validated()
+                guard !account.serverID.isEmpty, MediaServerReference.validID(account.userID) else { throw StorageError.invalidBackup }
+            }
+        }
         if let corrections = backup.mediaCorrections {
             guard corrections.count <= 50000 else { throw StorageError.backupCollectionLimitExceeded }
             for correction in corrections {

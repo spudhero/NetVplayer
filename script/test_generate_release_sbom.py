@@ -20,15 +20,21 @@ class ReleaseSBOMTests(unittest.TestCase):
             contents = app / "Contents"
             executable = contents / "MacOS/NetVplayerApp"
             dylib = contents / "Frameworks/libmpv.dylib"
+            ssh_dylib = contents / "Frameworks/FileTransfer/libssh2.1.dylib"
+            ssh_receipt = contents / "Resources/ThirdPartyLicenses/FileTransfer/build-receipt.json"
             node = contents / "Resources/NodeRuntime/bin/node"
             node_manifest = contents / "Resources/NodeRuntime/runtime-manifest.json"
             quickjs_manifest = contents / "Resources/QuickJSRuntime/runtime-manifest.json"
             torrent = contents / "Resources/TorrentBridge/package-lock.json"
             licenses = contents / "Resources/ThirdPartyLicenses/libmpv-runtime.json"
-            for path in (executable, dylib, node, node_manifest, quickjs_manifest, torrent, licenses):
+            for path in (executable, dylib, ssh_dylib, ssh_receipt, node, node_manifest, quickjs_manifest, torrent, licenses):
                 path.parent.mkdir(parents=True, exist_ok=True)
             executable.write_bytes(b"\xcf\xfa\xed\xfe" + b"app")
             dylib.write_bytes(b"\xcf\xfa\xed\xfe" + b"mpv")
+            ssh_dylib.write_bytes(b"\xcf\xfa\xed\xfe" + b"ssh2")
+            ssh_receipt.write_text(json.dumps({
+                "inputs": {"version": "1.11.1", "sourceSHA256": "c" * 64},
+            }), encoding="utf-8")
             node.write_bytes(b"\xcf\xfa\xed\xfe" + b"node")
             with (contents / "Info.plist").open("wb") as handle:
                 plistlib.dump({
@@ -88,17 +94,21 @@ class ReleaseSBOMTests(unittest.TestCase):
             cyclonedx = json.loads(outputs["cyclonedx"].read_text(encoding="utf-8"))
 
             self.assertEqual(evidence["mach_o_path_set"], [
+                "Contents/Frameworks/FileTransfer/libssh2.1.dylib",
                 "Contents/Frameworks/libmpv.dylib",
                 "Contents/MacOS/NetVplayerApp",
                 "Contents/Resources/NodeRuntime/bin/node",
             ])
             self.assertEqual(
-                evidence["mach_o_files"][0]["sha256"],
+                evidence["mach_o_files"][1]["sha256"],
                 hashlib.sha256(dylib.read_bytes()).hexdigest(),
             )
             self.assertEqual(spdx["spdxVersion"], "SPDX-2.3")
-            self.assertEqual(len(spdx["files"]), 3)
+            self.assertEqual(len(spdx["files"]), 4)
             self.assertTrue(any(package["name"] == "swift-nio" for package in spdx["packages"]))
+            ssh_package = next(package for package in spdx["packages"] if package["name"] == "libssh2")
+            self.assertEqual(ssh_package["versionInfo"], "1.11.1")
+            self.assertEqual(ssh_package["downloadLocation"], "https://www.libssh2.org/download/libssh2-1.11.1.tar.gz")
             self.assertEqual(cyclonedx["specVersion"], "1.6")
             self.assertTrue(any(component["name"] == "webtorrent" for component in cyclonedx["components"]))
             self.assertTrue(any(
@@ -111,6 +121,13 @@ class ReleaseSBOMTests(unittest.TestCase):
             ))
             self.assertIsNotNone(evidence["inputs"]["node_runtime_manifest_sha256"])
             self.assertIsNotNone(evidence["inputs"]["quickjs_runtime_manifest_sha256"])
+            ssh_component = next(component for component in cyclonedx["components"] if component["name"] == "libssh2")
+            self.assertEqual(ssh_component["version"], "1.11.1")
+            self.assertIn("BSD-3-Clause", json.dumps(ssh_component["licenses"]))
+            self.assertEqual(
+                evidence["inputs"]["file_transfer_receipt_sha256"],
+                hashlib.sha256(ssh_receipt.read_bytes()).hexdigest(),
+            )
             self.assertNotIn(str(root), json.dumps(evidence))
 
 

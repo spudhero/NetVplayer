@@ -1,8 +1,10 @@
 import Models
 
 public struct SearchPageCursor: Sendable, Equatable {
-    public enum Status: Sendable { case ready, loading, exhausted, retryable, limited }
+    public enum Status: Sendable { case ready, loading, exhausted, retryable, budgeted, limited }
     public var keyword: String
+    /// The exact cache/request keyword for an incompletely admitted page.
+    public var pageKeyword: String?
     public var nextPage: Int = 1
     public var status: Status = .ready
     public var message: String?
@@ -15,7 +17,8 @@ public extension ContentSearchCore {
     static let maximumResultsPerSite = 2_000
 
     static func beginContinuation(_ current: ContentSearchState, siteKey: String) -> ContentSearchState {
-        guard var cursor = current.cursors[siteKey], cursor.canRequest else { return current }
+        guard var cursor = current.cursors[siteKey], cursor.canRequest,
+              remainingBudget(current, siteKey: siteKey) > 0 else { return current }
         var state = current
         cursor.status = .loading
         cursor.message = nil
@@ -32,7 +35,9 @@ public extension ContentSearchCore {
         var combined = index.map { state.results[$0] } ?? SearchResult(siteName: result.siteName, siteKey: result.siteKey)
         combined.isCached = (index == nil || combined.isCached) && result.isCached
         var failure = result.error
-        if failure == nil, result.page != requestedPage { failure = L10n.text("站点返回了错误页码，可重试本页。") }
+        if failure == nil, result.page != requestedPage || requestedPage < 1 || requestedPage == Int.max {
+            failure = L10n.text("站点返回了错误页码，可重试本页。")
+        }
         var seen = Set(combined.vods.map(searchIdentity))
         let normalized = result.vods.map { vod in
             var vod = vod
@@ -49,19 +54,32 @@ public extension ContentSearchCore {
             combined.error = failure
             combined.errorCategory = result.errorCategory
         } else {
-            let remaining = max(0, maximumResultsPerSite - combined.vods.count)
-            combined.vods.append(contentsOf: additions.prefix(remaining))
+            let remaining = remainingBudget(state, siteKey: result.siteKey)
+            let truncated = additions.count > remaining
+            // The presentation already ranks exact/prefix/title matches first. Apply that
+            // same policy before a cut so a useful hit at the tail is not hidden by budget.
+            let admitted = truncated && remaining > 0
+                ? SearchResultPresentationPolicy.ordered(Array(additions.enumerated()), keyword: state.keyword,
+                    vod: { $0.element }, sourceOrder: { _ in 0 }, sourceItemOrder: { $0.offset }).map(\.element)
+                : additions
+            combined.vods.append(contentsOf: admitted.prefix(remaining))
             combined.error = nil
             combined.errorCategory = nil
             combined.page = requestedPage
-            combined.hasMore = result.hasMore
+            combined.hasMore = result.hasMore || truncated
             combined.durationMs = result.durationMs
             combined.pageCountIsKnown = result.pageCountIsKnown
+            cursor.pageKeyword = truncated ? (cursor.pageKeyword ?? (requestedPage == 1 ? state.keyword : cursor.keyword)) : nil
             cursor.keyword = result.effectiveKeyword.isEmpty ? cursor.keyword : result.effectiveKeyword
             combined.effectiveKeyword = cursor.keyword
-            cursor.nextPage = requestedPage + 1
-            cursor.status = result.hasMore ? .ready : .exhausted
-            if additions.count > remaining || (combined.vods.count == maximumResultsPerSite && result.hasMore) {
+            // A truncated page is replayed through the cache and the same identity dedupe.
+            cursor.nextPage = truncated ? requestedPage : requestedPage + 1
+            cursor.status = combined.hasMore ? .ready : .exhausted
+            if combined.hasMore && (truncated || combined.vods.count >= state.resultBudget.limit(for: result.siteKey)
+                || state.results.reduce(0, { $0 + $1.vods.count }) + min(additions.count, remaining) >= state.resultBudget.total) {
+                cursor.status = .budgeted
+            }
+            if combined.vods.count == maximumResultsPerSite && combined.hasMore {
                 cursor.status = .limited
                 cursor.message = L10n.text("已达到此来源的结果上限，请缩小关键词范围。")
             }

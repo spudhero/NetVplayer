@@ -2,10 +2,23 @@
 // Shared geometry and color posture for the macOS library home surface.
 
 import SwiftUI
+import Models
 
 struct HomePosterGridLayout: Equatable {
     let columnCount: Int
     let itemWidth: CGFloat
+}
+
+/// A display identity for cards whose source intentionally omits a content ID.
+/// The original Vod remains intact for search, detail, and playback routing.
+struct VodPosterGridItem: Identifiable {
+    enum Identity: Hashable {
+        case source(String)
+        case position(Int)
+    }
+    let vod: Vod
+    let index: Int
+    var id: Identity { vod.vodId.isEmpty ? .position(index) : .source(vod.vodId) }
 }
 
 enum HomeVisualPolicy {

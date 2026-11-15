@@ -1,7 +1,8 @@
 import Foundation
 import Models
+import Storage
 
-public enum MPVOptionOrigin: String, Sendable { case source, user, session, transport }
+public enum MPVOptionOrigin: String, Sendable { case source, user, session, transport, colorDefault, display }
 
 public struct MPVEffectiveOption: Equatable, Sendable {
     public let value: String
@@ -18,7 +19,7 @@ public struct MPVOptionDiagnostic: Identifiable, Equatable, Sendable {
 
 /// Values stay in the runtime plan. Diagnostics carry only names, origins and outcomes.
 public enum MPVOptionPolicy {
-    public static func resolve(spec: PlaySpec, user: [String: String], session: [String: String]) -> [String: MPVEffectiveOption] {
+    public static func resolve(spec: PlaySpec, user: [String: String], session: [String: String], color: PlaybackColorPreference = .init()) -> [String: MPVEffectiveOption] {
         let defaults = spec.metadata["playback.kind"] == "live" ? LivePlaybackBufferPolicy.defaults : [:]
         var result = defaults.mapValues { MPVEffectiveOption(value: $0, origin: .transport) }
         for (key, value) in spec.mpvOptions { result[key] = .init(value: value, origin: .source) }
@@ -44,6 +45,7 @@ public enum MPVOptionPolicy {
         result.removeValue(forKey: "http-header-fields")
         result["user-agent"] = .init(value: header("User-Agent", in: spec.headers) ?? PlaybackProxyPolicy.defaultHTTPUserAgent, origin: .transport)
         result["referrer"] = .init(value: header("Referer", in: spec.headers) ?? "", origin: .transport)
+        result.merge(PlaybackColorPolicy.options(source: spec.mpvOptions, preference: color)) { _, color in color }
         return result
     }
 

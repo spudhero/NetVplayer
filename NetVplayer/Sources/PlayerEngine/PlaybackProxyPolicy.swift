@@ -22,10 +22,13 @@ public enum PlaybackProxyBypassReason: String, Sendable {
 }
 
 public enum PlaybackProxyPolicy {
+    public static let sourceResolvedDirectMediaMetadataKey = "playback.sourceResolvedDirectMedia"
+
     public static let defaultHTTPUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
     private static let directMediaExtensions: Set<String> = [
-        "m3u8", "mp4", "m4s", "m4a", "m4v", "mov", "mkv", "webm", "flv", "ts", "m2ts", "avi", "wmv"
+        "m3u8", "mpd", "mp4", "m4s", "m4a", "m4v", "mov", "mkv", "webm", "flv", "ts", "m2ts", "avi", "wmv",
+        "mp3", "aac", "flac", "wav", "ogg", "opus", "aiff", "alac"
     ]
     private static let chunkedRelayMinimumSize: Int64 = 512 * 1024 * 1024
 
@@ -96,11 +99,27 @@ public enum PlaybackProxyPolicy {
             return .directHLS
         }
 
-        if directMediaExtensions.contains(url.pathExtension.lowercased()) || isDeclaredDirectMedia(format: spec.format) {
+        if spec.metadata[sourceResolvedDirectMediaMetadataKey] == "true"
+            || directMediaExtensions.contains(url.pathExtension.lowercased()) || isDeclaredDirectMedia(format: spec.format) {
             return .directMedia
         }
 
         return nil
+    }
+
+    /// Preserve an original player's direct-media decision only while its exact URL survives source extraction.
+    public static func sourceConfirmsDirectMedia(
+        for result: Models.Result,
+        originalAndroidProvider: Bool,
+        resolvedURL: String,
+        sourceIsDirectMedia: Bool,
+        sourceNeedsParse: Bool
+    ) -> Bool {
+        guard !result.needParse, !sourceNeedsParse else { return false }
+        if sourceIsDirectMedia { return true }
+        guard !result.url.isEmpty, resolvedURL == result.playUrl + result.url else { return false }
+        return (originalAndroidProvider && result.parse == 0)
+            || result.playbackCandidates.contains { $0.isPlayable && $0.url == resolvedURL }
     }
 
     public static func shouldAttemptWebSniff(
@@ -352,8 +371,9 @@ public enum PlaybackProxyPolicy {
         let value = format.lowercased().split(separator: ";", maxSplits: 1).first?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return directMediaExtensions.contains(value) || [
-            "video/mp4", "video/webm", "video/x-matroska", "video/quicktime",
-            "video/x-flv", "video/mp2t", "audio/mp4", "audio/mpeg", "audio/flac", "audio/wav"
+            "application/dash+xml", "video/mp4", "video/webm", "video/x-matroska", "video/quicktime",
+            "video/x-flv", "video/mp2t", "audio/mp4", "audio/mpeg", "audio/aac", "audio/flac", "audio/wav",
+            "audio/ogg", "audio/opus", "audio/aiff", "audio/x-aiff"
         ].contains(value)
     }
 }

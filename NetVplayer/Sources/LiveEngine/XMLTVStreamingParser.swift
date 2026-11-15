@@ -13,7 +13,7 @@ public struct EPGImportLimits: Sendable {
     public init() {}
 }
 
-public enum EPGImportError: Error, Sendable { case limitExceeded, invalidXML, invalidGzip, invalidIndex }
+public enum EPGImportError: Error, Sendable { case limitExceeded, invalidXML, invalidGzip, invalidIndex, invalidJSON, invalidDate }
 
 public struct XMLTVProgramme: Codable, Sendable {
     public var channelID: String
@@ -22,7 +22,7 @@ public struct XMLTVProgramme: Codable, Sendable {
 }
 
 public enum XMLTVStreamingParser {
-    /// Only the current batch and channel names remain resident while the caller stages its index.
+    /// Keeps only the current batch, channel names and a bounded timestamp cache while staging the index.
     public static func parse(file: URL, limits: EPGImportLimits = .init(), window: DateInterval? = nil,
                              receive: @escaping ([XMLTVProgramme]) throws -> Void) throws -> [String: String] {
         let size = (try file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
@@ -37,6 +37,35 @@ public enum XMLTVStreamingParser {
         guard completed, delegate.sawTV else { throw EPGImportError.invalidXML }
         try delegate.flush()
         return delegate.channels
+    }
+}
+
+/// Owned by one parsing delegate. Hits do not reorder the FIFO ring, so both
+/// lookup and eviction stay constant-time even for feeds with all-unique dates.
+struct XMLTVTimestampCache {
+    static let capacity = 4_096
+    private enum Value {
+        case valid(Date), invalid
+        var date: Date? { if case .valid(let date) = self { return date }; return nil }
+    }
+    private var values: [String: Value] = [:]
+    private var keys: [String] = []
+    private var nextEviction = 0
+    var count: Int { values.count }
+
+    mutating func date(for key: String, resolve: () -> Date?) -> Date? {
+        if let cached = values[key] { return cached.date }
+        let date = resolve()
+        if keys.count < Self.capacity {
+            keys.append(key)
+        } else {
+            values.removeValue(forKey: keys[nextEviction])
+            keys[nextEviction] = key
+            nextEviction = (nextEviction + 1) % Self.capacity
+        }
+        // A failed parse is an entry too; assigning Date? directly would remove it.
+        values[key] = date.map(Value.valid) ?? .invalid
+        return date
     }
 }
 
@@ -55,6 +84,7 @@ private final class BatchingXMLTVDelegate: NSObject, XMLParserDelegate {
     private var depth = 0
     private var batch: [XMLTVProgramme] = []
     private var batchCost = 0
+    private var timestampCache = XMLTVTimestampCache()
     private let dateParsers: [DateFormatter] = ["yyyyMMddHHmmss Z", "yyyyMMddHHmmssZ", "yyyyMMddHHmmss", "yyyyMMddHHmm"].map { format in
         let parser = DateFormatter()
         parser.locale = Locale(identifier: "en_US_POSIX")
@@ -71,7 +101,9 @@ private final class BatchingXMLTVDelegate: NSObject, XMLParserDelegate {
     private func fail(_ parser: XMLParser, _ error: Error) { failure = error; parser.abortParsing() }
     private func date(_ value: String?) -> Date? {
         guard let value, value.utf8.count <= 40 else { return nil }
-        return dateParsers.lazy.compactMap { $0.date(from: value) }.first
+        return timestampCache.date(for: value) {
+            dateParsers.lazy.compactMap { $0.date(from: value) }.first
+        }
     }
 
     func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {

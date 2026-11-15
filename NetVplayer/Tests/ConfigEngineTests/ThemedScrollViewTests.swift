@@ -131,7 +131,7 @@ struct ThemedScrollViewTests {
         let document = NSView(frame: CGRect(x: 0, y: 0, width: 960, height: 720))
         scrollView.documentView = document
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: 48))
-        let proxy = HorizontalScrollProxy()
+        let proxy = NativeScrollProxy()
         proxy.attach(to: scrollView)
         proxy.scroll(to: 160)
         #expect(scrollView.contentView.bounds.origin.x == 160)
@@ -149,7 +149,7 @@ struct ThemedScrollViewTests {
         let scrollView = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
         let document = NSView(frame: CGRect(x: 0, y: 0, width: 960, height: 240))
         scrollView.documentView = document
-        let proxy = HorizontalScrollProxy()
+        let proxy = NativeScrollProxy()
         proxy.attach(to: scrollView)
         await flushScrollMeasurement()
         #expect(proxy.metrics.isScrollable)
@@ -182,6 +182,45 @@ struct ThemedScrollViewTests {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async { continuation.resume() }
         }
+    }
+
+    @Test @MainActor
+    func verticalMetricsAndThumbDraggingUseTheClipViewAndCoalesceCallbacks() async {
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let document = NSView(frame: CGRect(x: 0, y: 0, width: 640, height: 1200))
+        scroll.documentView = document
+        let proxy = NativeScrollProxy(axis: .vertical)
+        var positions: [CGFloat] = []
+        proxy.onScrollPositionChange = { offset, _ in positions.append(offset) }
+        proxy.attach(to: scroll)
+        #expect(positions.isEmpty)
+        await flushScrollMeasurement()
+        #expect(proxy.metrics.contentHeight == 1200)
+        #expect(proxy.metrics.containerHeight == scroll.contentView.bounds.height)
+        scroll.contentView.scroll(to: NSPoint(x: 30, y: 20))
+        proxy.scroll(to: 160)
+        proxy.scroll(to: 480)
+        let count = positions.count
+        await flushScrollMeasurement()
+        #expect(positions.count == count + 1)
+        #expect(positions.last == 480)
+        #expect(scroll.contentView.bounds.origin.x == 30)
+        proxy.scroll(to: .infinity)
+        #expect(scroll.contentView.bounds.origin.y == 480)
+        proxy.scroll(to: 10000)
+        #expect(scroll.contentView.bounds.origin.y == document.bounds.height - scroll.contentView.bounds.height)
+        proxy.scroll(to: -1)
+        await flushScrollMeasurement()
+        #expect(positions.last == 0)
+
+        scroll.documentView = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 100))
+        proxy.attach(to: scroll)
+        await flushScrollMeasurement()
+        #expect(!proxy.metrics.isScrollable)
+        let replacedMetrics = proxy.metrics
+        document.setFrameSize(CGSize(width: 640, height: 1800))
+        await flushScrollMeasurement()
+        #expect(proxy.metrics == replacedMetrics)
     }
 
     @Test @MainActor
@@ -286,6 +325,45 @@ struct ThemedScrollViewTests {
     }
 
     @Test @MainActor
+    func lazyScrollMetricsAreDeliveredAfterLayoutWithoutReenteringSwiftUI() async throws {
+        let recording = ScrollLayoutRecording()
+        let root = ThemedScrollView(theme: .player, onScrollPositionChange: { offset, remaining in
+            recording.deliveredDuringLayout = recording.deliveredDuringLayout || recording.isLayingOut
+            recording.positions.append((offset, remaining))
+        }) {
+            LazyVStack(spacing: 8) {
+                ForEach(0..<240, id: \.self) { index in
+                    Text("Episode \(index)")
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                }
+            }
+        }
+        let hosting = NSHostingView(rootView: root)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 380, height: 420),
+            styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { window.orderOut(nil); window.close() }
+
+        recording.isLayingOut = true
+        hosting.layoutSubtreeIfNeeded()
+        recording.isLayingOut = false
+        await flushScrollMeasurement()
+        let scroll = try #require(descendantScrollViews(in: hosting).first)
+        for offset in [120.0, 800.0, 200.0, 0.0] {
+            recording.isLayingOut = true
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            hosting.layoutSubtreeIfNeeded()
+            recording.isLayingOut = false
+            await flushScrollMeasurement()
+        }
+        #expect(!recording.deliveredDuringLayout)
+        #expect(recording.positions.contains { $0.0 > 1 && $0.1 > 0 })
+        #expect(recording.positions.last?.0 == 0)
+    }
+
+    @Test @MainActor
     func contentReachesTheIntendedEdgeAfterScrollingResizingAndNativeScrollerReenable() async throws {
         for placement in [AppScrollbarPlacement.gutter, .overlay] {
             let root = ThemedScrollView(theme: .subtle, scrollbarPlacement: placement) {
@@ -335,6 +413,13 @@ struct ThemedScrollViewTests {
         }
         return result
     }
+}
+
+@MainActor
+private final class ScrollLayoutRecording {
+    var isLayingOut = false
+    var deliveredDuringLayout = false
+    var positions: [(CGFloat, CGFloat)] = []
 }
 
 private final class ScrollContentEdgeMarker: NSView {}

@@ -22,47 +22,63 @@ struct MediaMetadataEditor: View {
     @State private var verifying: URL?
     @State private var retryAfterVerification: (() -> Void)?
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(record.candidates.isEmpty ? "修正影视信息" : "确认影视信息").font(.title2.bold())
-            Text(record.entry.name).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            Text(candidates.isEmpty ? "没有候选时，请输入准确片名搜索；补充年份可以区分同名影片。" : "核对候选的片名和年份，点击“选择”，再点击“保存修正”。")
-                .font(.caption).foregroundStyle(palette.muted)
-            ThemedScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+        SettingsEditorContainer(title: record.candidates.isEmpty ? "修正影视信息" : "确认影视信息", width: 650) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(record.entry.name).font(.caption).foregroundStyle(palette.muted).lineLimit(2)
+                Text(candidates.isEmpty ? "没有候选时，请输入准确片名搜索；补充年份可以区分同名影片。" : "核对候选的片名和年份，点击“选择”，再点击“保存修正”。")
+                    .font(.caption).foregroundStyle(palette.muted)
                 ForEach(candidates) { candidate in candidateRow(candidate) }
                 if let selected {
                     Label("已选择：" + (selected.metadata.title ?? "") + " · " + (selected.metadata.year.map(String.init) ?? "年份未知"), systemImage: "checkmark.circle.fill")
                         .font(.caption).foregroundStyle(palette.accent)
                 }
-                Form {
-                    Picker("候选来源", selection: $source) { Text("TMDB").tag(MetadataSource.tmdb); Text("豆瓣").tag(MetadataSource.douban) }
-                    HStack { TextField("搜索片名", text: $query).onSubmit { search() }; Button("搜索") { search() } }
-                    HStack { TextField("条目 ID / 豆瓣链接", text: $idInput); Button("读取条目") { lookup() } }
-                    TextField("标题", text: $title)
-                    TextField("年份", text: $year)
-                    Picker("类型", selection: $kind) { Text("电影").tag(MediaLibraryKind.movies); Text("剧集").tag(MediaLibraryKind.television) }
-                    TextField("海报地址", text: $poster)
-                    Button("从本机选择海报…", action: choosePoster)
-                    Text("手动修改的字段会锁定；重新匹配会保留修正。") .font(.caption).foregroundStyle(.secondary)
-                }.formStyle(.grouped)
-                }
-                .padding(.trailing, 4).disabled(busy)
-            }
-            if busy { ProgressView().controlSize(.small).tint(palette.accent) }
-            if let error { Text(error).font(.caption).foregroundStyle(palette.color(for: .danger)).textSelection(.enabled) }
-            HStack {
-                Button("解除手动锁定") {
-                    Task {
-                        do { try await FileServicesState.shared.saveCorrection(.init(reference: record.reference)); dismiss() }
-                        catch { self.error = error.localizedDescription }
+                VStack(spacing: 0) {
+                    SettingsControlRow(title: "候选来源", labelWidth: 120) {
+                        SettingsChoicePicker(title: "候选来源", selection: $source,
+                            choices: [.tmdb, .douban], label: { $0.title })
                     }
+                    SettingsControlRow(title: "搜索片名", labelWidth: 120) {
+                        HStack {
+                            TextField("搜索片名", text: $query).onSubmit { search() }
+                            Button("搜索") { search() }
+                        }
+                    }
+                    SettingsControlRow(title: "条目 ID / 豆瓣链接", labelWidth: 120) {
+                        HStack {
+                            TextField("条目 ID / 豆瓣链接", text: $idInput)
+                            Button("读取条目") { lookup() }
+                        }
+                    }
+                    SettingsControlRow(title: "标题", labelWidth: 120) { TextField("标题", text: $title) }
+                    SettingsControlRow(title: "年份", labelWidth: 120) { TextField("年份", text: $year) }
+                    SettingsControlRow(title: "类型", labelWidth: 120) {
+                        SettingsChoicePicker(title: "类型", selection: $kind,
+                            choices: [.movies, .television], label: { $0 == .television ? "剧集" : "电影" })
+                    }
+                    SettingsControlRow(title: "海报地址", labelWidth: 120) { TextField("海报地址", text: $poster) }
+                    HStack { Spacer(); Button("从本机选择海报…", action: choosePoster) }
+                        .padding(.top, 8)
+                    Text("手动修改的字段会锁定；重新匹配会保留修正。")
+                        .font(.caption).foregroundStyle(palette.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12)
                 }
-                Spacer(); Button("取消") { dismiss() }
-                Button("保存修正") { save() }.keyboardShortcut(.defaultAction)
+                .padding(16).background(AppGlassSurface(cornerRadius: 10, role: .control))
+                if busy { ProgressView().controlSize(.small).tint(palette.accent) }
+                if let error { Text(error).font(.caption).foregroundStyle(palette.color(for: .danger)).textSelection(.enabled) }
             }.disabled(busy)
-        }.padding(24).frame(width: 650, height: 740)
-        .foregroundStyle(palette.foreground).tint(palette.accent)
-        .background(AppGlassSurface(cornerRadius: 20, role: .panel))
+        } actions: {
+            Button("解除手动锁定") {
+                Task {
+                    do { try await FileServicesState.shared.saveCorrection(.init(reference: record.reference)); dismiss() }
+                    catch { self.error = error.localizedDescription }
+                }
+            }.disabled(busy)
+            Spacer()
+            Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
+            Button("保存修正") { save() }
+                .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
+                .keyboardShortcut(.defaultAction).disabled(busy)
+        }
         .onAppear {
             title = record.metadata.kind == .television ? record.metadata.showTitle ?? record.metadata.title ?? "" : record.metadata.title ?? ""
             query = title; year = record.metadata.year.map(String.init) ?? ""; kind = record.metadata.kind ?? .movies

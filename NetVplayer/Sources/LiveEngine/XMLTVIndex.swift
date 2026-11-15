@@ -68,12 +68,15 @@ final class XMLTVIndexWriter {
     let directory: URL
     let limits: EPGImportLimits
     private(set) var byteCount = 0
-    private var fileBytes: [String: Int] = [:]
+    private(set) var programmeCount = 0
+    private(set) var fileBytes: [String: Int] = [:]
     init(directory: URL, limits: EPGImportLimits) { self.directory = directory; self.limits = limits }
 
     func append(_ batch: [XMLTVProgramme]) throws {
         var files: [String: Data] = [:]
         for programme in batch {
+            guard programmeCount < limits.programmeCount else { throw EPGImportError.limitExceeded }
+            programmeCount += 1
             let filename = XMLTVIndex.filename(channel: programme.channelID, day: XMLTVIndex.day(programme.item.start))
             var data = try JSONEncoder().encode(programme.item)
             data.append(10)

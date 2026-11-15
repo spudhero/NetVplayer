@@ -11,14 +11,21 @@ public final class ParseEngine: @unchecked Sendable {
     public static let shared = ParseEngine()
 
     private let httpClient: HTTPClient
+    private let snifferFactory: @MainActor @Sendable () -> any WebMediaSniffing
     public private(set) var lastFailure: AppFailure?
 
     public init(httpClient: HTTPClient = .shared) {
         self.httpClient = httpClient
+        self.snifferFactory = { WebViewSniffer() }
+    }
+
+    init(httpClient: HTTPClient, snifferFactory: @escaping @MainActor @Sendable () -> any WebMediaSniffing) {
+        self.httpClient = httpClient
+        self.snifferFactory = snifferFactory
     }
 
     /// 解析播放地址
-    public func resolve(result: Result, parse: Parse?) async -> PlaySpec {
+    public func resolve(result: Result, parse: Parse?, webPolicy: WebMediaPolicy? = nil) async -> PlaySpec {
         let effectiveParse = parse ?? Parse()
         lastFailure = nil
         let baseSpec = PlaySpec(
@@ -29,55 +36,92 @@ public final class ParseEngine: @unchecked Sendable {
             format: result.format,
             drm: result.drm,
             subs: result.subs,
+            providerDanmaku: result.danmaku,
             flag: result.flag,
             siteKey: result.key
         )
 
+        let attempt: ParseAttempt
         switch effectiveParse.parseType {
         case .webView:
             // Type 0: WebView 嗅探
-            return baseSpec.merging(await doSniff(url: baseSpec.url, headers: baseSpec.headers, click: effectiveParse.click))
+            attempt = await doSniff(baseSpec: baseSpec, click: effectiveParse.click, policy: webPolicy)
         case .json:
             // Type 1: JSON 接口解析
-            return await jsonParse(parse: effectiveParse, baseSpec: baseSpec)
+            attempt = await jsonParse(parse: effectiveParse, baseSpec: baseSpec)
         case .jsonExt:
             // Type 2: JAR 自定义 JSON 解析器 — macOS 首版不支持
-            lastFailure = AppFailure(category: .parse, message: "Parse type 2 JsonExt 首版无替代实现", detail: effectiveParse.name)
-            return baseSpec
+            attempt = .failure(AppFailure(category: .parse, message: "Parse type 2 JsonExt 首版无替代实现", detail: effectiveParse.name))
         case .jsonMix:
             // Type 3: 混合多解析接口 — macOS 首版不支持
-            lastFailure = AppFailure(category: .parse, message: "Parse type 3 JsonMix 首版无替代实现", detail: effectiveParse.name)
-            return baseSpec
+            attempt = .failure(AppFailure(category: .parse, message: "Parse type 3 JsonMix 首版无替代实现", detail: effectiveParse.name))
         case .superParse:
             // Type 4: JSON + WebView 竞速
-            return await superParse(parse: effectiveParse, baseSpec: baseSpec)
+            attempt = await superParse(parse: effectiveParse, baseSpec: baseSpec, policy: webPolicy)
+        }
+        // Retain the existing return contract: callers pair the original URL with
+        // lastFailure to reject it or choose a legitimate fallback. A failed race
+        // branch must never overwrite a sibling's successful result.
+        if Task.isCancelled {
+            lastFailure = Self.cancelledFailure
+            return baseSpec
+        }
+        switch attempt {
+        case .success(let spec):
+            lastFailure = nil
+            return spec
+        case .failure(let failure):
+            lastFailure = failure
+            return baseSpec
+        case .cancelled:
+            lastFailure = Self.cancelledFailure
+            return baseSpec
         }
     }
 
     // MARK: - Private
 
-    @MainActor private var currentSniffer: WebViewSniffer?
+    private enum ParseAttempt: Sendable {
+        case success(PlaySpec)
+        case failure(AppFailure)
+        case cancelled
+    }
+
+    private static var cancelledFailure: AppFailure {
+        AppFailure(category: .parse, message: "解析已取消")
+    }
+
+    @MainActor private var currentSniffer: (any WebMediaSniffing)?
 
     /// 主线程 WebView 嗅探执行
     @MainActor
-    private func doSniff(url: String, headers: [String: String] = [:], click: String = "") async -> PlaySpec {
+    private func doSniff(baseSpec: PlaySpec, click: String = "", policy: WebMediaPolicy? = nil) async -> ParseAttempt {
+        guard !Task.isCancelled else { return .cancelled }
         currentSniffer?.cancel()
-        
-        let sniffer = WebViewSniffer()
+        let sniffer = snifferFactory()
         self.currentSniffer = sniffer
+        defer {
+            if self.currentSniffer === sniffer { self.currentSniffer = nil }
+        }
         do {
-            let spec = try await sniffer.sniff(url: url, headers: headers, clickScript: click, timeout: 6)
-            if self.currentSniffer === sniffer {
-                self.currentSniffer = nil
+            let spec = try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await sniffer.sniff(url: baseSpec.url, headers: baseSpec.headers, clickScript: click, timeout: 15, policy: policy)
+            } onCancel: {
+                Task { @MainActor in sniffer.cancel() }
             }
-            return spec
+            try Task.checkCancellation()
+            guard !spec.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  spec.url != baseSpec.url else { throw WebViewSnifferError.noMediaFound }
+            var merged = baseSpec.merging(spec)
+            if spec.headerPolicy == .merge {
+                merged.headers = WebViewSniffer.mergingHeaders(baseSpec.headers, spec.headers)
+            }
+            return .success(merged)
+        } catch is CancellationError {
+            return .cancelled
         } catch {
-            print("[ParseEngine] WebView 嗅探失败: \(error)")
-            lastFailure = AppFailure(category: .parse, message: "WebView 嗅探失败", detail: error.localizedDescription)
-            if self.currentSniffer === sniffer {
-                self.currentSniffer = nil
-            }
-            return PlaySpec()
+            return .failure(AppFailure(category: .parse, message: "WebView 嗅探失败", detail: error.localizedDescription))
         }
     }
 
@@ -89,44 +133,55 @@ public final class ParseEngine: @unchecked Sendable {
     }
 
     /// JSON 解析
-    private func jsonParse(parse: Parse, baseSpec: PlaySpec) async -> PlaySpec {
+    private func jsonParse(parse: Parse, baseSpec: PlaySpec) async -> ParseAttempt {
+        guard !Task.isCancelled else { return .cancelled }
         let parseUrl = parseURL(parse.url, targetURL: baseSpec.url)
         if parseUrl.isEmpty {
-            lastFailure = AppFailure(category: .parse, message: "解析器 URL 为空", detail: parse.name)
-            return baseSpec
+            return .failure(AppFailure(category: .parse, message: "解析器 URL 为空", detail: parse.name))
         }
         do {
             var requestHeaders = parse.header
             requestHeaders.merge(parse.ext.header) { _, new in new }
 
             let response = try await httpClient.get(url: parseUrl, headers: requestHeaders)
+            try Task.checkCancellation()
             if let data = response.text.data(using: .utf8),
                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                return applyParsePayload(json, to: baseSpec)
+                return .success(applyParsePayload(json, to: baseSpec))
             }
+        } catch is CancellationError {
+            return .cancelled
         } catch {
-            print("[ParseEngine] JSON 解析失败: \(error)")
-            lastFailure = AppFailure(category: .parse, message: "JSON 解析失败", detail: error.localizedDescription)
+            if Task.isCancelled { return .cancelled }
+            return .failure(AppFailure(category: .parse, message: "JSON 解析失败", detail: error.localizedDescription))
         }
-        return baseSpec
+        return .failure(AppFailure(category: .parse, message: "JSON 解析未返回有效对象"))
     }
 
     /// 竞速解析
-    private func superParse(parse: Parse, baseSpec: PlaySpec) async -> PlaySpec {
+    private func superParse(parse: Parse, baseSpec: PlaySpec, policy: WebMediaPolicy?) async -> ParseAttempt {
         // JSON 和 WebView 同时解析，取先返回的结果
-        return await withTaskGroup(of: PlaySpec.self) { group in
+        return await withTaskGroup(of: ParseAttempt.self) { group in
             group.addTask { await self.jsonParse(parse: parse, baseSpec: baseSpec) }
-            group.addTask {
-                baseSpec.merging(await self.doSniff(url: baseSpec.url, headers: baseSpec.headers, click: parse.click))
-            }
+            group.addTask { await self.doSniff(baseSpec: baseSpec, click: parse.click, policy: policy) }
 
-            for await result in group {
-                if !result.url.isEmpty, result.url != baseSpec.url {
+            var failure: AppFailure?
+            for await attempt in group {
+                if Task.isCancelled {
                     group.cancelAll()
-                    return result
+                    return .cancelled
+                }
+                switch attempt {
+                case .success(let spec) where !spec.url.isEmpty && spec.url != baseSpec.url:
+                    group.cancelAll()
+                    return .success(spec)
+                case .failure(let current):
+                    failure = failure ?? current
+                default:
+                    break
                 }
             }
-            return baseSpec
+            return .failure(failure ?? AppFailure(category: .parse, message: "解析未返回媒体地址"))
         }
     }
 
@@ -189,8 +244,10 @@ public final class ParseEngine: @unchecked Sendable {
         if let subs = decode([Sub].self, from: payload["subs"]) {
             spec.subs = subs
         }
-        if let danmaku = stringValue(payload["danmaku"]), !danmaku.isEmpty {
-            spec.danmaku = danmaku
+        if let value = payload["danmaku"],
+           let bytes = try? JSONSerialization.data(withJSONObject: ["danmaku": value]),
+           let result = try? JSONDecoder().decode(Result.self, from: bytes) {
+            spec.providerDanmaku = result.danmaku
         }
     }
 

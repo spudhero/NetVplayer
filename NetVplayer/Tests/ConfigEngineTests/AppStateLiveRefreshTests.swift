@@ -3,6 +3,7 @@ import Testing
 import Models
 import Networking
 import PlayerEngine
+import Storage
 @testable import NetVplayerApp
 
 @Suite("AppState live content refresh", .serialized)
@@ -37,11 +38,9 @@ struct AppStateLiveRefreshTests {
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LiveRefreshURLProtocol.self]
-        let appState = AppState(
-            loadDefaultConfig: false,
-            startProxyServer: false,
-            liveHTTPClient: HTTPClient(session: URLSession(configuration: configuration))
-        )
+        let fixture = LiveRefreshFixture(httpClient: HTTPClient(session: URLSession(configuration: configuration)))
+        let appState = fixture.state
+        defer { fixture.cleanup() }
         appState.activeLive = Live(name: "resume-source", url: sourceURL)
         appState.presentLivePlayer()
         defer { appState.dismissLivePlayer() }
@@ -91,11 +90,9 @@ struct AppStateLiveRefreshTests {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LiveRefreshURLProtocol.self]
         let httpClient = HTTPClient(session: URLSession(configuration: configuration))
-        let appState = AppState(
-            loadDefaultConfig: false,
-            startProxyServer: false,
-            liveHTTPClient: httpClient
-        )
+        let fixture = LiveRefreshFixture(httpClient: httpClient)
+        let appState = fixture.state
+        defer { fixture.cleanup() }
         appState.activeLive = Live(name: "signed-source", url: sourceURL)
         appState.presentLivePlayer()
         defer { appState.dismissLivePlayer() }
@@ -148,11 +145,9 @@ struct AppStateLiveRefreshTests {
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LiveRefreshURLProtocol.self]
-        let appState = AppState(
-            loadDefaultConfig: false,
-            startProxyServer: false,
-            liveHTTPClient: HTTPClient(session: URLSession(configuration: configuration))
-        )
+        let fixture = LiveRefreshFixture(httpClient: HTTPClient(session: URLSession(configuration: configuration)))
+        let appState = fixture.state
+        defer { fixture.cleanup() }
         appState.activeLive = Live(name: "redirected-source", url: sourceURL)
         appState.presentLivePlayer()
         defer { appState.dismissLivePlayer() }
@@ -200,11 +195,9 @@ struct AppStateLiveRefreshTests {
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LiveRefreshURLProtocol.self]
-        let appState = AppState(
-            loadDefaultConfig: false,
-            startProxyServer: false,
-            liveHTTPClient: HTTPClient(session: URLSession(configuration: configuration))
-        )
+        let fixture = LiveRefreshFixture(httpClient: HTTPClient(session: URLSession(configuration: configuration)))
+        let appState = fixture.state
+        defer { fixture.cleanup() }
         appState.activeLive = Live(name: "relay-source", url: sourceURL)
         appState.presentLivePlayer()
         defer { appState.dismissLivePlayer() }
@@ -267,11 +260,9 @@ struct AppStateLiveRefreshTests {
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LiveRefreshURLProtocol.self]
-        let appState = AppState(
-            loadDefaultConfig: false,
-            startProxyServer: false,
-            liveHTTPClient: HTTPClient(session: URLSession(configuration: configuration))
-        )
+        let fixture = LiveRefreshFixture(httpClient: HTTPClient(session: URLSession(configuration: configuration)))
+        let appState = fixture.state
+        defer { fixture.cleanup() }
         appState.activeLive = Live(name: "state-source", url: sourceURL)
         appState.presentLivePlayer()
         defer { appState.dismissLivePlayer() }
@@ -291,10 +282,36 @@ struct AppStateLiveRefreshTests {
             spec: spec,
             message: "mpv 播放结束但返回错误: unrecognized file format"
         )
-        try await Task.sleep(nanoseconds: 1_700_000_000)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while appState.liveError == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
 
         #expect(appState.liveError?.contains("当前线路无法播放") == true)
         #expect(appState.liveError?.localizedCaseInsensitiveContains("mpv") == false)
+    }
+}
+
+@MainActor
+private struct LiveRefreshFixture {
+    let state: AppState
+    private let root: URL
+    private let suite: String
+    private let defaults: UserDefaults
+
+    init(httpClient: HTTPClient) {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("live-refresh-\(UUID())")
+        suite = "live-refresh-\(UUID())"
+        defaults = UserDefaults(suiteName: suite)!
+        state = AppState(loadDefaultConfig: false, startProxyServer: false, startProviderRuntime: false,
+            liveHTTPClient: httpClient,
+            storageManager: StorageManager(storageDirectory: root), userPreferences: UserPreferences(defaults: defaults),
+            providerRuntimeBootstrap: nil)
+    }
+
+    func cleanup() {
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: root)
     }
 }
 

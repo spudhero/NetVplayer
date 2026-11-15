@@ -9,9 +9,12 @@ int32_t nvp_curl_baidu_root_get(
     const char *user_agent,
     const char *cookie,
     long timeout_milliseconds,
+    const int32_t *cancel_flag,
     uint8_t **out_bytes,
     size_t *out_length,
     long *out_status_code,
+    char *out_retry_after,
+    size_t retry_after_capacity,
     char *out_error,
     size_t error_capacity
 );

@@ -26,14 +26,16 @@ public struct BaiduShareFile: Sendable {
     public let size: Int64
     public let category: Int
     public let isDirectory: Bool
+    public let md5: String
 
-    public init(fileID: String, name: String, path: String, size: Int64, category: Int, isDirectory: Bool) {
+    public init(fileID: String, name: String, path: String, size: Int64, category: Int, isDirectory: Bool, md5: String = "") {
         self.fileID = fileID
         self.name = name
         self.path = path
         self.size = max(0, size)
         self.category = category
         self.isDirectory = isDirectory
+        self.md5 = md5
     }
 
     public var isPlayableMedia: Bool {
@@ -68,12 +70,12 @@ public struct BaiduDriveClient: Sendable {
     public static let playbackUserAgent = "netdisk;12.24.6;\(playbackDeviceModel);android-android;12;JSbridge4.4.0;jointBridge;1.1.0"
     private static let transferFolder = "/NetVplayer"
 
-    private let httpClient: HTTPClient
+    private let httpClient: DriveHTTPClient
     private let usesCurlShareListTransport: Bool
     private let savedFileStore: DriveSavedFileStore
 
     public init(httpClient: HTTPClient = .shared, savedFileStore: DriveSavedFileStore = .shared) {
-        self.httpClient = httpClient
+        self.httpClient = DriveHTTPClient(httpClient, provider: .baidu)
         self.usesCurlShareListTransport = httpClient === HTTPClient.shared
         self.savedFileStore = savedFileStore
     }
@@ -191,6 +193,7 @@ public struct BaiduDriveClient: Sendable {
                 shareUK: root.shareUK.isEmpty ? page.shareUK : root.shareUK
             )
         } catch {
+            if DriveServiceFailure.stopsRecovery(error) { throw error }
             guard !page.files.isEmpty else { throw error }
             return try await expandedFiles(
                 share: share,
@@ -263,6 +266,9 @@ public struct BaiduDriveClient: Sendable {
     }
 
     public func link(reference: DriveFileReference, credential: CloudCredential) async throws -> CloudDriveLink {
+        if DriveRequestRecovery.budget == nil {
+            return try await DriveRequestRecovery.withBudget { try await self.link(reference: reference, credential: credential) }
+        }
         guard reference.provider == .baidu else {
             throw DriveEngineError.unsupported("BaiduDriveClient 只处理百度网盘文件引用。")
         }
@@ -286,9 +292,8 @@ public struct BaiduDriveClient: Sendable {
             fid: reference.fid,
             name: reference.fileName,
             size: reference.size
-        )
+        ).scoped(account: DriveTransferContext.account(provider: .baidu, cookie: validated.secret), target: Self.transferFolder)
 
-        var retriedMissingFile = false
         var refreshedShareSession = false
         while true {
             var attemptedRecord: DriveSavedFileRecord?
@@ -305,7 +310,8 @@ public struct BaiduDriveClient: Sendable {
                         shareCookie: shareKey ?? "", accountCookie: requestCookie)
                 }
                 attemptedRecord = record
-                let media = try await mediaInfo(path: record.parentFID, fileID: record.savedFID, cookie: requestCookie)
+                let media = try await mediaInfo(path: record.parentFID, fileID: record.savedFID,
+                    expectedSize: reference.size > 0 ? reference.size : record.size, cookie: requestCookie)
                 var metadata = record.playbackMetadata(provider: .baidu)
                 metadata[DrivePlaybackMetadataKey.route] = DrivePlaybackRoute.originalDownload
                 metadata[DrivePlaybackMetadataKey.canUpdateProgress] = "false"
@@ -318,12 +324,11 @@ public struct BaiduDriveClient: Sendable {
                     metadata: metadata,
                     updatedCredential: .cookie(provider: .baidu, value: requestCookie)
                 )
-            } catch where attemptedRecord != nil && Self.isMissingSavedFile(error) {
+            } catch where attemptedRecord != nil && (Self.isMissingSavedFile(error) || error is SavedFileIdentityError) {
                 if let attemptedRecord {
-                    try? await savedFileStore.invalidate(attemptedRecord)
+                    try await DriveMappingVerification.invalidate(attemptedRecord, provider: .baidu, store: savedFileStore)
                 }
-                guard !retriedMissingFile else { throw error }
-                retriedMissingFile = true
+                throw error
             } catch where !refreshedShareSession && !share.passcode.isEmpty && Self.isShareSessionError(error) {
                 refreshedShareSession = true
                 await clearShareSession(for: share.shortURLToken)
@@ -347,24 +352,24 @@ public struct BaiduDriveClient: Sendable {
 
     public func deleteTemporaryPlaybackFile(
         cacheKey: String,
-        fileID: String,
+        fileID _: String,
         credential: CloudCredential
     ) async throws -> CloudCredential? {
         let cookie = try normalizedCookie(credential)
         guard let record = await savedFileStore.record(for: cacheKey) else {
             return .cookie(provider: .baidu, value: cookie)
         }
-        await DriveTransferCoordinator.shared.beginCleanup(cacheKey: cacheKey)
+        await DriveTransferCoordinator.current.beginCleanup(cacheKey: cacheKey)
         do {
             let path = record.parentFID.isEmpty
                 ? "\(Self.transferFolder)/\(record.savedFileName)"
                 : record.parentFID
             try await delete(path: path, cookie: cookie)
             try await savedFileStore.remove(cacheKey: cacheKey)
-            await DriveTransferCoordinator.shared.finishCleanup(cacheKey: cacheKey)
+            await DriveTransferCoordinator.current.finishCleanup(cacheKey: cacheKey)
             return .cookie(provider: .baidu, value: cookie)
         } catch {
-            await DriveTransferCoordinator.shared.finishCleanup(cacheKey: cacheKey)
+            await DriveTransferCoordinator.current.finishCleanup(cacheKey: cacheKey)
             throw error
         }
     }
@@ -375,6 +380,8 @@ public struct BaiduDriveClient: Sendable {
         shareCookie: String,
         accountCookie: String
     ) async throws -> DriveSavedFileRecord {
+        try await DriveTransferCoordinator.current.checkRecovery(sourceKey: identity.legacyCacheKey ?? identity.cacheKey,
+            account: DriveTransferContext.account(provider: .baidu, cookie: accountCookie))
         if let record = try await usableSavedRecord(
             reference: reference,
             identity: identity,
@@ -382,7 +389,10 @@ public struct BaiduDriveClient: Sendable {
         ) {
             return record
         }
-        let transferred = try await DriveTransferCoordinator.shared.transfer(cacheKey: identity.cacheKey) {
+        let transferred = try await DriveTransferCoordinator.current.confirmedTransfer(cacheKey: identity.cacheKey,
+            scope: .make(identity: identity, account: DriveTransferContext.account(provider: .baidu, cookie: accountCookie),
+                         target: Self.transferFolder, shareID: reference.pwdID, sourceFileID: reference.fid,
+                         name: reference.fileName, size: reference.size)) { attempt in
             if let record = try await usableSavedRecord(
                 reference: reference,
                 identity: identity,
@@ -390,15 +400,15 @@ public struct BaiduDriveClient: Sendable {
             ) {
                 return DriveSavedFileTransferResult(record: record, updatedCookie: accountCookie)
             }
-            try await ensureTransferFolder(cookie: accountCookie)
             let rejectedFIDs = await savedFileStore.rejectedFileIDs(cacheKey: identity.cacheKey)
             let saved = try await transfer(
                 reference: reference,
-                targetName: identity.targetFileName,
                 shareCookie: shareCookie,
                 accountCookie: accountCookie,
-                excludingFIDs: rejectedFIDs
+                excludingFIDs: rejectedFIDs,
+                attempt: attempt
             )
+            try await DriveTransferContext.current.check()
             let record = DriveSavedFileRecord(
                 provider: .baidu,
                 cacheKey: identity.cacheKey,
@@ -409,7 +419,8 @@ public struct BaiduDriveClient: Sendable {
                 originalName: reference.fileName,
                 savedFID: saved.fileID,
                 savedFileName: saved.name,
-                parentFID: saved.path
+                parentFID: saved.path,
+                contentFingerprint: saved.md5.isEmpty ? nil : saved.md5
             )
             try await savedFileStore.save(record)
             return DriveSavedFileTransferResult(record: record, updatedCookie: accountCookie)
@@ -422,28 +433,60 @@ public struct BaiduDriveClient: Sendable {
         identity: DriveSavedFileIdentity,
         accountCookie: String
     ) async throws -> DriveSavedFileRecord? {
-        guard let record = await savedFileStore.record(for: identity) else {
-            return nil
+        let base = DriveSavedFileNaming.identity(provider: .baidu, pwdID: reference.pwdID,
+            fid: reference.fid, name: reference.fileName, size: reference.size)
+        guard let record = try await savedFileStore.verificationRecord(for: base,
+            account: DriveTransferContext.account(provider: .baidu, cookie: accountCookie),
+            allowUnscopedCandidate: true) else { return nil }
+        let isLegacy = record.cacheKey == base.cacheKey || record.cacheKey == base.legacyCacheKey
+        if isLegacy {
+            // Inconclusive legacy rows stay intact. A source ID stored as
+            // a personal ID is locally disproven, independent of account.
+            guard record.pwdID == reference.pwdID, record.shareFID == reference.fid,
+                  !record.savedFID.isEmpty,
+                  reference.size > 0, record.size == reference.size,
+                  Self.isTransferFilePath(record.parentFID) else {
+                throw DriveMappingVerification.unconfirmed(.baidu)
+            }
+            if record.savedFID == reference.fid {
+                // Stop this attempt; only a separate, explicit user retry
+                // may submit a new transfer through the ordinary path.
+                try await DriveMappingVerification.invalidate(record, provider: .baidu, store: savedFileStore)
+            }
         }
-        let rejectedFIDs = await savedFileStore.rejectedFileIDs(cacheKey: identity.cacheKey)
-        guard !rejectedFIDs.contains(record.savedFID) else { return nil }
-        guard record.savedFID == reference.fid else {
-            return record
+        let files: [BaiduShareFile]
+        do { files = try await listTransferFolder(cookie: accountCookie) }
+        catch {
+            if !isLegacy {
+                try await DriveMappingVerification.handle(error, record: record, provider: .baidu, store: savedFileStore)
+            }
+            throw error
         }
-        guard let saved = try await waitForSavedFile(
-            path: record.parentFID,
-            name: record.savedFileName,
-            size: record.size,
-            cookie: accountCookie,
-            attempts: 1,
-            excludingFIDs: rejectedFIDs
-        ) else {
-            try? await savedFileStore.invalidate(record)
-            return nil
+        let matches = files.filter { $0.fileID == record.savedFID }
+        guard matches.count <= 1 else { throw DriveMappingVerification.unconfirmed(.baidu) }
+        if isLegacy {
+            // Old installations did not persist an account binding. A name is
+            // insufficient: inspect the original personal ID in this account.
+            // Inconclusive evidence must preserve the old row and never transfer.
+            guard let saved = matches.first, !saved.isDirectory,
+                  saved.path == record.parentFID, saved.size == reference.size,
+                  !saved.md5.isEmpty,
+                  record.contentFingerprint.map({ $0.isEmpty || $0.caseInsensitiveCompare(saved.md5) == .orderedSame }) ?? true else {
+                throw DriveMappingVerification.unconfirmed(.baidu)
+            }
         }
+        let verificationIdentity = isLegacy
+            ? DriveSavedFileIdentity(provider: .baidu, cacheKey: record.cacheKey, targetFileName: base.targetFileName)
+            : identity
+        try await DriveMappingVerification.require(record, identity: verificationIdentity,
+            file: matches.first.map { .init(id: $0.fileID,
+                parent: ($0.path as NSString).deletingLastPathComponent,
+                size: $0.size, isDirectory: $0.isDirectory, fingerprint: $0.md5) },
+            listingComplete: !isLegacy, store: savedFileStore)
+        guard let saved = matches.first else { throw DriveMappingVerification.unconfirmed(.baidu) }
         let repaired = DriveSavedFileRecord(
             provider: .baidu,
-            cacheKey: record.cacheKey,
+            cacheKey: identity.cacheKey,
             pwdID: record.pwdID,
             shareFID: record.shareFID,
             fidToken: record.fidToken,
@@ -452,164 +495,190 @@ public struct BaiduDriveClient: Sendable {
             savedFID: saved.fileID,
             savedFileName: saved.name,
             parentFID: saved.path.isEmpty ? record.parentFID : saved.path,
-            driveID: record.driveID
+            driveID: record.driveID,
+            targetRootFID: record.targetRootFID,
+            savedPickCode: record.savedPickCode,
+            isTemporary: record.isTemporary,
+            contentFingerprint: record.contentFingerprint.flatMap { $0.isEmpty ? nil : $0 }
+                ?? (saved.md5.isEmpty ? nil : saved.md5)
         )
-        try await savedFileStore.save(repaired)
-        DiagnosticLog.write(
-            "[BAIDU_SAVED_CACHE] repaired cacheKey=\(identity.cacheKey) "
-                + "shareFID=\(reference.fid) savedFID=\(saved.fileID)"
-        )
+        try await savedFileStore.replaceVerified(record, with: repaired)
+        if isLegacy { DiagnosticLog.write("[DRIVE_MAPPING_VERIFIED] provider=baidu legacyMigration=true") }
         return repaired
     }
 
-    private func ensureTransferFolder(cookie: String) async throws {
+    @discardableResult
+    func ensureTransferFolder(cookie: String) async throws -> [BaiduShareFile] {
+        if let files = try await transferFolderContentsIfExists(cookie: cookie) { return files }
+
         var components = URLComponents(string: "https://pan.baidu.com/api/create")!
         components.queryItems = Self.accountQueryItems + [
             URLQueryItem(name: "a", value: "commit"),
             URLQueryItem(name: "bdstoken", value: "")
         ]
         let form = Self.formData([
-            URLQueryItem(name: "path", value: "/\(Self.transferFolder)"),
+            URLQueryItem(name: "path", value: Self.transferFolder),
             URLQueryItem(name: "block_list", value: "[]"),
-            URLQueryItem(name: "isdir", value: "1")
+            URLQueryItem(name: "isdir", value: "1"),
+            URLQueryItem(name: "rtype", value: "0")
         ])
         let response = try await httpClient.post(
             url: components.url!.absoluteString,
             headers: Self.formHeaders(cookie: cookie, referer: "https://pan.baidu.com/disk/main"),
             body: form,
-            timeout: 20
+            timeout: try DriveTransferContext.readTimeout(20),
+            allowsProxyFallback: false,
+            redactsURLInLogs: true
         )
         let object = Self.jsonObject(response.data)
         let code = Self.intValue(object?["errno"])
-        // 百度在目录已存在时的返回码会随入口变化；抓包样本见过 -8，网页登录态也会返回 -6。
-        // 后续 transfer 才是目录可用性的权威校验，因此两者都按幂等成功处理。
+        // Concurrent creators may observe an existing-directory response. Only
+        // the canonical directory read below can confirm it is usable.
         guard (200..<300).contains(response.statusCode), code == 0 || code == -8 || code == -6 else {
             throw Self.apiError(response: response, object: object, fallback: "创建百度网盘临时目录失败")
         }
+        if code == 0, let path = object?["path"] as? String, path != Self.transferFolder {
+            throw DriveMappingVerification.unconfirmed(.baidu)
+        }
+        guard let files = try await transferFolderContentsIfExists(cookie: cookie) else {
+            throw DriveMappingVerification.unconfirmed(.baidu)
+        }
+        return files
     }
 
     private func transfer(
         reference: DriveFileReference,
-        targetName: String,
         shareCookie: String,
         accountCookie: String,
-        excludingFIDs: Set<String>
-    ) async throws -> (fileID: String, name: String, path: String, size: Int64) {
+        excludingFIDs: Set<String>,
+        attempt: DriveTransferAttempt
+    ) async throws -> (fileID: String, name: String, path: String, size: Int64, md5: String) {
         guard !shareCookie.isEmpty else {
             throw DriveEngineError.api(provider: .baidu, statusCode: 401, code: nil, message: "分享提取码会话已失效，请重试")
         }
-        var components = URLComponents(string: "https://pan.baidu.com/share/transfer")!
-        components.queryItems = [
-            URLQueryItem(name: "shareid", value: reference.pwdID),
-            URLQueryItem(name: "from", value: reference.fidToken),
-            URLQueryItem(name: "sekey", value: shareCookie.removingPercentEncoding ?? shareCookie),
-            URLQueryItem(name: "ondup", value: "newcopy"),
-            URLQueryItem(name: "async", value: "1"),
-            URLQueryItem(name: "channel", value: "chunlei"),
-            URLQueryItem(name: "web", value: "1"),
-            URLQueryItem(name: "app_id", value: Self.appID),
-            URLQueryItem(name: "bdstoken", value: ""),
-            URLQueryItem(name: "logid", value: ""),
-            URLQueryItem(name: "clienttype", value: "0"),
-            URLQueryItem(name: "dp-logid", value: "")
-        ]
-        components.percentEncodedQuery = components.percentEncodedQuery?
-            .replacingOccurrences(of: "+", with: "%2B")
-            .replacingOccurrences(of: "/", with: "%2F")
-        let form = Self.formData([
-            URLQueryItem(name: "path", value: Self.transferFolder),
-            URLQueryItem(name: "fsidlist", value: "[\(reference.fid)]")
-        ])
-        let response = try await httpClient.post(
-            url: components.url!.absoluteString,
-            headers: [
-                "Accept-Encoding": "gzip",
-                "Connection": "Keep-Alive",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Cookie": accountCookie,
-                "Host": "pan.baidu.com",
-                "Referer": "https://pan.baidu.com/",
-                "User-Agent": Self.transferUserAgent
-            ],
-            body: form,
-            timeout: 30,
-            handlesCookies: false
-        )
-        let object = Self.jsonObject(response.data)
-        let code = Self.intValue(object?["errno"])
-        guard (200..<300).contains(response.statusCode), code == 0 else {
-            throw Self.apiError(response: response, object: object, fallback: "百度网盘转存失败")
+        if await attempt.needsSubmission {
+            let previousIDs = Set(try await ensureTransferFolder(cookie: accountCookie).map(\.fileID))
+            _ = try await attempt.submit(previousIDs: previousIDs) {
+                var components = URLComponents(string: "https://pan.baidu.com/share/transfer")!
+                components.queryItems = [
+                    URLQueryItem(name: "shareid", value: reference.pwdID),
+                    URLQueryItem(name: "from", value: reference.fidToken),
+                    URLQueryItem(name: "sekey", value: shareCookie.removingPercentEncoding ?? shareCookie),
+                    URLQueryItem(name: "ondup", value: "newcopy"),
+                    URLQueryItem(name: "async", value: "1"),
+                    URLQueryItem(name: "channel", value: "chunlei"),
+                    URLQueryItem(name: "web", value: "1"),
+                    URLQueryItem(name: "app_id", value: Self.appID),
+                    URLQueryItem(name: "bdstoken", value: ""),
+                    URLQueryItem(name: "logid", value: ""),
+                    URLQueryItem(name: "clienttype", value: "0"),
+                    URLQueryItem(name: "dp-logid", value: "")
+                ]
+                components.percentEncodedQuery = components.percentEncodedQuery?
+                    .replacingOccurrences(of: "+", with: "%2B")
+                    .replacingOccurrences(of: "/", with: "%2F")
+                let form = Self.formData([
+                    URLQueryItem(name: "path", value: Self.transferFolder),
+                    URLQueryItem(name: "fsidlist", value: "[\(reference.fid)]")
+                ])
+                let response = try await httpClient.post(
+                    url: components.url!.absoluteString,
+                    headers: [
+                        "Accept-Encoding": "gzip",
+                        "Connection": "Keep-Alive",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Cookie": accountCookie,
+                        "Host": "pan.baidu.com",
+                        "Referer": "https://pan.baidu.com/",
+                        "User-Agent": Self.transferUserAgent
+                    ],
+                    body: form,
+                    timeout: 30,
+                    handlesCookies: false,
+                    allowsProxyFallback: false,
+                    redactsURLInLogs: true
+                )
+                let object = Self.jsonObject(response.data)
+                let code = Self.intValue(object?["errno"])
+                guard (200..<300).contains(response.statusCode), code == 0 else {
+                    throw Self.apiError(response: response, object: object, fallback: "百度网盘转存失败")
+                }
+                // info[].fsid/path describe the SOURCE, even when ondup=newcopy renamed
+                // the destination. extra.list is the source -> personal file mapping.
+                let mappings = (object?["extra"] as? [String: Any])?["list"] as? [[String: Any]] ?? []
+                let personalID: String?
+                if !mappings.isEmpty {
+                    let matches = mappings.filter { Self.firstString($0, keys: ["from_fs_id"]) == reference.fid }
+                    guard matches.count == 1, let mapping = matches.first,
+                          !Self.firstString(mapping, keys: ["to_fs_id"]).isEmpty,
+                          Self.isTransferFilePath(Self.firstString(mapping, keys: ["to"])) else {
+                        try await attempt.rejectIdentityEvidence()
+                        throw SavedFileIdentityError.unresolved
+                    }
+                    personalID = Self.firstString(mapping, keys: ["to_fs_id"])
+                } else {
+                    let items = object?["info"] as? [[String: Any]] ?? []
+                    guard items.count == 1, let item = items.first,
+                          (Self.intValue(item["errno"]) ?? 0) == 0 else { throw SavedFileIdentityError.unresolved }
+                    let returnedID = Self.firstString(item, keys: ["fs_id", "fsId", "fsid"])
+                    personalID = returnedID.isEmpty || previousIDs.contains(returnedID) || returnedID == reference.fid ? nil : returnedID
+                }
+                return DriveTransferSubmission(fileID: personalID)
+            }
         }
-        let items = object?["info"] as? [[String: Any]] ?? []
-        guard let item = items.first else {
-            throw DriveEngineError.api(provider: .baidu, statusCode: response.statusCode, code: code, message: "转存响应缺少文件信息")
+        let personalID = await attempt.fileID
+        let allowsNameInference = await attempt.allowsNameInference
+        guard personalID != nil || allowsNameInference else {
+            throw DriveEngineError.transferConfirmationPending()
         }
-        let returnedPath = Self.firstString(item, keys: ["path"])
-        let returnedName = Self.firstString(item, keys: ["server_filename", "name"])
-        let pathName = returnedPath.isEmpty ? "" : URL(fileURLWithPath: returnedPath).lastPathComponent
-        let resolvedName = returnedName.isEmpty ? (pathName.isEmpty ? targetName : pathName) : returnedName
-        let savedPath: String
-        if returnedPath == Self.transferFolder || returnedPath.hasPrefix("\(Self.transferFolder)/") {
-            savedPath = returnedPath
-        } else {
-            savedPath = "\(Self.transferFolder)/\(resolvedName)"
+        let previousIDs = await attempt.previousIDs
+        let excluded = personalID == nil ? excludingFIDs.union(previousIDs).union([reference.fid]) : excludingFIDs
+        guard let resolved = try await waitForSavedFile(
+            fileID: personalID,
+            name: reference.fileName,
+            size: reference.size,
+            cookie: accountCookie,
+            excludingFIDs: excluded
+        ) else {
+            throw DriveEngineError.transferConfirmationPending()
         }
-        let returnedID = Self.firstString(item, keys: ["fs_id", "fsId", "fsid"])
-        let savedSize = Self.int64Value(item["size"]) ?? reference.size
-        if returnedID.isEmpty || excludingFIDs.contains(returnedID),
-           let resolved = try await waitForSavedFile(
-               path: savedPath,
-               name: resolvedName,
-               size: savedSize,
-               cookie: accountCookie,
-               excludingFIDs: excludingFIDs
-           ) {
-            return (
-                resolved.fileID,
-                resolved.name,
-                resolved.path.isEmpty ? savedPath : resolved.path,
-                resolved.size > 0 ? resolved.size : savedSize
-            )
-        }
-        guard !returnedID.isEmpty, !excludingFIDs.contains(returnedID) else {
-            throw DriveEngineError.api(
-                provider: .baidu,
-                statusCode: response.statusCode,
-                code: code,
-                message: "百度网盘转存完成，但未能定位个人盘文件"
-            )
-        }
+        try await attempt.confirmed(resolved.fileID)
         return (
-            returnedID,
-            resolvedName,
-            savedPath,
-            savedSize
+            resolved.fileID,
+            resolved.name,
+            resolved.path,
+            resolved.size,
+            resolved.md5
         )
     }
 
     private func waitForSavedFile(
-        path: String,
+        fileID: String?,
         name: String,
         size: Int64,
         cookie: String,
         attempts: Int = 6,
         excludingFIDs: Set<String>
     ) async throws -> BaiduShareFile? {
-        let expectedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         let expectedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         for attempt in 0..<max(1, attempts) {
             let files = try await listTransferFolder(cookie: cookie).filter {
                 !$0.isDirectory && !excludingFIDs.contains($0.fileID)
+                    && Self.isTransferFilePath($0.path) && (size <= 0 || $0.size == size)
             }
-            if !expectedPath.isEmpty,
-               let exactPath = files.first(where: { $0.path == expectedPath }) {
-                return exactPath
-            }
-            if !expectedName.isEmpty,
-               let exactName = files.first(where: {
-                   $0.name == expectedName && (size <= 0 || $0.size == size)
-               }) {
-                return exactName
+            if let fileID {
+                // A known personal ID must never fall back to a namesake.
+                if let exactFile = files.first(where: { $0.fileID == fileID }) { return exactFile }
+            } else if size > 0, !expectedName.isEmpty {
+                let candidates = files.filter { Self.isSavedCopyName($0.name, of: expectedName) }
+                    .sorted { $0.path < $1.path }
+                if candidates.count == 1 { return candidates[0] }
+                // Repeated copies of the same bytes are equivalent. Same name
+                // and size alone do not establish that two files are identical.
+                if let first = candidates.first, !first.md5.isEmpty,
+                   candidates.allSatisfy({ $0.md5 == first.md5 }) {
+                    return first
+                }
             }
             if attempt + 1 < attempts {
                 try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 200_000_000)
@@ -618,29 +687,69 @@ public struct BaiduDriveClient: Sendable {
         return nil
     }
 
+    private enum SavedFileIdentityError: LocalizedError {
+        case unresolved
+        var errorDescription: String? { "百度网盘文件身份不一致，已停止使用该播放地址，请重试" }
+    }
+
+    private static func isTransferFilePath(_ path: String) -> Bool {
+        path.hasPrefix("\(transferFolder)/")
+            && URL(fileURLWithPath: path).standardized.path == path
+    }
+
+    private static func isSavedCopyName(_ name: String, of original: String) -> Bool {
+        if name == original { return true }
+        let url = URL(fileURLWithPath: original)
+        let ext = url.pathExtension
+        let stem = ext.isEmpty ? original : url.deletingPathExtension().lastPathComponent
+        let suffix = ext.isEmpty ? "" : ".\(ext)"
+        let pattern = "^" + NSRegularExpression.escapedPattern(for: stem)
+            + #"\([1-9][0-9]*\)"# + NSRegularExpression.escapedPattern(for: suffix) + "$"
+        return name.range(of: pattern, options: .regularExpression) != nil
+    }
+
     private func listTransferFolder(cookie: String) async throws -> [BaiduShareFile] {
+        guard let files = try await transferFolderContentsIfExists(cookie: cookie) else {
+            throw DriveMappingVerification.unconfirmed(.baidu)
+        }
+        return files
+    }
+
+    private func transferFolderContentsIfExists(cookie: String) async throws -> [BaiduShareFile]? {
         var files: [BaiduShareFile] = []
         for page in 1...Self.maxPagesPerDirectory {
             let response = try await httpClient.get(
                 url: Self.accountDirectoryListURL(Self.transferFolder, page: page),
                 headers: Self.accountHeaders(cookie: cookie),
-                timeout: 20,
-                allowsProxyFallback: true,
+                timeout: try DriveTransferContext.readTimeout(20),
+                allowsProxyFallback: DriveTransferContext.confirmationDeadline == nil,
                 redactsURLInLogs: true
             )
             let object = Self.jsonObject(response.data)
             let code = Self.intValue(object?["errno"])
+            if (200..<300).contains(response.statusCode), code == nil {
+                throw DriveMappingVerification.unconfirmed(.baidu)
+            }
+            if (200..<300).contains(response.statusCode), code == -9, page == 1 { return nil }
             guard (200..<300).contains(response.statusCode), code == 0 else {
                 throw Self.apiError(response: response, object: object, fallback: "读取百度网盘临时目录失败")
             }
-            let pageFiles = Self.parseFiles(object?["list"])
+            guard let raw = object?["list"] as? [[String: Any]] else { throw DriveMappingVerification.unconfirmed(.baidu) }
+            let pageFiles = Self.parseFiles(raw)
+            guard pageFiles.count == raw.count else { throw DriveMappingVerification.unconfirmed(.baidu) }
             files.append(contentsOf: pageFiles)
-            if pageFiles.count < Self.pageSize { break }
+            if pageFiles.count < Self.pageSize {
+                if (Self.intValue(object?["total"] ?? object?["cur_total"]) ?? files.count) > files.count
+                    || Self.boolValue(object?["has_more"]) {
+                    throw DriveMappingVerification.unconfirmed(.baidu)
+                }
+                return files
+            }
         }
-        return files
+        throw DriveMappingVerification.unconfirmed(.baidu)
     }
 
-    private func mediaInfo(path: String, fileID: String, cookie: String) async throws -> (url: String, resolution: String) {
+    private func mediaInfo(path: String, fileID: String, expectedSize: Int64, cookie: String) async throws -> (url: String, resolution: String) {
         let preferred = try await mediaInfoResponse(
             cookie: cookie,
             queryItems: [
@@ -660,6 +769,7 @@ public struct BaiduDriveClient: Sendable {
             ]
         )
         if let result = Self.mediaInfoLink(response: preferred.response, object: preferred.object) {
+            try Self.validateMediaSize(preferred.object, expectedSize: expectedSize)
             return result
         }
         let preferredCode = Self.intValue(preferred.object?["errno"]) ?? -1
@@ -686,7 +796,15 @@ public struct BaiduDriveClient: Sendable {
         guard let result = Self.mediaInfoLink(response: legacy.response, object: legacy.object) else {
             throw Self.apiError(response: legacy.response, object: legacy.object, fallback: "百度网盘未返回原画直链")
         }
+        try Self.validateMediaSize(legacy.object, expectedSize: expectedSize)
         return result
+    }
+
+    private static func validateMediaSize(_ object: [String: Any]?, expectedSize: Int64) throws {
+        let info = object?["info"] as? [String: Any]
+        if expectedSize > 0, let size = int64Value(info?["size"]), size > 0, size != expectedSize {
+            throw SavedFileIdentityError.unresolved
+        }
     }
 
     private func mediaInfoResponse(
@@ -695,6 +813,9 @@ public struct BaiduDriveClient: Sendable {
     ) async throws -> (response: HTTPResponse, object: [String: Any]?) {
         var components = URLComponents(string: "https://pan.baidu.com/api/mediainfo")!
         components.queryItems = queryItems
+        // Baidu applies form decoding to the query. URLComponents leaves '+'
+        // literal, which turns filenames such as "SDR+" into a different path.
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         let response = try await httpClient.get(
             url: components.url!.absoluteString,
             headers: [
@@ -990,7 +1111,8 @@ public struct BaiduDriveClient: Sendable {
                 path: firstString(item, keys: ["path"]),
                 size: int64Value(item["size"]) ?? 0,
                 category: intValue(item["category"]) ?? 0,
-                isDirectory: boolValue(item["isdir"] ?? item["is_dir"])
+                isDirectory: boolValue(item["isdir"] ?? item["is_dir"]),
+                md5: firstString(item, keys: ["md5"])
             )
         }
     }
@@ -1174,12 +1296,7 @@ public struct BaiduDriveClient: Sendable {
     }
 
     private static func isMissingSavedFile(_ error: Error) -> Bool {
-        guard case .api(.baidu, let statusCode, let code, let message) = error as? DriveEngineError else {
-            return false
-        }
-        if statusCode == 404 || [12, -9, -7].contains(code ?? Int.min) { return true }
-        let lower = message.lowercased()
-        return lower.contains("not found") || lower.contains("不存在") || lower.contains("已删除")
+        DriveEngineError.invalidatesSavedRecord(error, provider: .baidu)
     }
 
     private static func isShareSessionError(_ error: Error) -> Bool {
@@ -1230,5 +1347,54 @@ public struct BaiduDriveClient: Sendable {
         if let value = value as? Int { return value != 0 }
         if let value = value as? String { return ["1", "true", "yes"].contains(value.lowercased()) }
         return false
+    }
+}
+
+extension BaiduDriveClient {
+    func recoverTransfer(_ record: DriveTransferTask, cookie: String) async throws -> DriveRecoveredFile? {
+        let scope = record.scope
+        guard scope.target == Self.transferFolder else { throw DriveTaskRecoveryError.scopeChanged }
+        if !record.submitted || record.phase == .failed {
+            _ = try await listTransferFolder(cookie: cookie)
+            return nil
+        }
+        guard record.fileID != nil || record.allowsNameInference else { throw DriveTaskRecoveryError.requiresReview }
+        let excluded = record.fileID == nil ? record.previousIDs.union([scope.sourceFileID]) : []
+        guard let file = try await waitForSavedFile(fileID: record.fileID, name: scope.name, size: scope.size,
+            cookie: cookie, excludingFIDs: excluded) else { throw DriveTaskRecoveryError.requiresReview }
+        return .init(id: file.fileID, name: file.name, parent: file.path, size: file.size, fingerprint: file.md5)
+    }
+}
+
+extension BaiduDriveClient {
+    func personalDirectory(folderID: String, cursor: String?, credential: CloudCredential) async throws -> CloudDirectoryPage {
+        let folder = try FileServicePath.normalize(folderID)
+        let page = try CloudDirectoryPaging.integer(cursor, first: 1, provider: .baidu)
+        let response = try await httpClient.get(url: Self.accountDirectoryListURL(folder, page: page),
+            headers: Self.accountHeaders(cookie: credential.secret), timeout: 30, redactsURLInLogs: true)
+        let object = Self.jsonObject(response.data)
+        guard (200..<300).contains(response.statusCode), Self.intValue(object?["errno"]) == 0 else {
+            throw Self.apiError(response: response, object: object, fallback: "读取百度网盘个人目录失败")
+        }
+        guard let raw = object?["list"] as? [[String: Any]] else { throw DriveMappingVerification.unconfirmed(.baidu) }
+        let files = Self.parseFiles(raw)
+        guard files.count == raw.count, files.allSatisfy({ !$0.path.isEmpty && FileServicePath.parent($0.path) == folder }) else {
+            throw DriveMappingVerification.unconfirmed(.baidu)
+        }
+        let more = try CloudDirectoryPaging.hasNext(count: files.count, offset: (page - 1) * Self.pageSize, limit: Self.pageSize,
+            total: Self.intValue(object?["total"] ?? object?["cur_total"]), hasMore: Self.boolValue(object?["has_more"]), provider: .baidu)
+        return CloudDirectoryPage(entries: files.map {
+            // Baidu lists folders by absolute path and downloads files by fs_id + path.
+            .init(id: $0.isDirectory ? $0.path : $0.fileID, name: $0.name, parentID: folder,
+                  path: $0.path, size: $0.size, isDirectory: $0.isDirectory)
+        }, nextCursor: more ? String(page + 1) : nil)
+    }
+
+    func personalDirectoryDownload(entry: CloudDirectoryEntry, credential: CloudCredential) async throws -> CloudDriveLink {
+        guard !entry.path.isEmpty else { throw DriveEngineError.noDownloadURL(entry.name) }
+        let result = try await mediaInfo(path: entry.path, fileID: entry.id, expectedSize: entry.size, cookie: credential.secret)
+        return CloudDriveLink(url: result.url, headers: ["Cookie": credential.secret,
+            "Referer": "https://pan.baidu.com/", "User-Agent": Self.playbackUserAgent],
+            metadata: CloudDirectoryPaging.metadata(entry, provider: .baidu))
     }
 }

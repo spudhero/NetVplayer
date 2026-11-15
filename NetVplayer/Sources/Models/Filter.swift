@@ -15,24 +15,29 @@ public struct Filter: Codable, Sendable, Equatable {
     public var values: [FilterValue]
     public var inputKind: FilterInputKind
     public var isRequired: Bool
+    /// The source's explicit `init` value; option order does not imply a default.
+    public var defaultValue: String?
 
     public init(
         key: String = "",
         name: String = "",
         values: [FilterValue] = [],
         inputKind: FilterInputKind = .options,
-        isRequired: Bool = false
+        isRequired: Bool = false,
+        defaultValue: String? = nil
     ) {
         self.key = key
         self.name = name
         self.values = values
         self.inputKind = inputKind
         self.isRequired = isRequired
+        self.defaultValue = defaultValue
     }
 
     enum CodingKeys: String, CodingKey {
         case key, name, values, inputKind, isRequired
         case value
+        case defaultValue = "init"
     }
 
     public init(from decoder: Decoder) throws {
@@ -44,6 +49,7 @@ public struct Filter: Codable, Sendable, Equatable {
             ?? []
         self.inputKind = try container.decodeIfPresent(FilterInputKind.self, forKey: .inputKind) ?? .options
         self.isRequired = try container.decodeIfPresent(Bool.self, forKey: .isRequired) ?? false
+        self.defaultValue = try container.decodeIfPresent(String.self, forKey: .defaultValue)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -51,6 +57,7 @@ public struct Filter: Codable, Sendable, Equatable {
         try container.encode(key, forKey: .key)
         try container.encode(name, forKey: .name)
         try container.encode(values, forKey: .values)
+        try container.encodeIfPresent(defaultValue, forKey: .defaultValue)
         if inputKind != .options {
             try container.encode(inputKind, forKey: .inputKind)
         }
@@ -92,10 +99,19 @@ public enum CategoryFilterSelectionPolicy {
             }
             guard let first = filter.values.first else { continue }
             if let saved = existing[filter.key],
-               filter.values.contains(where: { $0.value == saved }) {
+               filter.values.contains(where: { $0.value == saved }) || (saved.isEmpty && !filter.isRequired) {
                 selection[filter.key] = saved
-            } else {
+            } else if let value = filter.defaultValue,
+                      filter.values.contains(where: { $0.value == value }) || (value.isEmpty && !filter.isRequired) {
+                selection[filter.key] = value
+            } else if filter.values.contains(where: { $0.value.isEmpty }) {
+                selection[filter.key] = ""
+            } else if filter.isRequired {
                 selection[filter.key] = first.value
+            } else {
+                // FongMi leaves optional filters unselected until the user chooses.
+                // In particular, an A–Z list must not silently restrict music to A.
+                continue
             }
         }
         return selection

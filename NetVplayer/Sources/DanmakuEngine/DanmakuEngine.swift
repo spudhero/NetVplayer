@@ -1,15 +1,17 @@
 // DanmakuEngine/DanmakuEngine.swift
-// Manual danmaku search and local cache. No automatic external requests.
+// Manual search/cache plus exact, ephemeral player-provided attachments.
 
 import Foundation
 import CryptoKit
 import Networking
 import Storage
+import Models
 
 public final class DanmakuEngine: @unchecked Sendable {
     public static let shared = DanmakuEngine()
 
     private let httpClient: HTTPClient
+    private let providerClient = HTTPClient(session: URLSession(configuration: .ephemeral))
     private let storage: StorageManager
     private let cacheFilename = "danmaku_cache.json"
     private let lock = NSLock()
@@ -63,6 +65,37 @@ public final class DanmakuEngine: @unchecked Sendable {
             }
         }
         return matches
+    }
+
+    /// Fetch exactly the selected player attachment, with normal TLS trust and
+    /// bounded input. Direct provider data and credentials never enter the cache.
+    public func loadProviderTrack(_ track: ProviderDanmaku) async throws -> DanmakuPayloadParseResult {
+        guard let url = URL(string: track.url), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+            throw ProviderDanmakuLoadError.invalidURL
+        }
+        let response = try await providerClient.getBounded(url: track.url, maximumBytes: DanmakuPayloadParser.maximumPayloadBytes, timeout: 12, allowsProxyFallback: false)
+        try Task.checkCancellation()
+#if DEBUG
+        print("[PROVIDER_DANMAKU] status=\(response.statusCode) bytes=\(response.data.count)")
+#endif
+        return try Self.parseProviderResponse(response.data, statusCode: response.statusCode)
+    }
+
+    static func parseProviderResponse(_ data: Data, statusCode: Int) throws -> DanmakuPayloadParseResult {
+        guard (200..<300).contains(statusCode) else { throw ProviderDanmakuLoadError.httpStatus(statusCode) }
+        guard let payload = String(data: data, encoding: .utf8) else {
+            throw ProviderDanmakuLoadError.invalidPayload(.invalidEncoding)
+        }
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw ProviderDanmakuLoadError.emptyResponse }
+        let format: DanmakuTrackFormat = trimmed.hasPrefix("<") ? .xml : .json
+        let result = DanmakuPayloadParser.parseWithDiagnostic(payload: payload, format: format)
+#if DEBUG
+        print("[PROVIDER_DANMAKU] format=\(format.rawValue) cues=\(result.cues.count) truncated=\(result.diagnostic.truncatedCount) failure=\(result.diagnostic.failureCategory?.rawValue ?? "none")")
+#endif
+        if let failure = result.diagnostic.failureCategory { throw ProviderDanmakuLoadError.invalidPayload(failure) }
+        guard !result.cues.isEmpty else { throw ProviderDanmakuLoadError.noComments }
+        return result
     }
 
     public static func sourceIdentity(_ url: String) -> String {

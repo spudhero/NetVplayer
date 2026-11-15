@@ -47,10 +47,6 @@ public struct PikPakShareFile: Sendable {
         DriveMediaClassifier.isPlayableMedia(name: name, formatType: kind, isDirectory: isDirectory, isFile: !isDirectory)
     }
 
-    public var isPlayableVideo: Bool {
-        DriveMediaClassifier.isPlayableVideo(name: name, formatType: kind, isDirectory: isDirectory, isFile: !isDirectory)
-    }
-
     public var isKnownNonVideoAsset: Bool {
         DriveMediaClassifier.isKnownNonVideoAsset(name: name)
     }
@@ -80,10 +76,10 @@ public final class PikPakDriveClient: @unchecked Sendable {
     private static let clientID = "YNxT9w7GMdWvEOKa"
     private static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
 
-    private let httpClient: HTTPClient
+    private let httpClient: DriveHTTPClient
 
     public init(httpClient: HTTPClient = .shared) {
-        self.httpClient = httpClient
+        self.httpClient = DriveHTTPClient(httpClient, provider: .pikpak)
     }
 
     public func shareRequest(from rawURL: String) throws -> PikPakShareRequest {
@@ -281,6 +277,10 @@ public final class PikPakDriveClient: @unchecked Sendable {
 
         guard !refreshToken.isEmpty else {
             throw DriveEngineError.loginRequired(.pikpak)
+        }
+
+        if let budget = DriveRequestRecovery.budget, !(await budget.claimCredentialRefresh(.pikpak)) {
+            throw DriveServiceFailure(provider: .pikpak, reason: .credentialExpired, operation: .authentication)
         }
 
         let object = try await postJSON(

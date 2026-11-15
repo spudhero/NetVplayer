@@ -8,6 +8,7 @@ public struct ContentSearchState: Sendable {
     public var isLoading: Bool
     public var cursors: [String: SearchPageCursor] = [:]
     public var sourceScope: String = ""
+    public var resultBudget = SearchResultBudget()
 
     public init(
         generation: UInt64 = 0,
@@ -47,6 +48,7 @@ public enum ContentSearchCore {
         state.siteOrder = siteOrder
         state.sourceScope = sourceScope
         state.cursors = [:]
+        state.resultBudget = SearchResultBudget()
         state.results = []
         state.isLoading = true
         return state
@@ -89,6 +91,7 @@ public enum ContentSearchCore {
         state.keyword = ""
         state.sourceScope = ""
         state.cursors = [:]
+        state.resultBudget = SearchResultBudget()
         state.siteOrder = []
         state.results = []
         state.isLoading = false
@@ -105,6 +108,7 @@ public enum ContentSearchCore {
         state.keyword = keyword
         state.siteOrder = results.map(\.siteKey)
         state.cursors = [:]
+        state.resultBudget = SearchResultBudget()
         state.sourceScope = ""
         state.results = results
         state.isLoading = false

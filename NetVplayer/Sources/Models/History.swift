@@ -30,6 +30,10 @@ public struct History: Codable, Identifiable, Equatable, Sendable {
     public var configId: Int
     public var sourceFingerprint: String
     public var createTime: Date
+    public var disc: DiscResume?
+    public var magnet: MagnetFileIdentity?
+    public var originalDetailRequestID: String?
+    public var originalEpisodeIdentitySHA256: String?
 
     public var id: String { key }
 
@@ -57,7 +61,11 @@ public struct History: Codable, Identifiable, Equatable, Sendable {
         driveRoute: String = "",
         configId: Int = 0,
         sourceFingerprint: String = "",
-        createTime: Date = Date()
+        createTime: Date = Date(),
+        disc: DiscResume? = nil,
+        magnet: MagnetFileIdentity? = nil,
+        originalDetailRequestID: String? = nil,
+        originalEpisodeIdentitySHA256: String? = nil
     ) {
         self.key = key
         self.siteKey = siteKey
@@ -90,12 +98,17 @@ public struct History: Codable, Identifiable, Equatable, Sendable {
         self.configId = configId
         self.sourceFingerprint = sourceFingerprint
         self.createTime = createTime
+        self.disc = disc
+        self.magnet = magnet
+        self.originalDetailRequestID = originalDetailRequestID
+        self.originalEpisodeIdentitySHA256 = originalEpisodeIdentitySHA256
     }
 
     enum CodingKeys: String, CodingKey {
         case key, siteKey, vodId, vodPic, vodName, vodFlag, vodRemarks, episodeUrl, episodeKey, episodeName
+        case originalDetailRequestID, originalEpisodeIdentitySHA256
         case revSort, revPlay, opening, ending, position, duration, speed, scale
-        case driveProvider, driveReferenceURL, driveRoute, configId, sourceFingerprint, createTime
+        case driveProvider, driveReferenceURL, driveRoute, configId, sourceFingerprint, createTime, disc, magnet
     }
 
     public init(from decoder: Decoder) throws {
@@ -132,6 +145,10 @@ public struct History: Codable, Identifiable, Equatable, Sendable {
         self.configId = try container.decodeIfPresent(Int.self, forKey: .configId) ?? 0
         self.sourceFingerprint = try container.decodeIfPresent(String.self, forKey: .sourceFingerprint) ?? ""
         self.createTime = try container.decodeIfPresent(Date.self, forKey: .createTime) ?? Date()
+        self.disc = try container.decodeIfPresent(DiscResume.self, forKey: .disc)
+        self.magnet = try? container.decodeIfPresent(MagnetFileIdentity.self, forKey: .magnet)
+        self.originalDetailRequestID = try container.decodeIfPresent(String.self, forKey: .originalDetailRequestID)
+        self.originalEpisodeIdentitySHA256 = try container.decodeIfPresent(String.self, forKey: .originalEpisodeIdentitySHA256)
     }
 
     /// 播放进度百分比
@@ -157,6 +174,14 @@ public enum HistoryPersistencePolicy {
 
     public static func sanitized(_ history: History) -> History {
         var value = history
+        if let request = value.originalDetailRequestID,
+           request.isEmpty || request.utf8.count > 64 * 1024 || request.rangeOfCharacter(from: .controlCharacters) != nil {
+            value.originalDetailRequestID = nil
+        }
+        if let identity = value.originalEpisodeIdentitySHA256,
+           identity.range(of: "^[0-9a-f]{64}$", options: .regularExpression) == nil {
+            value.originalEpisodeIdentitySHA256 = nil
+        }
         if !history.episodeUrl.isEmpty {
             value.episodeKey = episodeKey(
                 siteKey: history.siteKey,
@@ -168,6 +193,10 @@ public enum HistoryPersistencePolicy {
             value.episodeKey = ""
         }
         value.episodeUrl = sanitizedEpisodeLocator(history.episodeUrl)
+        if let disc = history.disc,
+           DiscSelection(locator: value.episodeUrl) != disc.selection {
+            value.disc = nil
+        }
         value.driveReferenceURL = sanitizedDriveReference(history.driveReferenceURL)
         return value
     }
@@ -188,7 +217,9 @@ public enum HistoryPersistencePolicy {
     public static func sanitizedEpisodeLocator(_ rawValue: String) -> String {
         let value = trimmed(rawValue)
         guard !value.isEmpty else { return "" }
+        if value.hasPrefix("netvplayer-media:") { return MediaServerReference(locator: value)?.locator ?? "" }
         if value.hasPrefix("nvfile:") { return FileResourceReference(locator: value)?.locator ?? "" }
+        if value.hasPrefix("nvdisc:") { return DiscSelection(locator: value)?.locator ?? "" }
         let driveReference = sanitizedDriveReference(value)
         if !driveReference.isEmpty {
             return driveReference

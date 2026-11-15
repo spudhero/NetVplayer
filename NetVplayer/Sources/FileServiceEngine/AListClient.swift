@@ -112,7 +112,7 @@ public actor AListClient: FileServiceClient {
         let resource = try await resolve(path: path)
         let headers = resource.headers.merging(["Range": "bytes=\(range.lowerBound)-\(range.upperBound - 1)"]) { _, new in new }
         let (data, response) = try await transport.request(resource.url, headers: headers, maximumBytes: Int(range.count))
-        guard response.statusCode == 206 || range.lowerBound == 0 else { throw FileServiceError.protocolFailure("服务器不支持范围读取") }
+        try FileHTTPTransport.validateRange(data: data, response: response, requested: range)
         return data
     }
 }

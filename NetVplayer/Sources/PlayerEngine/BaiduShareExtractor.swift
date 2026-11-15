@@ -53,7 +53,8 @@ public final class BaiduShareExtractor: SourceExtractorProtocol {
         if let parsed = DriveFileReference.parse(url), parsed.provider == .baidu {
             let identity = DriveSavedFileNaming.identity(provider: .baidu, pwdID: parsed.pwdID,
                 fid: parsed.fid, name: parsed.fileName, size: parsed.size)
-            let cached = parsed.fidToken.isEmpty ? await savedFileStore.record(for: identity) : nil
+            let cached = parsed.fidToken.isEmpty ? try await savedFileStore.verificationRecord(for: identity,
+                account: DriveTransferContext.account(provider: .baidu, cookie: cookie)) : nil
             if let restored = Self.cachedReference(matching: parsed, record: cached) {
                 reference = restored
             } else if parsed.pwdID.isEmpty || parsed.fid.isEmpty || parsed.fidToken.isEmpty {
@@ -92,6 +93,7 @@ public final class BaiduShareExtractor: SourceExtractorProtocol {
             reference: reference,
             credential: .cookie(provider: .baidu, value: cookie)
         )
+        try await DriveTransferContext.current.check()
         if let updated = link.updatedCredential?.secret,
            !updated.isEmpty,
            updated != cookie {
@@ -133,11 +135,11 @@ public final class BaiduShareExtractor: SourceExtractorProtocol {
         let playable = files.filter(\.isPlayableMedia)
         if !reference.fid.isEmpty {
             let exact = playable.filter { $0.fileID == reference.fid }
-            if !exact.isEmpty { return exact.count == 1 ? exact[0] : nil }
+            return exact.count == 1 ? exact[0] : nil
         }
         if !reference.filePath.isEmpty {
             let exact = playable.filter { $0.path == reference.filePath && (reference.size <= 0 || $0.size == reference.size) }
-            if !exact.isEmpty { return exact.count == 1 ? exact[0] : nil }
+            return exact.count == 1 ? exact[0] : nil
         }
         guard !reference.fileName.isEmpty else { return nil }
         let named = playable.filter {

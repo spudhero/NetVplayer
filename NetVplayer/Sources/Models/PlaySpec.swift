@@ -34,6 +34,11 @@ public struct DanmakuAttachment: Codable, Sendable, Equatable {
 
 /// 播放规格 — 从解析结果到播放器的完整输入
 public struct PlaySpec: Sendable {
+    /// Runtime-only resolution contract. A browser candidate replaces page
+    /// headers, including an empty map; absence must survive later merges.
+    public enum HTTPHeaderPolicy: Sendable { case merge, replace }
+    public var headerPolicy: HTTPHeaderPolicy
+
     /// 播放 URL
     public var url: String
     /// 与主视频分离、由播放器合并的外部音频 URL
@@ -64,11 +69,24 @@ public struct PlaySpec: Sendable {
     public var drivePlaybackSessionGeneration: UInt64?
     /// Runtime transfer policy; never serialized with Provider payloads or history.
     public var transferProfile: PlaybackTransferProfile?
+    /// Stable content identity and runtime reading lifecycle; never Provider wire fields.
+    public var mediaIdentity: PlaybackMediaIdentity?
+    public var readSession: PlaybackReadSession?
+    /// Runtime-only, revision/account/episode-scoped presentation identity.
+    public var playbackSummaryIdentity: PlaybackSummaryIdentity? = nil
+    /// Set only for a user-opened regular local media file, never provider lengths/downloads.
+    public var userOpenedLocalFile: URL? = nil
+    public var mediaServer: MediaServerPlayback? = nil
+    /// Programme-relative live archive ownership, kept out of Provider wire fields and diagnostics.
+    public var liveCatchup: LiveCatchupContext? = nil
+    public var disc: DiscPlayback?
+    public var hostMagnet: HostMagnetPlayback? = nil
     /// DRM 配置
     public var drm: Drm?
     /// 外挂字幕列表
     public var subs: [Sub]
     /// 弹幕数据源
+    public var providerDanmaku: [ProviderDanmaku]
     public var danmaku: String
     /// 结构化弹幕附件。只保存本地缓存引用和样式，不保存外部接口凭据。
     public var danmakuAttachment: DanmakuAttachment?
@@ -84,6 +102,7 @@ public struct PlaySpec: Sendable {
         externalAudioURL: String = "",
         contentLength: Int64? = nil,
         headers: [String: String] = [:],
+        headerPolicy: HTTPHeaderPolicy = .merge,
         fallbackHeaders: [String: String] = [:],
         format: String = "",
         artwork: String = "",
@@ -95,8 +114,12 @@ public struct PlaySpec: Sendable {
         drivePlaybackPlan: DrivePlaybackPlan? = nil,
         drivePlaybackSessionGeneration: UInt64? = nil,
         transferProfile: PlaybackTransferProfile? = nil,
+        mediaIdentity: PlaybackMediaIdentity? = nil,
+        readSession: PlaybackReadSession? = nil,
+        disc: DiscPlayback? = nil,
         drm: Drm? = nil,
         subs: [Sub] = [],
+        providerDanmaku: [ProviderDanmaku] = [],
         danmaku: String = "",
         danmakuAttachment: DanmakuAttachment? = nil,
         title: String = "",
@@ -107,6 +130,7 @@ public struct PlaySpec: Sendable {
         self.externalAudioURL = externalAudioURL
         self.contentLength = contentLength
         self.headers = headers
+        self.headerPolicy = headerPolicy
         self.fallbackHeaders = fallbackHeaders
         self.format = format
         self.artwork = artwork
@@ -118,8 +142,12 @@ public struct PlaySpec: Sendable {
         self.drivePlaybackPlan = drivePlaybackPlan
         self.drivePlaybackSessionGeneration = drivePlaybackSessionGeneration
         self.transferProfile = transferProfile
+        self.mediaIdentity = mediaIdentity
+        self.readSession = readSession
+        self.disc = disc
         self.drm = drm
         self.subs = subs
+        self.providerDanmaku = providerDanmaku
         self.danmaku = danmaku
         self.danmakuAttachment = danmakuAttachment
         self.title = title
@@ -136,7 +164,12 @@ public struct PlaySpec: Sendable {
         }
         if !override.externalAudioURL.isEmpty { spec.externalAudioURL = override.externalAudioURL }
         if let contentLength = override.contentLength { spec.contentLength = contentLength }
-        spec.headers.merge(override.headers) { _, new in new }
+        if override.headerPolicy == .replace {
+            spec.headers = override.headers
+            spec.headerPolicy = .replace
+        } else {
+            spec.headers.merge(override.headers) { _, new in new }
+        }
         if !override.fallbackHeaders.isEmpty { spec.fallbackHeaders.merge(override.fallbackHeaders) { _, new in new } }
         if !override.format.isEmpty { spec.format = override.format }
         if !override.artwork.isEmpty { spec.artwork = override.artwork }
@@ -152,8 +185,14 @@ public struct PlaySpec: Sendable {
             spec.drivePlaybackSessionGeneration = generation
         }
         if let profile = override.transferProfile { spec.transferProfile = profile }
+        if let identity = override.mediaIdentity { spec.mediaIdentity = identity }
+        if let session = override.readSession { spec.readSession = session }
+        if let disc = override.disc { spec.disc = disc }
+        if let server = override.mediaServer { spec.mediaServer = server }
+        if let catchup = override.liveCatchup { spec.liveCatchup = catchup }
         if let drm = override.drm { spec.drm = drm }
         if !override.subs.isEmpty { spec.subs = override.subs }
+        if !override.providerDanmaku.isEmpty { spec.providerDanmaku = override.providerDanmaku }
         if !override.danmaku.isEmpty { spec.danmaku = override.danmaku }
         if let danmakuAttachment = override.danmakuAttachment { spec.danmakuAttachment = danmakuAttachment }
         if !override.title.isEmpty { spec.title = override.title }

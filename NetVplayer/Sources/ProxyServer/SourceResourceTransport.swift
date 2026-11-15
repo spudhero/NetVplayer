@@ -5,7 +5,26 @@ import Networking
 /// Connection compatibility for the catalog and poster endpoints verified on device.
 /// The original hostname, TLS validation, query, size limit and cancellation remain intact.
 public enum SourceResourceTransport {
+    #if DEBUG
+    /// Compare the failed catalogue image with the existing verified-TLS HTTP/1 transport.
+    /// This diagnostic does not replace the normal UI request or count as a poster pass.
+    public static func diagnoseCataloguePoster(_ url: URL, headers: [String: String]) async throws -> HTTPResponse {
+        guard url.scheme == "https", url.host == "img.lzipic.com",
+              url.port == nil || url.port == 443,
+              url.user == nil, url.password == nil,
+              url.path.count < 2048 else { throw URLError(.unsupportedURL) }
+        return try await CurlRangeTransport.get(url: url.absoluteString, headers: headers, timeout: 5).response
+    }
+    #endif
+
     private static let posterAddresses = SourcePosterAddressResolver()
+    enum DiagnosticStage: String, Sendable {
+        case catalogHTTP1 = "catalog.http1"
+        case posterDNS = "poster.dns"
+        case posterIPv6 = "poster.ipv6"
+        case posterHTTP1 = "poster.http1"
+    }
+    typealias Observation = @Sendable (DiagnosticStage, Int?, Error?) -> Void
     public static func supportsCatalog(_ url: URL) -> Bool { CMSIPv6Recovery.supports(url) }
 
     public static func permitsCatalogRecovery(_ url: URL, after error: Error) -> Bool {
@@ -27,9 +46,11 @@ public enum SourceResourceTransport {
         guard CMSIPv6Recovery.supports(url) || supportsPoster(url) else {
             throw URLError(.unsupportedURL)
         }
+        let trace = DiagnosticTrace()
         if supportsPoster(url) {
             return try await posterResponse(
                 for: url, headers: headers, timeout: timeout,
+                observe: { trace.record($0, status: $1, error: $2) },
                 resolve: { try await posterAddresses.addresses(timeout: $0) },
                 load: { url, address, headers, timeout in
                     if let address {
@@ -43,11 +64,17 @@ public enum SourceResourceTransport {
                 }
             )
         }
-        let response = try await CurlRangeTransport.getSourceResource(
-            url: url, headers: headers, timeout: timeout
-        ).response
-        guard response.finalURL == url else { throw URLError(.badServerResponse) }
-        return response
+        do {
+            let response = try await CurlRangeTransport.getSourceResource(
+                url: url, headers: headers, timeout: timeout
+            ).response
+            guard response.finalURL == url else { throw URLError(.badServerResponse) }
+            trace.record(.catalogHTTP1, status: response.statusCode)
+            return response
+        } catch {
+            trace.record(.catalogHTTP1, error: error)
+            throw error
+        }
     }
 
     /// System fake-IP DNS can leave this CDN waiting until the entire poster timeout.
@@ -55,6 +82,7 @@ public enum SourceResourceTransport {
     /// All attempts share the caller's deadline; networks without IPv6 retain ordinary DNS.
     static func posterResponse(
         for url: URL, headers: [String: String], timeout: TimeInterval,
+        observe: Observation? = nil,
         resolve: @Sendable (TimeInterval) async throws -> [String],
         load: @Sendable (URL, String?, [String: String], TimeInterval) async throws -> HTTPResponse
     ) async throws -> HTTPResponse {
@@ -65,16 +93,18 @@ public enum SourceResourceTransport {
         do {
             try Task.checkCancellation()
             addresses = try await resolve(min(3, remaining(until: deadline)))
+            observe?(.posterDNS, nil, nil)
         } catch {
+            observe?(.posterDNS, nil, error)
             try Task.checkCancellation()
             if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
-            return try await checkedResponse(url, address: nil, headers: headers, deadline: deadline, load: load)
+            return try await checkedResponse(url, address: nil, headers: headers, deadline: deadline, observe: observe, load: load)
         }
         var seen = Set<String>()
         for address in addresses.filter({ HLSIPv6Recovery.isPublicIPv6($0) && seen.insert($0).inserted }).prefix(2) {
             do {
                 let response = try await checkedResponse(
-                    url, address: address, headers: headers, deadline: deadline, load: load
+                    url, address: address, headers: headers, deadline: deadline, observe: observe, load: load
                 )
                 DiagnosticLog.write("[SOURCE_POSTER_IPV6] host=img1.wsyzy.org status=\(response.statusCode) bytes=\(response.data.count)")
                 return response
@@ -83,20 +113,52 @@ public enum SourceResourceTransport {
                 guard retryableConnectionFailure(error) else { throw error }
             }
         }
-        return try await checkedResponse(url, address: nil, headers: headers, deadline: deadline, load: load)
+        return try await checkedResponse(url, address: nil, headers: headers, deadline: deadline, observe: observe, load: load)
     }
 
     private static func checkedResponse(
         _ url: URL, address: String?, headers: [String: String], deadline: ContinuousClock.Instant,
+        observe: Observation?,
         load: @Sendable (URL, String?, [String: String], TimeInterval) async throws -> HTTPResponse
     ) async throws -> HTTPResponse {
-        try Task.checkCancellation()
-        let budget = remaining(until: deadline)
-        guard budget > 0 else { throw URLError(.timedOut) }
-        let response = try await load(url, address, headers, address == nil ? budget : min(4, budget))
-        try Task.checkCancellation()
-        guard response.finalURL == url else { throw URLError(.badServerResponse) }
-        return response
+        let stage: DiagnosticStage = address == nil ? .posterHTTP1 : .posterIPv6
+        var status: Int?
+        do {
+            try Task.checkCancellation()
+            let budget = remaining(until: deadline)
+            guard budget > 0 else { throw URLError(.timedOut) }
+            let response = try await load(url, address, headers, address == nil ? budget : min(4, budget))
+            status = response.statusCode
+            try Task.checkCancellation()
+            guard response.finalURL == url else { throw URLError(.badServerResponse) }
+            observe?(stage, status, nil)
+            return response
+        } catch {
+            observe?(stage, status, error)
+            throw error
+        }
+    }
+
+    /// Fixed stages and numeric metadata only. Status 0 means no HTTP status was available.
+    static func diagnosticFields(stage: DiagnosticStage, status: Int?, error: Error?) -> String {
+        let cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
+        let phase = error == nil ? "complete" : cancelled ? "cancelled" : "error"
+        var message = "stage=\(stage.rawValue) phase=\(phase) status=\(status ?? 0)"
+        if let curl = error as? CurlRangeTransportError { message += " curlCode=\(curl.code)" }
+        else if let error { message += " errorCode=\((error as NSError).code)" }
+        return message
+    }
+
+    private struct DiagnosticTrace: Sendable {
+        let id = UUID().uuidString.lowercased()
+        let start = ContinuousClock.now
+        func record(_ stage: DiagnosticStage, status: Int? = nil, error: Error? = nil) {
+            let duration = start.duration(to: .now).components
+            let milliseconds = Int(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1e15)
+            // At most DNS + two IPv6 attempts + one HTTP/1.1 fallback per poster.
+            DiagnosticLog.write("[SOURCE_RESOURCE_TRANSPORT] requestID=\(id) elapsedMs=\(milliseconds) "
+                + diagnosticFields(stage: stage, status: status, error: error))
+        }
     }
 
     private static func remaining(until deadline: ContinuousClock.Instant) -> TimeInterval {

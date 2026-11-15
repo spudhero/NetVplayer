@@ -163,6 +163,13 @@ struct SearchView: View {
     }
 
     var body: some View {
+        GeometryReader { viewport in
+            searchWorkspace
+                .frame(width: viewport.size.width, height: viewport.size.height, alignment: .topLeading)
+        }
+    }
+
+    private var searchWorkspace: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 searchHeader
@@ -176,6 +183,7 @@ struct SearchView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             if let toastMessage {
                 Text(toastMessage)
@@ -231,6 +239,7 @@ struct SearchView: View {
     private var searchHeader: some View {
         HStack(spacing: 8) {
             searchField
+                .frame(minWidth: 0, maxWidth: .infinity)
 
             Button(action: pasteFromClipboard) {
                 Image(systemName: "doc.on.clipboard")
@@ -271,7 +280,9 @@ struct SearchView: View {
                     .frame(width: 30, height: 30)
                     .help(L10n.text("{0} 个搜索源可用", ["\(appState.sites.filter(\.isSearchable).count)"]))
             }
+            .frame(width: 112, alignment: .trailing)
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
@@ -569,6 +580,8 @@ struct SearchView: View {
                     Divider().opacity(0.58)
                     resultPane(layout: layout)
                 }
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                .clipped()
             }
         }
     }
@@ -743,12 +756,21 @@ struct SearchView: View {
     }
 
     private func resultPane(layout: SearchResultRowLayout) -> some View {
-        VStack(spacing: 0) {
+        let scrollScope = SearchScrollScope(generation: appState.contentSearchState.generation, siteKey: selectedSourceKey)
+        return VStack(spacing: 0) {
             resultColumnHeader(layout: layout)
 
             ScrollViewReader { proxy in
                 ThemedScrollView(theme: .subtle) {
                     Color.clear.frame(height: 1).id("searchTop")
+                        .background {
+                            SearchScrollDemandProbe(scope: scrollScope) {
+                                guard selectedSourceKey == scrollScope.siteKey else { return }
+                                appState.appendSearchResultsAfterScroll(siteKey: scrollScope.siteKey,
+                                    generation: scrollScope.generation)
+                            }
+                            .frame(width: 1, height: 1)
+                        }
                     resultContent(layout: layout)
                     continuationControls
                 }
@@ -803,22 +825,20 @@ struct SearchView: View {
     private var continuationControls: some View {
         LazyVStack(alignment: .leading, spacing: 12) {
             ForEach(appState.searchResults.filter { selectedSourceKey == nil || $0.siteKey == selectedSourceKey }) { result in
-                if let cursor = appState.contentSearchState.cursors[result.siteKey], cursor.status != .exhausted {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(result.siteName).font(.subheadline)
-                            if let message = cursor.message {
-                                Text(message).font(.caption).foregroundStyle(palette.muted).lineLimit(2)
-                            }
-                        }
-                        Spacer()
-                        if cursor.status == .loading { ProgressView().controlSize(.small) }
-                        Button(cursor.status == .retryable ? L10n.text("重试此来源") : L10n.text("加载下一页")) {
-                            appState.loadMoreSearchResults(siteKey: result.siteKey)
-                        }
-                        .disabled(!cursor.canRequest || appState.isSearching)
-                    }
+                if let cursor = appState.contentSearchState.cursors[result.siteKey],
+                   cursor.status == .loading || cursor.status == .retryable || cursor.status == .limited {
+                    SearchContinuationStatusRow(siteName: result.siteName, status: cursor.status,
+                        message: cursor.message, isSearching: appState.isSearching,
+                        cancel: { appState.cancelSearchContinuation(siteKey: result.siteKey) },
+                        retry: { appState.loadMoreSearchResults(siteKey: result.siteKey) })
                 }
+            }
+            if appState.contentSearchState.cursors.contains(where: { key, cursor in
+                (selectedSourceKey == nil || selectedSourceKey == key) && (cursor.status == .ready || cursor.status == .budgeted)
+            }) {
+                Label(L10n.text("向下滚动以加载更多结果"), systemImage: "chevron.down")
+                    .font(.caption).foregroundStyle(palette.muted)
+                    .frame(maxWidth: .infinity)
             }
         }
         .padding(16)

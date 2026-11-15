@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Models
 import Testing
 @testable import NetVplayerApp
@@ -76,7 +77,7 @@ struct PlayerWindowLifecycleTests {
 
         PlayerWindowChromePolicy.configurePlaybackPresentation(window, isCompact: true)
 
-        #expect(window.contentMinSize == CGSize(width: 427, height: 240))
+        #expect(window.contentMinSize == CompactPlayerLayoutPolicy.minimumContentSize)
         #expect(window.standardWindowButton(.closeButton)?.isHidden == true)
         #expect(window.standardWindowButton(.miniaturizeButton)?.isHidden == true)
         #expect(window.standardWindowButton(.zoomButton)?.isHidden == true)
@@ -88,7 +89,7 @@ struct PlayerWindowLifecycleTests {
         #expect(window.standardWindowButton(.zoomButton)?.isHidden == false)
     }
 
-    @Test func fullSizeContentWindowPreservesA240PointPlayerLayout() {
+    @Test func fullSizeContentWindowPreservesMinimumPlayerLayout() {
         let window = makeWindow(contentSize: CGSize(width: 800, height: 600))
         window.styleMask.insert(.fullSizeContentView)
         let titlebarHeight = window.frame.height - window.contentLayoutRect.height
@@ -134,35 +135,54 @@ struct PlayerWindowLifecycleTests {
         )
     }
 
-    @Test func detailPresentationWaitsForPlayerWindowRestoration() async throws {
+    @Test func detailIsReadyBeforePlayerPresentationEnds() async {
         let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
         appState.detailVod = Vod(vodId: "window-restore", vodName: "Window Restore")
         appState.isPlayerPresented = true
+        var sawPlayerDismissal = false
+        let observation = appState.$isPlayerPresented.dropFirst().sink { presented in
+            guard !presented else { return }
+            sawPlayerDismissal = true
+            #expect(appState.isDetailPresented)
+        }
+        defer { observation.cancel() }
 
         appState.beginPlayerDismissalReturningToDetail()
 
         #expect(!appState.isPlayerPresented)
-        #expect(!appState.isDetailPresented)
-        #expect(appState.isDetailReturnPendingAfterPlayerExit)
-
-        try await waitUntil { appState.isDetailPresented }
-
         #expect(appState.isDetailPresented)
-        #expect(!appState.isDetailReturnPendingAfterPlayerExit)
+        #expect(sawPlayerDismissal)
+        await appState.waitForPlayerDismissalCleanup()
+        #expect(appState.isDetailPresented)
     }
 
-    @Test func staleWindowRestorationCannotCoverAReopenedPlayer() async throws {
+    @Test func dismissalCleanupCannotCoverOrCancelAReopenedPlayer() async {
         let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
         appState.detailVod = Vod(vodId: "reopened-player", vodName: "Reopened Player")
         appState.isPlayerPresented = true
         appState.beginPlayerDismissalReturningToDetail()
 
+        appState.isDetailPresented = false
         appState.isPlayerPresented = true
-        try await waitUntil { !appState.isDetailReturnPendingAfterPlayerExit }
+        appState.isPlayerLoading = true
+        await appState.waitForPlayerDismissalCleanup()
 
         #expect(appState.isPlayerPresented)
+        #expect(appState.isPlayerLoading)
         #expect(!appState.isDetailPresented)
-        #expect(!appState.isDetailReturnPendingAfterPlayerExit)
+    }
+
+    @Test func dismissalCleanupCannotReopenAClosedDetail() async {
+        let appState = AppState(loadDefaultConfig: false, startProxyServer: false)
+        appState.detailVod = Vod(vodId: "closed-detail", vodName: "Closed Detail")
+        appState.isPlayerPresented = true
+        appState.beginPlayerDismissalReturningToDetail()
+
+        appState.isDetailPresented = false
+        await appState.waitForPlayerDismissalCleanup()
+
+        #expect(!appState.isDetailPresented)
+        #expect(!appState.isPlayerPresented)
     }
 
     @Test func playerWindowContextKeepsOnlyItsAttachedWeakWindow() {
@@ -198,6 +218,29 @@ struct PlayerWindowLifecycleTests {
 
         #expect(context.contentSize == window.contentLayoutRect.size)
         #expect(context.contentSize.height < window.contentView?.bounds.height ?? 0)
+    }
+
+    @Test func unchangedRegularWindowMetricsDoNotInvalidatePlayerViews() {
+        let context = PlayerWindowContext()
+        let window = makeWindow(contentSize: CGSize(width: 960, height: 640))
+        context.attach(window)
+        var changes = 0
+        let subscription = context.objectWillChange.sink { changes += 1 }
+        defer { subscription.cancel() }
+
+        for _ in 0..<3 {
+            context.attach(window)
+            context.updateWindowMetrics(for: window)
+        }
+        #expect(changes == 0)
+
+        window.setContentSize(CGSize(width: 1_100, height: 700))
+        context.updateWindowMetrics(for: window)
+        #expect(changes > 0)
+        let settledChanges = changes
+        context.attach(window)
+        context.updateWindowMetrics(for: window)
+        #expect(changes == settledChanges)
     }
 
     @Test func compactPinIsSessionLocalAndClearsAfterManualExpansion() {
@@ -404,6 +447,60 @@ struct PlayerWindowLifecycleTests {
         #expect(store.preference == restoredSaved)
     }
 
+    @Test func floatingWindowReusesAttachedWindowAndRestoresItsRegularFrame() throws {
+        _ = NSApplication.shared
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        let context = PlayerWindowContext()
+        #expect(!context.enterFloatingWindow())
+        let window = makeWindow(contentSize: CGSize(width: 1100, height: 700))
+        let frame = CGRect(x: screen.visibleFrame.midX - window.frame.width / 2,
+                           y: screen.visibleFrame.midY - window.frame.height / 2,
+                           width: window.frame.width, height: window.frame.height)
+        window.setFrame(frame, display: false)
+        context.attach(window)
+        let originalAspect = window.contentAspectRatio
+        let originalIncrements = window.contentResizeIncrements
+        context.updateVideoAspectRatio(2.39)
+        #expect(context.enterFloatingWindow())
+        #expect(context.window === window)
+        #expect(context.isCompact && context.isAlwaysOnTop)
+        #expect(window.level == .floating)
+        let videoSize = window.contentRect(forFrameRect: window.frame).size
+        #expect(abs(videoSize.width - 480) < 1)
+        #expect(abs(videoSize.width / videoSize.height - 2.39) < 0.01)
+        #expect(screen.visibleFrame.contains(window.frame))
+        #expect(context.toggleAlwaysOnTop())
+        #expect(!context.isAlwaysOnTop && window.level == .normal)
+        #expect(context.restoreRegularWindow())
+        #expect(!context.isCompact && !context.isAlwaysOnTop)
+        #expect(window.level == .normal)
+        #expect(window.frame.size == frame.size)
+        #expect(window.contentAspectRatio == originalAspect)
+        #expect(window.contentResizeIncrements == originalIncrements)
+        // Restoring normalizes the origin to whole screen points.
+        #expect(abs(window.frame.minX - frame.minX) <= 1)
+        #expect(abs(window.frame.minY - frame.minY) <= 1)
+        context.detach(window)
+    }
+
+    @Test func repeatedFloatingRequestsKeepOriginalRestoreFrameAndDetachClearsPin() throws {
+        _ = NSApplication.shared
+        let context = PlayerWindowContext()
+        let window = makeWindow(contentSize: CGSize(width: 1100, height: 700))
+        window.center()
+        context.attach(window)
+        let frame = window.frame
+        #expect(context.enterFloatingWindow())
+        #expect(context.enterFloatingWindow())
+        #expect(context.restoreRegularWindow())
+        #expect(window.frame == frame)
+        #expect(context.enterFloatingWindow())
+        context.detach(window)
+        #expect(window.level == .normal)
+        #expect(!context.isAlwaysOnTop)
+        #expect(!context.enterFloatingWindow())
+    }
+
     @Test func vodAndLiveWindowPreferencesRemainIndependent() throws {
         let suiteName = "NetVplayer.WindowScopeTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -439,14 +536,4 @@ struct PlayerWindowLifecycleTests {
         )
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(1),
-        condition: @escaping @MainActor () -> Bool
-    ) async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while !condition(), clock.now < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-    }
 }

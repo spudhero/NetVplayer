@@ -83,7 +83,8 @@ public struct HistoryPlaybackIntent: Sendable {
 
     public func episode(from episodes: [Episode], history: History) -> Episode {
         PlaybackLinkage.preferredEpisode(from: history, episodes: episodes)
-            ?? (episodes.isEmpty ? fallbackEpisode : Episode(name: "", url: ""))
+            ?? (episodes.isEmpty && history.originalEpisodeIdentitySHA256 == nil && !PlaybackLinkage.hasStableDriveIdentity(history)
+                ? fallbackEpisode : Episode(name: "", url: ""))
     }
 }
 
@@ -182,7 +183,7 @@ public enum ApplicationLibraryCore {
             let matchesExistingEpisode = !updated.episodeKey.isEmpty
                 ? updated.episodeKey == existing.episodeKey
                 : updated.episodeUrl == existing.episodeUrl
-            if matchesExistingEpisode,
+            if matchesExistingEpisode, updated.magnet == existing.magnet,
                updated.position == 0,
                updated.duration == 0,
                (existing.position > 0 || existing.duration > 0) {

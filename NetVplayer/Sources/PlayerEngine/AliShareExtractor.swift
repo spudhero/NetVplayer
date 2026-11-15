@@ -8,16 +8,13 @@ import Networking
 import DriveEngine
 
 public final class AliShareExtractor: SourceExtractorProtocol {
-    public static let refreshTokenDefaultsKey = "aliRefreshToken"
-    public static let accessTokenDefaultsKey = "aliAccessToken"
-    public static let openTokenDefaultsKey = "aliOpenToken"
     public static let defaultDriveIDDefaultsKey = "aliDefaultDriveID"
     public static let authDomainDefaultsKey = "aliAuthDomain"
     public static let userIDDefaultsKey = "aliUserID"
 
     private let client: AliDriveClient
     private let credentialProvider: @Sendable () -> CloudCredential?
-    private let credentialUpdateHandler: @Sendable (CloudCredential) -> Void
+    private let credentialUpdateHandler: (@Sendable (CloudCredential) -> Void)?
 
     public init(
         httpClient: HTTPClient = .shared,
@@ -63,14 +60,7 @@ public final class AliShareExtractor: SourceExtractorProtocol {
                 metadata: metadata
             )
         },
-        credentialUpdateHandler: @escaping @Sendable (CloudCredential) -> Void = { credential in
-            UserPreferences.shared.aliRefreshToken = credential.refreshToken ?? ""
-            UserPreferences.shared.aliAccessToken = credential.accessToken ?? ""
-            UserPreferences.shared.aliOpenToken = credential.metadata["open_token"] ?? ""
-            UserDefaults.standard.set(credential.metadata["default_drive_id"] ?? "", forKey: AliShareExtractor.defaultDriveIDDefaultsKey)
-            UserDefaults.standard.set(credential.metadata["ali_auth_domain"] ?? "", forKey: AliShareExtractor.authDomainDefaultsKey)
-            UserDefaults.standard.set(credential.metadata["user_id"] ?? "", forKey: AliShareExtractor.userIDDefaultsKey)
-        }
+        credentialUpdateHandler: (@Sendable (CloudCredential) -> Void)? = nil
     ) {
         self.client = AliDriveClient(httpClient: httpClient)
         self.credentialProvider = credentialProvider
@@ -91,9 +81,19 @@ public final class AliShareExtractor: SourceExtractorProtocol {
     }
 
     public func fetchResult(url: String) async throws -> SourceFetchResult {
-        guard let credential = credentialProvider() else {
+        try await DriveRequestRecovery.withBudget {
+            guard let credential = self.credentialProvider() else { throw DriveEngineError.loginRequired(.ali) }
+            return try await DriveRequestRecovery.withAccountOperation(credential: credential) {
+                try await self.resolveResult(url: url, credential: credential)
+            }
+        }
+    }
+
+    private func resolveResult(url: String, credential: CloudCredential) async throws -> SourceFetchResult {
+        guard credential.provider == .ali else {
             throw DriveEngineError.loginRequired(.ali)
         }
+        let refresh = credentialUpdateHandler == nil ? CloudDirectoryCredentialRefresh(original: credential) : nil
 
         let resolveLink: @Sendable (CloudCredential) async throws -> CloudDriveLink = { [client] current in
             if let reference = DriveFileReference.parse(url), reference.provider == .ali {
@@ -113,6 +113,7 @@ public final class AliShareExtractor: SourceExtractorProtocol {
         }
 
         let link: CloudDriveLink
+        var refreshedCredential: CloudCredential?
         do {
             link = try await resolveLink(credential)
         } catch {
@@ -122,12 +123,14 @@ public final class AliShareExtractor: SourceExtractorProtocol {
             }
             DiagnosticLog.write("[ALI_AUTH_REFRESH] playback endpoint rejected credential; rebuilding routes once")
             let refreshed = try await client.forceRefreshCredential(credential)
-            credentialUpdateHandler(refreshed)
+            refreshedCredential = refreshed
             link = try await resolveLink(refreshed)
         }
 
-        if let updated = link.updatedCredential {
-            credentialUpdateHandler(updated)
+        try await DriveTransferContext.current.check()
+        if let updated = link.updatedCredential ?? refreshedCredential {
+            if let credentialUpdateHandler { credentialUpdateHandler(updated) }
+            else { refresh?.save(updated) }
         }
         let headers = playbackHeaders(from: link.headers)
         let adapter = AliDrivePlaybackAdapter()
@@ -156,7 +159,6 @@ public final class AliShareExtractor: SourceExtractorProtocol {
     }
 
     private static func isUnauthorized(_ error: Error) -> Bool {
-        guard case let DriveEngineError.api(provider, statusCode, _, _) = error else { return false }
-        return provider == .ali && statusCode == 401
+        DriveServiceFailure.isCredentialExpired(error, provider: .ali)
     }
 }

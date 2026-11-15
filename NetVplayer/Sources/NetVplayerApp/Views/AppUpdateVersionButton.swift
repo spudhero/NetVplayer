@@ -50,8 +50,8 @@ struct AppUpdateVersionButton: View {
     }
 }
 
-private struct AppUpdateStatusView: View {
-    @ObservedObject private var updates = AppUpdateCoordinator.shared
+struct AppUpdateStatusView: View {
+    @ObservedObject var updates = AppUpdateCoordinator.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -74,7 +74,7 @@ private struct AppUpdateStatusView: View {
                 releaseNotesLink(for: info)
                 if !info.isInformationalOnly {
                     Button(L10n.text("更新")) { updates.beginUpdate() }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
                         .disabled(updates.isCheckingInformation)
                 }
             case let .downloading(info):
@@ -83,11 +83,19 @@ private struct AppUpdateStatusView: View {
                 releaseNotesLink(for: info)
             case let .ready(info):
                 Text(L10n.text("v{0} 已准备好，退出应用后安装", ["\(info.displayVersion)"]))
+                  Button(L10n.text("安装并重启")) { updates.installNow() }
                 releaseNotesLink(for: info)
+              case .preparing:
+                  ProgressView()
+                  Text(L10n.text("正在等待播放和后台任务完成清理，然后安装更新。"))
             case let .failed(message):
                 Text(message)
                     .foregroundStyle(.red)
-                Button(L10n.text("重试")) { updates.checkForUpdateInformation() }
+                  if updates.canRetryInstallation {
+                      Button(L10n.text("重试安装并重启")) { updates.installNow() }
+                  } else {
+                      Button(L10n.text("重试")) { updates.checkForUpdateInformation() }
+                  }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -104,6 +104,7 @@ public final class HTTPClient: @unchecked Sendable {
     private let hasExplicitProxyRoute: Bool
     private let sessionLock = NSLock()
     private var cachedSessions: [Int: URLSession] = [:]
+    private var cachedDirectSession: URLSession?
 
     private struct StreamAttemptFailure: Error {
         let underlying: Error
@@ -203,6 +204,28 @@ public final class HTTPClient: @unchecked Sendable {
         print("[HTTPClient] 已清理所有缓存的代理 Session")
     }
 
+    private func initialRoute() -> (session: URLSession, allowsProxyFallback: Bool) {
+        guard !hasExplicitProxyRoute else { return (session, false) }
+        guard ProxyDetector.shared.proxySettingsProvider?().mode == 1 else {
+            return (session, true)
+        }
+
+        // Disabling fallback alone still lets URLSession inherit the system proxy.
+        // Resolve the mode for each request so existing clients follow settings changes.
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        if let cachedDirectSession { return (cachedDirectSession, false) }
+        let configuration = session.configuration
+        configuration.connectionProxyDictionary = [:]
+        let directSession = URLSession(
+            configuration: configuration,
+            delegate: session.delegate,
+            delegateQueue: session.delegateQueue
+        )
+        cachedDirectSession = directSession
+        return (directSession, false)
+    }
+
     private func getSession(forPort port: Int?) -> URLSession {
         guard let port = port else {
             return self.session
@@ -286,7 +309,9 @@ public final class HTTPClient: @unchecked Sendable {
         headers: [String: String] = [:],
         body: Data? = nil,
         timeout: TimeInterval = 15,
-        handlesCookies: Bool = true
+        handlesCookies: Bool = true,
+        allowsProxyFallback: Bool = true,
+        redactsURLInLogs: Bool = false
     ) async throws -> HTTPResponse {
         return try await request(
             url: url,
@@ -294,14 +319,10 @@ public final class HTTPClient: @unchecked Sendable {
             headers: headers,
             body: body,
             timeout: timeout,
+            allowsProxyFallback: allowsProxyFallback,
+            redactsURLInLogs: redactsURLInLogs,
             handlesCookies: handlesCookies
         )
-    }
-
-    /// 下载二进制数据
-    public func download(url: String, headers: [String: String] = [:]) async throws -> Data {
-        let response = try await get(url: url, headers: headers)
-        return response.data
     }
 
     /// 将响应体直接下载到文件，避免大型媒体先完整驻留内存。
@@ -336,9 +357,10 @@ public final class HTTPClient: @unchecked Sendable {
             throw CocoaError(.fileWriteFileExists)
         }
 
+        let route = initialRoute()
         do {
             return try await downloadFileAttempt(
-                session: session,
+                session: route.session,
                 request: request,
                 destinationURL: destinationURL
             )
@@ -347,7 +369,7 @@ public final class HTTPClient: @unchecked Sendable {
             let loggedError = redactsURLInLogs
                 ? Self.redactedErrorForLog(error)
                 : "\(error.localizedDescription) (\(error))"
-            guard allowsProxyFallback, !hasExplicitProxyRoute, !HTTPRedirectPolicy.isLoopback(requestURL), isNetworkFailureWarrantingProxy(error) else {
+            guard allowsProxyFallback, route.allowsProxyFallback, !HTTPRedirectPolicy.isLoopback(requestURL), isNetworkFailureWarrantingProxy(error) else {
                 throw error
             }
 
@@ -412,9 +434,10 @@ public final class HTTPClient: @unchecked Sendable {
             request.httpBody = body
         }
 
-        // 1. 尝试使用默认 Session 进行直连访问
+        let route = initialRoute()
+        // 1. 按当前代理模式选择首次请求的 Session
         do {
-            let (data, response) = try await session.data(for: request, delegate: HTTPRedirectDelegate(initialRequest: request, allowedOrigin: allowedOrigin))
+            let (data, response) = try await route.session.data(for: request, delegate: HTTPRedirectDelegate(initialRequest: request, allowedOrigin: allowedOrigin))
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw HTTPError.invalidResponse
             }
@@ -441,7 +464,7 @@ public final class HTTPClient: @unchecked Sendable {
             }
             let loggedURL = redactsURLInLogs ? Self.redactedURLForLog(url) : url
             let loggedError = redactsURLInLogs ? Self.redactedErrorForLog(error) : "\(error.localizedDescription) (\(error))"
-            let shouldRetryThroughProxy = allowsProxyFallback && !hasExplicitProxyRoute && !HTTPRedirectPolicy.isLoopback(requestURL) && isNetworkFailureWarrantingProxy(error)
+            let shouldRetryThroughProxy = allowsProxyFallback && route.allowsProxyFallback && !HTTPRedirectPolicy.isLoopback(requestURL) && isNetworkFailureWarrantingProxy(error)
             if shouldRetryThroughProxy {
                 print("[HTTPClient] 直连请求失败：\(loggedURL)，错误：\(loggedError)。准备检测本地代理并重试。")
             } else {
@@ -520,9 +543,10 @@ public final class HTTPClient: @unchecked Sendable {
         }
 
         let normalizedChunkSize = max(1, chunkSize)
+        let route = initialRoute()
         do {
             return try await streamAttempt(
-                session: session,
+                session: route.session,
                 request: request,
                 chunkSize: normalizedChunkSize,
                 shouldStream: shouldStream,
@@ -535,7 +559,7 @@ public final class HTTPClient: @unchecked Sendable {
                 ? Self.redactedErrorForLog(error)
                 : "\(error.localizedDescription) (\(error))"
             guard !failure.responseAccepted,
-                  allowsProxyFallback, !hasExplicitProxyRoute, !HTTPRedirectPolicy.isLoopback(requestURL),
+                  allowsProxyFallback, route.allowsProxyFallback, !HTTPRedirectPolicy.isLoopback(requestURL),
                   isNetworkFailureWarrantingProxy(error) else {
                 throw error
             }

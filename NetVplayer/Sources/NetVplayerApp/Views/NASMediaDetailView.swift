@@ -72,19 +72,41 @@ struct NASMediaDetailContent: View {
     var onCollection: (MediaCollection) -> Void = { _ in }
     var onActor: (MediaCastMember) -> Void = { _ in }
     var onDirector: (String) -> Void = { _ in }
+    var serverDetail: MediaServerDetail?
     @State private var expandedOverview = false
     @State private var expandedFiles = Set<String>()
     @State private var selectedEpisodeURL: String?
+    @State private var explicitServerSourceID: String?
     @State private var expandedSeasons = Set<String>()
 
     private var isTV: Bool { metadata.kind == .television }
+    private var isServer: Bool { MediaServerReference(locator: vod.vodId) != nil }
     private var title: String { NASMediaDetailPresentation.title(metadata: metadata, fallback: vod.vodName) }
     private var episodes: [Episode] { appState.playbackEpisodes(for: appState.selectedPlayFlag) }
     private var history: History? { appState.currentDetailHistory() }
     private var primaryEpisode: Episode? {
         NASMediaDetailPresentation.primaryEpisode(episodes: episodes, history: history, selectedURL: selectedEpisodeURL)
     }
-    private var canResume: Bool { history.map { $0.position > 0 && $0.episodeUrl == primaryEpisode?.url } ?? false }
+    private var serverFiles: [MediaServerFileDetail] {
+        MediaServerVersionSelection.files(serverDetail?.files ?? [], for: primaryEpisode?.url)
+    }
+    private var selectedServerSourceID: String? {
+        MediaServerVersionSelection.preferredSourceID(explicit: explicitServerSourceID,
+            historyURL: history?.episodeUrl, episodeURL: primaryEpisode?.url)
+    }
+    private var playbackEpisode: Episode? {
+        primaryEpisode.map { isServer ? MediaServerVersionSelection.episode($0, sourceID: selectedServerSourceID) : $0 }
+    }
+    private var sourceFormats: [DolbySourceFormat] {
+        if isServer {
+            let selected = selectedServerSourceID.flatMap { id in serverFiles.first { $0.sourceID == id } }
+                ?? (serverFiles.count == 1 ? serverFiles.first : nil)
+            return selected.map(DolbySourceFormat.serverFile) ?? []
+        }
+        guard let episode = primaryEpisode, let record = files.first(where: { $0.id == episode.url }) else { return [] }
+        return DolbySourceFormat.filename(record.entry.name)
+    }
+    private var canResume: Bool { history.map { $0.position > 0 && $0.episodeUrl == playbackEpisode?.url } ?? false }
     private var inset: CGFloat { size.width < 1100 ? 28 : 42 }
     private var surface: Color { palette.background.opacity(0.98) }
     private var plot: String { VodDescriptionPresentation.text(from: metadata.plot ?? "") }
@@ -95,9 +117,22 @@ struct NASMediaDetailContent: View {
                 hero
                 VStack(alignment: .leading, spacing: 28) {
                     if isTV { episodesSection }
+                    if let episode = playbackEpisode {
+                        PlaybackSummaryView(store: appState.playerState.playbackSummaries,
+                            identity: appState.playbackSummaryIdentity(vodID: vod.vodId,
+                                line: appState.selectedPlayFlag, episodeURL: episode.url), episodeName: episode.name)
+                    }
                     if !plot.isEmpty || !facts.isEmpty { overviewAndFacts }
                     if let cast = metadata.cast, !cast.isEmpty { castSection(cast) }
-                    filesSection
+                    if isServer {
+                        MediaServerFilesSection(files: serverFiles, selectedSourceID: selectedServerSourceID,
+                            select: { explicitServerSourceID = $0 }, play: { sourceID in
+                                explicitServerSourceID = sourceID
+                                if let episode = primaryEpisode {
+                                    play(MediaServerVersionSelection.episode(episode, sourceID: sourceID))
+                                }
+                            })
+                    } else { filesSection }
                     attribution
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -109,6 +144,8 @@ struct NASMediaDetailContent: View {
         .foregroundStyle(palette.foreground)
         .tint(palette.accent)
         .frame(width: size.width, height: size.height)
+        .onChange(of: primaryEpisode?.url) { _, _ in explicitServerSourceID = nil }
+        .onChange(of: vod.vodId) { _, _ in explicitServerSourceID = nil }
     }
 
     private var hero: some View {
@@ -128,7 +165,7 @@ struct NASMediaDetailContent: View {
                 }
             }.accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 22) {
-                Label([serviceName, libraryName].filter { !$0.isEmpty }.joined(separator: " / "), systemImage: "externaldrive.connected.to.line.below")
+                Label([serviceName, libraryName].filter { !$0.isEmpty }.joined(separator: " / "), systemImage: isServer ? "server.rack" : "externaldrive.connected.to.line.below")
                     .font(.callout).foregroundStyle(palette.muted).padding(.trailing, 54)
                 HStack(alignment: .bottom, spacing: 34) {
                     if let poster = metadata.poster, !poster.isEmpty {
@@ -151,6 +188,7 @@ struct NASMediaDetailContent: View {
                                 .help(L10n.text("查看此系列的影片"))
                         }
                         HStack(spacing: 10) {
+                            if let rating = serverDetail?.rating, rating > 0 { ratingBadge(L10n.text("服务器评分"), rating) }
                             if let rating = metadata.tmdbRating, rating > 0 { ratingBadge("TMDB", rating) }
                             if let rating = metadata.doubanRating, rating > 0 { ratingBadge(L10n.text("豆瓣"), rating) }
                         }
@@ -160,6 +198,13 @@ struct NASMediaDetailContent: View {
                         if isTV, let episode = primaryEpisode {
                             Text(appState.selectedPlayFlag + " · " + episode.name).font(.callout).foregroundStyle(palette.muted)
                         }
+                        if isServer, serverFiles.count > 1 || selectedServerSourceID != nil { serverVersionPicker }
+                          if !sourceFormats.isEmpty {
+                              VStack(alignment: .leading, spacing: 6) {
+                                  Text(L10n.text("片源格式")).font(.caption).foregroundStyle(palette.muted)
+                                  DolbySourceBadges(formats: sourceFormats)
+                              }
+                          }
                         playbackActions.padding(.top, 6)
                         if canResume, let history {
                             HStack(spacing: 10) {
@@ -169,7 +214,7 @@ struct NASMediaDetailContent: View {
                                 }
                                 Text(PlaybackLinkage.progressText(for: history) ?? "").font(.caption).foregroundStyle(palette.muted)
                                 Button(L10n.text("从头播放")) {
-                                    if let episode = primaryEpisode { play(episode, restart: true) }
+                                    if let episode = playbackEpisode { play(episode, restart: true) }
                                 }.buttonStyle(.plain).font(.caption).foregroundStyle(palette.accent)
                             }
                         }
@@ -195,7 +240,7 @@ struct NASMediaDetailContent: View {
 
     private var playbackActions: some View {
         HStack(spacing: 10) {
-            Button { if let episode = primaryEpisode { play(episode) } } label: {
+            Button { if let episode = playbackEpisode { play(episode) } } label: {
                 Label(L10n.text(canResume ? "继续观看" : "立即播放"), systemImage: "play.fill")
                     .font(.headline).padding(.horizontal, 18).padding(.vertical, 10)
             }.buttonStyle(.borderedProminent).disabled(primaryEpisode == nil || appState.isDetailLoading)
@@ -207,6 +252,23 @@ struct NASMediaDetailContent: View {
             if canEdit { Button(action: onEdit) { Label(L10n.text("修正资料"), systemImage: "pencil") }.buttonStyle(.bordered) }
             if appState.isDetailLoading { ProgressView().controlSize(.small) }
         }
+    }
+
+    private var serverVersionPicker: some View {
+        let playable = serverFiles.filter { $0.playbackLocator != nil }
+        let available = playable.compactMap(\.sourceID)
+        let missing = selectedServerSourceID.map { available.contains($0) ? [] : [$0] } ?? []
+        return HStack(spacing: 12) {
+            Text(L10n.text("播放版本")).font(.callout).fixedSize()
+            SettingsChoicePicker(title: L10n.text("播放版本"), selection: Binding(
+                get: { selectedServerSourceID ?? "" }, set: { explicitServerSourceID = $0 }
+            ), choices: [""] + available + missing) { sourceID in
+                if sourceID.isEmpty { return L10n.text("自动选择") }
+                return playable.first { $0.sourceID == sourceID }?.name ?? L10n.text("所选版本（当前不可用）")
+            }
+        }
+        .frame(maxWidth: 480, alignment: .leading)
+        .help(L10n.text("选择要播放的文件版本，也可在下方逐项查看。"))
     }
 
     private var overviewAndFacts: some View {
@@ -230,7 +292,7 @@ struct NASMediaDetailContent: View {
                     ForEach(facts, id: \.0) { label, value in
                         GridRow {
                             Text(label).foregroundStyle(palette.muted)
-                            if label == L10n.text("导演") {
+                            if label == L10n.text("导演"), !isServer {
                                 VStack(alignment: .leading, spacing: 6) {
                                     ForEach(metadata.directors ?? [], id: \.self) { director in
                                         Button { onDirector(director) } label: {
@@ -255,7 +317,8 @@ struct NASMediaDetailContent: View {
          (L10n.text("上映日期"), metadata.releaseDate),
          (L10n.text("国家 / 地区"), metadata.countries?.joined(separator: " / ")),
          (L10n.text("语言"), metadata.languages?.joined(separator: " / ")),
-         (L10n.text("制作公司"), metadata.studios?.joined(separator: " / "))]
+         (L10n.text("制作公司"), metadata.studios?.joined(separator: " / ")),
+         (L10n.text("分级"), serverDetail?.officialRating)]
         return values.compactMap { label, value in
             guard let value, !value.isEmpty else { return nil }
             return (label, value)
@@ -309,10 +372,10 @@ struct NASMediaDetailContent: View {
                     Spacer()
                     if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(palette.accent) }
                 }
-                Text(record?.localMetadata.plot ?? record?.entry.name ?? episode.name)
+                Text(episode.overview ?? record?.localMetadata.plot ?? record?.entry.name ?? episode.name)
                     .font(.caption).foregroundStyle(palette.muted).lineLimit(2)
                     .frame(maxWidth: .infinity, minHeight: 30, alignment: .topLeading)
-                Text(NASMediaDetailPresentation.fileSummary(record)).font(.caption).foregroundStyle(palette.muted)
+                Text(episode.released ?? NASMediaDetailPresentation.fileSummary(record)).font(.caption).foregroundStyle(palette.muted)
             }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
                 .background(palette.foreground.opacity(selected ? 0.08 : 0.035), in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? palette.accent.opacity(0.7) : palette.foreground.opacity(0.1)))
@@ -346,18 +409,25 @@ struct NASMediaDetailContent: View {
                         Image(systemName: "play.fill").font(.headline).frame(width: 32, height: 32)
                     }.buttonStyle(.bordered).accessibilityLabel(L10n.text("播放 {0}", [episode.name]))
                 }
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(record?.entry.name ?? episode.name).font(.callout.bold()).lineLimit(2)
-                    HStack(spacing: 8) {
-                        Text(NASMediaDetailPresentation.fileSummary(record)).foregroundStyle(palette.muted)
-                        if history?.episodeUrl == episode.url { Text(L10n.text("上次观看")).foregroundStyle(palette.accent) }
-                    }.font(.caption)
-                }.frame(maxWidth: .infinity, alignment: .leading)
                 Button {
                     if expanded { expandedFiles.remove(episode.url) } else { expandedFiles.insert(episode.url) }
                 } label: {
-                    Label(L10n.text("文件信息"), systemImage: expanded ? "chevron.up" : "chevron.down")
-                }.buttonStyle(.plain).font(.caption).foregroundStyle(palette.muted)
+                    HStack(spacing: 14) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(record?.entry.name ?? episode.name).font(.callout.bold()).lineLimit(2)
+                            HStack(spacing: 8) {
+                                Text(NASMediaDetailPresentation.fileSummary(record)).foregroundStyle(palette.muted)
+                                if history?.episodeUrl == episode.url { Text(L10n.text("上次观看")).foregroundStyle(palette.accent) }
+                            }.font(.caption)
+                              if let record { DolbySourceBadges(formats: DolbySourceFormat.filename(record.entry.name)) }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                        Label(L10n.text("文件信息"), systemImage: expanded ? "chevron.up" : "chevron.down")
+                            .font(.caption).foregroundStyle(palette.muted)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                    .accessibilityValue(expanded ? L10n.text("已展开") : L10n.text("已折叠"))
             }
             if expanded {
                 Divider().opacity(0.3)
@@ -375,27 +445,36 @@ struct NASMediaDetailContent: View {
     }
 
     private func castSection(_ cast: [MediaCastMember]) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let prefetch = PosterImagePrefetchRequest(urls: cast.compactMap(\.portrait), maxPixelSize: 200)
+        return VStack(alignment: .leading, spacing: 16) {
             sectionHeading(L10n.text("演职员"))
             ThemedHorizontalScrollView(theme: .subtle) {
                 LazyHStack(alignment: .top, spacing: 18) {
                     ForEach(Array(cast.enumerated()), id: \.offset) { _, person in
-                        Button { onActor(person) } label: { VStack(spacing: 8) {
-                            WebImage(urlString: person.portrait ?? "", showsLoadingIndicator: false, fallbackSystemImage: "person.fill", maxPixelSize: 200)
-                                .aspectRatio(contentMode: .fit).frame(width: 80, height: 104, alignment: .bottom)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                            Text(person.name).font(.callout.weight(.medium)).lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if let role = person.role, !role.isEmpty {
-                                Text(role).font(.caption).foregroundStyle(palette.muted).lineLimit(2)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }.frame(width: 96) }
-                        .buttonStyle(.plain).help(L10n.text("查看 {0} 参演的影片", [person.name]))
+                        Group {
+                            if isServer { personCard(person) }
+                            else { Button { onActor(person) } label: { personCard(person) }
+                                .buttonStyle(.plain).help(L10n.text("查看 {0} 参演的影片", [person.name])) }
+                        }
                     }
                 }.padding(.bottom, 6)
             }.frame(height: 200)
         }
+        .task(id: prefetch) { await ImageLoader.prefetch(prefetch) }
+    }
+
+    private func personCard(_ person: MediaCastMember) -> some View {
+        VStack(spacing: 8) {
+            WebImage(urlString: person.portrait ?? "", showsLoadingIndicator: false, fallbackSystemImage: "person.fill", maxPixelSize: 200)
+                .aspectRatio(contentMode: .fit).frame(width: 80, height: 104, alignment: .bottom)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            Text(person.name).font(.callout.weight(.medium)).lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            if let role = person.role, !role.isEmpty {
+                Text(role).font(.caption).foregroundStyle(palette.muted).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }.frame(width: 96)
     }
 
     private var attribution: some View {
@@ -407,6 +486,7 @@ struct NASMediaDetailContent: View {
                 Text(L10n.text("暂时无法补全资料，已保留现有信息"))
                 Button(L10n.text("重试"), action: onRetry).buttonStyle(.plain).foregroundStyle(palette.accent)
             } else {
+                if isServer { Text(L10n.text("资料来自服务器；未显示的字段尚未提供。")) }
                 if let id = metadata.tmdbID { Text("TMDB · " + id) }
                 if let id = metadata.doubanID { Text(L10n.text("豆瓣") + " · " + id) }
             }

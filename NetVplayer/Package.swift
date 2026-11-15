@@ -3,6 +3,11 @@ import PackageDescription
 import Foundation
 
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+// CI and source-only development may use an installed libssh2 prefix. Packaging
+// explicitly selects the pinned runtime built for the application's minimum OS.
+let fileTransferRuntime = ProcessInfo.processInfo.environment["NETVPLAYER_FILE_TRANSFER_RUNTIME"]
+    .map { URL(fileURLWithPath: $0) }
+    ?? packageDirectory.appendingPathComponent(".build/file-transfer-runtime")
 let includesPrivateLegacyProviders = FileManager.default.fileExists(
     atPath: packageDirectory
         .appendingPathComponent("Sources/SpiderEngine/LegacyNativeProviderRegistration.swift").path
@@ -65,6 +70,12 @@ let package = Package(
             linkerSettings: [
                 .linkedLibrary("curl")
             ]
+        ),
+        .target(
+            name: "FileTransferShim",
+            path: "Sources/FileTransferShim", publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-I" + fileTransferRuntime.appendingPathComponent("include").path])],
+            linkerSettings: [.linkedLibrary("curl"), .unsafeFlags(["-L" + fileTransferRuntime.appendingPathComponent("lib").path, "-lssh2"])]
         ),
         .target(
             name: "ApplicationCore",
@@ -134,8 +145,13 @@ let package = Package(
             path: "Sources/ConfigEngine"
         ),
         .target(
+            name: "MediaServerEngine",
+            dependencies: ["Models", "Storage", "Networking", "ProxyServer"],
+            path: "Sources/MediaServerEngine"
+        ),
+        .target(
             name: "FileServiceEngine",
-            dependencies: ["Models", "Storage", "Networking", "ProxyServer", "DriveEngine", "CSMBGuestBridge",
+            dependencies: ["Models", "Storage", "Networking", "ProxyServer", "DriveEngine", "CSMBGuestBridge", "BlurayShim", "FileTransferShim",
                            .product(name: "AMSMB2", package: "AMSMB2")],
             path: "Sources/FileServiceEngine"
         ),
@@ -160,11 +176,26 @@ let package = Package(
             path: "Sources/ProxyServer"
         ),
         .target(
+            name: "BlurayShim",
+            path: "Sources/BlurayShim",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-I/opt/homebrew/opt/libbluray/include"]) ]
+        ),
+        .target(name: "NativePIP", path: "Sources/NativePIP", publicHeadersPath: "include",
+                linkerSettings: [.linkedFramework("AppKit")]),
+        .target(
             name: "MPVShim",
             path: "Sources/MPVShim",
             publicHeadersPath: "include",
             cSettings: [
-                .unsafeFlags(["-I/opt/homebrew/opt/mpv/include"])
+                .unsafeFlags(["-I/opt/homebrew/opt/mpv/include", "-I/opt/homebrew/opt/ffmpeg/include"])
+            ],
+            linkerSettings: [
+                .linkedFramework("OpenGL"), .linkedFramework("Metal"),
+                .linkedFramework("QuartzCore"), .linkedFramework("IOSurface"),
+                .linkedFramework("ColorSync"), .linkedFramework("CoreFoundation"), .linkedFramework("ImageIO"),
+                .linkedFramework("CoreAudio"), .linkedFramework("AVFoundation"), .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreVideo"), .linkedFramework("VideoToolbox")
             ]
         ),
 
@@ -175,6 +206,7 @@ let package = Package(
             name: "SpiderEngine",
             dependencies: [
                 "MediaLibraryEngine",
+                "MediaServerEngine",
                 "FileServiceEngine",
                 "Storage",
                 "Models",
@@ -187,6 +219,7 @@ let package = Package(
                 .product(name: "SwiftSoup", package: "SwiftSoup"),
             ],
             path: "Sources/SpiderEngine",
+            resources: [.process("Resources")],
             swiftSettings: privateLegacyProviderSettings
         ),
         // ═══════════════════════════════════════════
@@ -195,7 +228,8 @@ let package = Package(
         .target(
             name: "ParseEngine",
             dependencies: ["Models", "Networking"],
-            path: "Sources/ParseEngine"
+            path: "Sources/ParseEngine",
+            resources: [.process("Resources")]
         ),
         .target(
             name: "PlayerEngine",
@@ -224,11 +258,11 @@ let package = Package(
         // ═══════════════════════════════════════════
         // 层级 4: 聚合模块
         // ═══════════════════════════════════════════
-        .target(name: "SubtitleEngine", dependencies: ["Models", "Networking"], path: "Sources/SubtitleEngine"),
+        .target(name: "SubtitleEngine", dependencies: ["Models", "Networking", "MPVShim"], path: "Sources/SubtitleEngine"),
 
         .target(
             name: "SearchEngine",
-            dependencies: ["Models", "ApplicationCore", "SpiderEngine"],
+            dependencies: ["Models", "ApplicationCore", "SpiderEngine", "Storage"],
             path: "Sources/SearchEngine"
         ),
 
@@ -239,6 +273,7 @@ let package = Package(
             name: "NetVplayerApp",
             dependencies: [
                 "MediaLibraryEngine",
+                "MediaServerEngine",
                 "FileServiceEngine",
                 "Models",
                 "Diagnostics",
@@ -256,13 +291,16 @@ let package = Package(
                 "DanmakuEngine",
                 "SubtitleEngine",
                 "WebHomeEngine",
+                "NativePIP",
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources/NetVplayerApp",
             exclude: ["Info.plist"],
             resources: [
                 .copy("Resources/ThemeBackgrounds"),
-                .process("Resources/Metadata")
+                .copy("Resources/AndroidPresentation"),
+                .process("Resources/Metadata"),
+                .process("Resources/FormatBadges")
             ],
             swiftSettings: privateLegacyProviderSettings,
             linkerSettings: [
@@ -281,8 +319,13 @@ let package = Package(
         // 测试
         // ═══════════════════════════════════════════
         .testTarget(
+            name: "MediaServerTests",
+            dependencies: ["MediaServerEngine", "Models", "Storage", "Networking", "ProxyServer", "SpiderEngine", "PlayerEngine"],
+            path: "Tests/MediaServerTests"
+        ),
+        .testTarget(
             name: "FileServiceTests",
-            dependencies: ["FileServiceEngine", "MediaLibraryEngine", "Models", "Storage", "ProxyServer", "SpiderEngine"],
+            dependencies: ["FileServiceEngine", "MediaLibraryEngine", "Models", "Storage", "ProxyServer", "SpiderEngine", "DriveEngine"],
             path: "Tests/FileServiceTests"
         ),
         .testTarget(
@@ -311,12 +354,14 @@ let package = Package(
             path: "Tests/ProviderRuntimeTests",
             resources: [
                 .copy("Fixtures")
-            ]
+            ],
+            swiftSettings: privateLegacyProviderSettings
         ),
         .testTarget(
             name: "ConfigEngineTests",
             dependencies: [
                 "ApplicationCore",
+                "MediaServerEngine",
                 "ConfigEngine",
                 "NodeBundleRuntime",
                 "QuickJSRuntime",

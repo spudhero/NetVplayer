@@ -41,24 +41,6 @@ public struct EpgParser: Sendable {
         return delegate.makeData()
     }
 
-    /// 从 JSON API 拉取 EPG
-    public static func fetch(
-        apiTemplate: String,
-        channelId: String,
-        date: String,
-        timeout: TimeInterval = 5,
-        bypassCache: Bool = false
-    ) async -> EpgData {
-        await fetch(
-            apiTemplate: apiTemplate,
-            channelId: channelId,
-            date: date,
-            httpClient: .shared,
-            timeout: timeout,
-            bypassCache: bypassCache
-        )
-    }
-
     /// 从远端 API 拉取并缓存 EPG 数据
     public static func fetch(
         apiTemplate: String,

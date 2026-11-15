@@ -2,8 +2,11 @@
 // Shared media/subtitle file filtering for native drive share clients.
 
 import Foundation
+import Models
 
 public enum DriveMediaClassifier {
+    /// Disc images require the file-service disc adapter, never ordinary media playback.
+    public static func isDiscImage(name: String) -> Bool { DiscMediaPolicy.isISO(name) }
     private static let videoExtensions: Set<String> = [
         ".mp4", ".m4v", ".mov", ".m3u8", ".mkv", ".ts", ".flv", ".webm",
         ".avi", ".wmv", ".mpg", ".mpeg", ".m2ts", ".mts", ".3gp", ".3g2",

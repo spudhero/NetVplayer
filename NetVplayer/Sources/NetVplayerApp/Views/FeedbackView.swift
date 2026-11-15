@@ -143,7 +143,7 @@ struct FeedbackView: View {
                 } label: {
                     Label(L10n.text("在 GitHub 中继续"), systemImage: "arrow.up.right.square")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
                 .disabled(previewReport == nil || repositoryURL == nil)
             }
 

@@ -47,7 +47,10 @@ public final class DriveShareExpander: @unchecked Sendable {
         guard let expander = expanders.first(where: { $0.canExpand(url: url) }) else {
             throw DriveEngineError.unsupported("该网盘分享暂未适配目录展开")
         }
-        return try await expander.expand(url: url, fallbackTitle: fallbackTitle).map { episode in
+        let episodes = try await DriveRequestRecovery.withBudget(background: true) {
+            try await expander.expand(url: url, fallbackTitle: fallbackTitle)
+        }
+        return episodes.map { episode in
             var episode = episode
             if episode.series == nil {
                 if let reference = DriveFileReference.parse(episode.url) {
@@ -88,6 +91,7 @@ public final class DriveShareExpander: @unchecked Sendable {
     }
 
     private func unavailableReason(for error: Error) -> String {
+        if let failure = error as? DriveServiceFailure { return failure.localizedDescription }
         guard let driveError = error as? DriveEngineError else {
             return error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         }

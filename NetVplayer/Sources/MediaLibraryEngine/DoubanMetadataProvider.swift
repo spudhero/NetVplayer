@@ -10,7 +10,6 @@ public actor DoubanMetadataProvider: MetadataProvider {
     private let transport: MetadataTransport
     private let publicPageRequest: MetadataRequest?
     private let cookieStorage: HTTPCookieStorage?
-    private var lastRequest = Date.distantPast
     private var recoveredPage: (key: String, data: Data)?
     public init(request: MetadataRequest? = nil, publicPageRequest: MetadataRequest? = nil) {
         let configuration = URLSessionConfiguration.ephemeral
@@ -69,19 +68,21 @@ public actor DoubanMetadataProvider: MetadataProvider {
         return data
     }
     private func get(_ url: URL) async throws -> Data {
+        try Task.checkCancellation()
         if let page = recoveredPage, page.key == Self.publicPageKey(url) { recoveredPage = nil; return page.data }
-        let delay = 1.0 - Date().timeIntervalSince(lastRequest)
-        if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
-        lastRequest = Date()
         let headers = ["User-Agent": Self.userAgent, "Accept-Language": "zh-CN,zh;q=0.9"]
-        var (data, response) = try await transport.data(url: url, headers: headers)
+        let transport = transport
+        var (data, response) = try await DoubanRequestLimiter.shared.perform {
+            try await transport.data(url: url, headers: headers, timeout: .seconds(20))
+        }
         if let verification = Self.verificationURL(response: response, data: data) {
             guard let publicPageRequest else { throw MetadataProviderError.verification(verification) }
-            (data, response) = try await publicPageRequest(url, headers)
+            (data, response) = try await DoubanRequestLimiter.shared.perform { try await publicPageRequest(url, headers) }
             if let verification = Self.verificationURL(response: response, data: data) { throw MetadataProviderError.verification(verification) }
             guard response.url.flatMap(Self.publicPageKey) == Self.publicPageKey(url) else { throw MetadataProviderError.invalidResponse }
         }
-        guard response.statusCode == 200, response.url?.host == "movie.douban.com" else { throw MetadataProviderError.invalidResponse }
+        guard response.url?.host == "movie.douban.com" else { throw MetadataProviderError.invalidResponse }
+        try MetadataTransport.checkStatus(response)
         return data
     }
     public func search(title: String, year: Int?, kind: MediaLibraryKind) async throws -> [MetadataCandidate] {

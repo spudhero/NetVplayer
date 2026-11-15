@@ -63,6 +63,8 @@ struct VodDetailView: View {
         ZStack(alignment: .topTrailing) {
             if FileResourceReference(locator: detail.vodId) != nil {
                 NASMediaDetailView(vod: detail, size: layout.containerSize)
+            } else if MediaServerReference(locator: detail.vodId) != nil {
+                MediaServerDetailView(vod: detail, size: layout.containerSize)
             } else {
             VodDetailThemeBackground(
                 palette: palette,
@@ -152,19 +154,28 @@ struct VodDetailView: View {
             if authorizeAfterErrorDismissal {
                 authorizeAfterErrorDismissal = false
                 appState.openCloudAuthFromPlaybackError()
+            } else if let action = appState.pendingPlaybackTaskAction {
+                appState.pendingPlaybackTaskAction = nil
+                appState.performPlaybackTaskAction(action)
             }
         }) {
-            SettingsEditorContainer(title: L10n.text("播放失败"), width: 500) {
+            SettingsEditorContainer(title: appState.playbackTaskAction == .reviewTasks ? L10n.text("等待确认")
+                : appState.playbackTaskAction == .login ? L10n.text("需要登录") : L10n.text("播放失败"), width: 500) {
                 Text(appState.playbackErrorMessage ?? L10n.text("当前集数暂时无法播放"))
                     .font(.callout).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             } actions: {
                 Spacer()
                 Button(L10n.text("知道了")) { appState.clearPlaybackError() }.keyboardShortcut(.cancelAction)
                 if appState.playbackErrorAuthProvider != nil {
-                    Button(L10n.text("扫码授权")) {
+                    Button(TaskResultAction.login.title) {
                         authorizeAfterErrorDismissal = true
                         appState.isPlaybackErrorPresented = false
-                    }.buttonStyle(.borderedProminent)
+                    }.buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
+                } else if let action = appState.playbackTaskAction {
+                    Button(action.title) {
+                        appState.pendingPlaybackTaskAction = action
+                        appState.isPlaybackErrorPresented = false
+                    }.buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
                 }
             }
         }
@@ -175,117 +186,126 @@ struct VodDetailView: View {
     }
 
     private var informationPane: some View {
-        ThemedScrollView {
-            VStack(alignment: .leading, spacing: layout.sectionSpacing) {
-                ZStack(alignment: .topTrailing) {
-                    WebImage(
-                        urlString: detail.vodPic,
-                        siteHeader: appState.activeSite?.header,
-                        fallbackText: detail.vodName,
-                        maxPixelSize: layout.posterWidth * 2
-                    )
-                        .aspectRatio(PosterMetrics.aspectRatio, contentMode: .fill)
-                        .frame(width: layout.posterWidth, height: layout.posterHeight)
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: HomeVisualPolicy.posterCornerRadius,
-                                style: .continuous
-                            )
-                        )
-                        .overlay {
-                            RoundedRectangle(
-                                cornerRadius: HomeVisualPolicy.posterCornerRadius,
-                                style: .continuous
-                            )
-                            .stroke(palette.foreground.opacity(0.12), lineWidth: 1)
-                        }
-                        .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
-
-                    Button {
-                        appState.toggleKeep(vod: detail)
-                    } label: {
-                        Image(systemName: appState.isKept(vodId: detail.vodId) ? "star.fill" : "star")
-                            .font(.title2)
-                            .foregroundStyle(
-                                appState.isKept(vodId: detail.vodId)
-                                    ? palette.accent
-                                    : palette.foreground
-                            )
-                            .padding(8)
-                            .background(palette.surface.opacity(0.72))
-                            .clipShape(Circle())
-                            .shadow(radius: 3)
-                    }
-                    .buttonStyle(.plain)
-                    .help(appState.isKept(vodId: detail.vodId) ? L10n.text("取消收藏") : L10n.text("加入收藏"))
-                    .padding(10)
-                }
-
-                if !detail.vodLogo.isEmpty {
-                    WebImage(urlString: detail.vodLogo, siteHeader: appState.activeSite?.header)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: layout.posterWidth, maxHeight: 64, alignment: .leading)
-                }
-
-                Text(detail.vodName)
-                    .font(.system(size: layout.titleFontSize, weight: .bold))
-                    .foregroundStyle(palette.foreground)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if !vod.vodRemarks.isEmpty {
-                    Text(vod.vodRemarks)
-                        .font(.subheadline)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(palette.lavender.opacity(0.14))
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .foregroundStyle(palette.lavender)
-                }
-
-                if let progressText = appState.currentDetailHistoryProgressText() {
-                    Label(progressText, systemImage: "clock.arrow.circlepath")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.accent)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(palette.accent.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    if !vod.vodDirector.isEmpty {
-                        Text(L10n.text("导演：")).bold().foregroundColor(palette.muted) + Text(vod.vodDirector)
-                    }
-                    if !vod.vodActor.isEmpty {
-                        Text(L10n.text("主演：")).bold().foregroundColor(palette.muted) + Text(vod.vodActor)
-                    }
-                    if !vod.typeName.isEmpty {
-                        Text(L10n.text("类型：")).bold().foregroundColor(palette.muted) + Text(vod.typeName)
-                    }
-                    if !areaAndYearText.isEmpty {
-                        Text(L10n.text("地区/年份：")).bold().foregroundColor(palette.muted)
-                            + Text(areaAndYearText)
-                    }
-                }
-                .font(.body)
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.text("简介"))
-                        .font(.headline)
-                    Text(vodDescription)
-                        .font(.body)
-                        .foregroundStyle(palette.muted)
-                        .lineLimit(layout.overviewLineLimit)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(layout.contentInset)
+        OnlineVodInformationPane(model: appState.onlineDetailMetadata, vod: detail,
+            input: appState.onlineDetailInput, layout: layout) {
+            originalInformationContent
         }
         .frame(width: layout.informationPaneWidth)
         .frame(maxHeight: .infinity)
         .background(palette.surface.opacity(0.18))
+    }
+
+    private var originalInformationContent: some View {
+        VStack(alignment: .leading, spacing: layout.sectionSpacing) {
+            ZStack(alignment: .topTrailing) {
+                WebImage(
+                    urlString: detail.vodPic,
+                    siteHeader: appState.activeSite?.header,
+                    fallbackText: detail.vodName,
+                    maxPixelSize: layout.posterWidth * 2
+                )
+                    .aspectRatio(PosterMetrics.aspectRatio, contentMode: .fill)
+                    .frame(width: layout.posterWidth, height: layout.posterHeight)
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: HomeVisualPolicy.posterCornerRadius,
+                            style: .continuous
+                        )
+                    )
+                    .overlay {
+                        RoundedRectangle(
+                            cornerRadius: HomeVisualPolicy.posterCornerRadius,
+                            style: .continuous
+                        )
+                        .stroke(palette.foreground.opacity(0.12), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
+
+                Button {
+                    appState.toggleKeep(vod: detail)
+                } label: {
+                    Image(systemName: appState.isKept(vodId: detail.vodId) ? "star.fill" : "star")
+                        .font(.title2)
+                        .foregroundStyle(
+                            appState.isKept(vodId: detail.vodId)
+                                ? palette.accent
+                                : palette.foreground
+                        )
+                        .padding(8)
+                        .background(palette.surface.opacity(0.72))
+                        .clipShape(Circle())
+                        .shadow(radius: 3)
+                }
+                .buttonStyle(.plain)
+                .help(appState.isKept(vodId: detail.vodId) ? L10n.text("取消收藏") : L10n.text("加入收藏"))
+                .padding(10)
+            }
+
+            if !detail.vodLogo.isEmpty {
+                WebImage(urlString: detail.vodLogo, siteHeader: appState.activeSite?.header)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: layout.posterWidth, maxHeight: 64, alignment: .leading)
+            }
+
+            Text(detail.vodName)
+                .font(.system(size: layout.titleFontSize, weight: .bold))
+                .foregroundStyle(palette.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !detail.vodRemarks.isEmpty {
+                Text(detail.vodRemarks)
+                    .font(.subheadline)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(palette.lavender.opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .foregroundStyle(palette.lavender)
+            }
+
+            if let progressText = appState.currentDetailHistoryProgressText() {
+                Label(progressText, systemImage: "clock.arrow.circlepath")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(palette.accent.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                if !detail.vodDirector.isEmpty {
+                    Text(L10n.text("导演：")).bold().foregroundColor(palette.muted) + Text(detail.vodDirector)
+                }
+                if !detail.vodActor.isEmpty {
+                    Text(L10n.text("主演：")).bold().foregroundColor(palette.muted) + Text(detail.vodActor)
+                }
+                if !detail.typeName.isEmpty {
+                    Text(L10n.text("类型：")).bold().foregroundColor(palette.muted) + Text(detail.typeName)
+                }
+                if !areaAndYearText.isEmpty {
+                    Text(L10n.text("地区/年份：")).bold().foregroundColor(palette.muted)
+                        + Text(areaAndYearText)
+                }
+            }
+            .font(.body)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.text("简介"))
+                    .font(.headline)
+                Text(vodDescription)
+                    .font(.body)
+                    .foregroundStyle(palette.muted)
+                    .lineLimit(layout.overviewLineLimit)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let episode = appState.detailSummaryEpisode(vodID: detail.vodId) {
+                PlaybackSummaryView(store: appState.playerState.playbackSummaries,
+                    identity: appState.playbackSummaryIdentity(vodID: detail.vodId,
+                        line: appState.selectedPlayFlag, episodeURL: episode.url), episodeName: episode.name)
+            }
+        }
     }
 
     @ViewBuilder
@@ -450,17 +470,14 @@ struct VodDetailView: View {
     private func episodeControls(status: FlagStatus) -> some View {
         HStack(spacing: 10) {
             EpisodeSortOrderButton(selection: $appState.episodeSortOrder)
-                .tint(palette.accent)
             EpisodeDisplayModePicker(selection: $appState.episodeDisplayMode)
-                .tint(palette.accent)
             if let provider = status.authProvider {
                 Button {
                     appState.requestCloudAuth(provider)
                 } label: {
                     Label(L10n.text("扫码授权"), systemImage: "qrcode.viewfinder")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(ThemedDialogButtonStyle())
             }
         }
     }
@@ -689,11 +706,9 @@ private extension VodDetailView {
 
         let episodes = appState.playbackEpisodes(for: flagName)
         let providers = episodes.map { DriveFileReference.provider(for: $0.url) }
-        let sourceStatuses = episodes.map { episodeSupport(for: $0) }
-        if !sourceStatuses.isEmpty,
-           sourceStatuses.allSatisfy({ $0.status == .unsupported }),
-           let reason = sourceStatuses.first?.reason,
-           !reason.isEmpty {
+        if let reason = VodPlaybackAvailabilityPolicy.unsupportedReason(
+            for: episodes, support: { episodeSupport(for: $0) }
+        ) {
             return .unsupported(reason)
         }
         if providers.contains(.quark) {

@@ -125,12 +125,12 @@ struct SearchResultPresentationSnapshot: Sendable {
             }
 
             candidates.append(contentsOf: sourceItems)
-            if !sourceItems.isEmpty {
+            if !sourceItems.isEmpty || (result.hasMore && result.error == nil) {
                 options.append(SearchSourceOption(
                     siteKey: result.siteKey,
                     siteName: result.siteName,
                     count: sourceItems.count,
-                    isDriveOnly: sourceItems.allSatisfy(\.isDrive)
+                    isDriveOnly: !sourceItems.isEmpty && sourceItems.allSatisfy(\.isDrive)
                 ))
             }
         }

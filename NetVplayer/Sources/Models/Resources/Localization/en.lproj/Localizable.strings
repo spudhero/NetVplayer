@@ -1,4 +1,5 @@
 /* Application-owned copy only. */
+"向下滚动以加载更多结果" = "Scroll down to load more results";
 "## 复现资料\n- 复现等级：{0}\n- 公开复现源：{1}\n- 配置指纹：{2}\n- 输入类型：{3}\n- 适配器：{4}\n- Provider：{5}\n- 站点键指纹：{6}\n- 最近失败阶段：{7}\n- 最近错误分类：{8}\n- 用户选择分类：{9}\n\n## 运行环境\n- NetVplayer：{10} ({11})\n- macOS：{12}\n- 架构：{13}\n- 会话：{14}\n\n## 验证边界\n{15}" = "## Reproduction details\n- Reproduction level: {0}\n- Public reproduction source: {1}\n- Configuration fingerprint: {2}\n- Input type: {3}\n- Adapter: {4}\n- Provider: {5}\n- Site key fingerprint: {6}\n- Latest failure stage: {7}\n- Latest error category: {8}\n- User-selected category: {9}\n\n## Environment\n- NetVplayer: {10} ({11})\n- macOS: {12}\n- Architecture: {13}\n- Session: {14}\n\n## Verification boundary\n{15}";
 "100 最靠近画面底部" = "100 is closest to the bottom of the picture";
 "115 Cookie 验证成功，已保存并继续播放。" = "115 Cookie verified and saved. Resuming playback.";
@@ -1990,3 +1991,1226 @@
 "查看 {0} 执导的影片" = "Show films directed by {0}";
 "补全资料后可按系列、主演和导演筛选" = "Complete metadata to filter by collection, cast, and director";
 "补全影片资料" = "Complete film metadata";
+
+// Playback diagnostics (AV-01)
+"HDR 动态元数据" = "HDR dynamic metadata";
+"HDR 静态元数据" = "HDR static metadata";
+"传递函数" = "Transfer function";
+"位深" = "Bit depth";
+"像素格式" = "Pixel format";
+"分辨率" = "Resolution";
+"压缩音频直通" = "Compressed audio passthrough";
+"回退原因未报告" = "Fallback reason not reported";
+"复制脱敏诊断" = "Copy redacted diagnostics";
+"实际解码" = "Actual decoding";
+"已检测" = "Detected";
+"帧率" = "Frame rate";
+"当前 EDR 余量" = "Current EDR headroom";
+"当前设置关闭硬件解码" = "Hardware decoding disabled by the current setting";
+"当前输出" = "Current output";
+"播放信息" = "Playback information";
+"显示器" = "Display";
+"暂无播放信息" = "No playback information";
+"正在读取播放信息…" = "Reading playback information…";
+"渲染后端" = "Render backend";
+"渲染目标" = "Render target";
+"潜在 EDR 余量" = "Potential EDR headroom";
+"片源" = "Source media";
+"片源动态范围" = "Source dynamic range";
+"硬件解码初始化失败" = "Hardware decoder initialization failed";
+"硬件解码：{0}" = "Hardware decoding: {0}";
+"系统默认设备" = "System default device";
+"色域" = "Color primaries";
+"色彩矩阵" = "Color matrix";
+"色彩范围" = "Color range";
+"视频编码" = "Video codec";
+"视频输出" = "Video output";
+"诊断仅含播放参数；账号、媒体地址、路径及设备名称不导出。" = "Diagnostics contain playback parameters only. Accounts, media addresses, paths, and device names are omitted.";
+"诊断导出失败，请重试。" = "Unable to export diagnostics. Please try again.";
+"软件回退" = "Software fallback";
+"软件解码" = "Software decoding";
+"输入声道" = "Input channels";
+"输入采样率" = "Input sample rate";
+"输出声道" = "Output channels";
+"输出模式" = "Output mode";
+"输出采样率" = "Output sample rate";
+"进程输出设备" = "Process output device";
+"音频" = "Audio";
+"音频后端" = "Audio backend";
+"音频编码" = "Audio codec";
+"播放色彩解释" = "Playback color interpretation";
+"播放色域" = "Playback color primaries";
+"播放传递函数" = "Playback transfer function";
+
+/* AV-02 color management */
+"显示器 ICC（已提交）" = "Display ICC (submitted)";
+"sRGB 后备 ICC（已提交）" = "Fallback sRGB ICC (submitted)";
+"ICC 不可用，使用 sRGB 后备" = "ICC unavailable; using fallback sRGB";
+"色彩默认" = "Color defaults";
+"显示目标约束" = "Display constraints";
+"色彩与 SDR 映射" = "Color and SDR mapping";
+"映射算法" = "Tone mapping";
+"自动（片源建议或默认）" = "Automatic (source or default)";
+"SDR 参考峰值" = "SDR reference peak";
+"EDR 信号峰值" = "EDR signal peak";
+"扩展线性 sRGB" = "Extended linear sRGB";
+"当前以 SDR 显示，使用显示器色彩配置。默认 BT.2390、203 nit；参考峰值不代表实测亮度，也不会调整显示器亮度。" = "SDR output uses the display color profile. Defaults: BT.2390, 203 nit. The reference peak is not a brightness measurement and does not change display brightness.";
+"手动选择优先于片源建议；恢复默认会重新使用片源建议或应用默认。较低峰值也可能压缩 SDR 高光。" = "Manual choices override source suggestions. Reset restores source suggestions or app defaults. A lower peak can also compress SDR highlights.";
+"恢复色彩默认" = "Reset color settings";
+"播放矩阵" = "Interpreted matrix";
+"播放范围" = "Interpreted range";
+"输出色彩配置" = "Output color profile";
+
+// AV-04 output policy and validation status
+"色彩与视频输出" = "Color and video output";
+"输出策略" = "Output policy";
+"SDR 映射" = "SDR tone mapping";
+"HDR（设备支持时）" = "HDR (when available)";
+"HDR 输出尚待实屏验收；自动或 HDR 选择在条件不足时使用 SDR 映射。" = "HDR output awaits display validation. Auto or HDR uses SDR tone mapping when requirements are not met.";
+"等待当前视频画面" = "Waiting for the current video frame";
+"开发用高精度输出，实屏 HDR 未验证" = "Development high precision output; physical HDR unverified";
+"按所选策略使用 SDR 映射" = "Using SDR tone mapping as selected";
+"SDR 片源，使用 SDR 显示" = "SDR source, using SDR output";
+"HDR 片源正在映射到 SDR" = "HDR source is being tone mapped to SDR";
+"Dolby Vision 兼容性待验证，当前使用 SDR 路线" = "Dolby Vision compatibility awaits validation; using the SDR path";
+"片源动态范围未知，当前使用 SDR 路线" = "Source dynamic range is unknown; using the SDR path";
+"HDR 输出路线尚未通过实屏验收" = "HDR output path has not passed physical display validation";
+"当前显示设备的 EDR 能力未知" = "EDR capability of the current display is unknown";
+"当前显示链路未提供 EDR 范围" = "The current display connection provides no EDR range";
+"当前可用 EDR 余量不足或未知" = "Current available EDR headroom is insufficient or unknown";
+"输出状态" = "Output status";
+"HDR 输出条件" = "HDR output requirements";
+
+// AV-06 Dolby Vision compatibility
+"HDR10 基础层 → SDR；未使用 DV 重建或动态映射" = "HDR10 base layer → SDR; no DV reconstruction or dynamic mapping";
+"HLG 基础层 → SDR；未使用 DV 重建或动态映射" = "HLG base layer → SDR; no DV reconstruction or dynamic mapping";
+"SDR 基础层；未使用 DV 重建或动态映射" = "SDR base layer; no DV reconstruction or dynamic mapping";
+"当前渲染路线不支持 Dolby Vision Profile 5 颜色重建，已隐藏视频并暂停。请选择 HDR10／SDR 版本。" = "This renderer does not support Dolby Vision Profile 5 color reconstruction. Video is hidden and paused. Please choose an HDR10 or SDR version.";
+"Dolby Vision 基础层兼容性未确认，已隐藏视频并暂停。请选择 HDR10／SDR 版本。" = "Dolby Vision base-layer compatibility is unconfirmed. Video is hidden and paused. Please choose an HDR10 or SDR version.";
+"DV 配置 Profile／兼容标记" = "DV profile / compatibility ID";
+"DV 配置声明 RPU" = "RPU declared in DV configuration";
+"DV 当前处理" = "Current DV handling";
+"DV 动态映射" = "DV dynamic mapping";
+"未使用" = "Not used";
+"Dolby Vision 电视信号" = "Dolby Vision TV signal";
+"未输出；完整链路尚未验证" = "Not sent; full chain unverified";
+"Dolby Vision 兼容基础层正在使用 SDR 路线" = "Dolby Vision compatible base layer uses the SDR route";
+"Dolby Vision 视频已安全阻断" = "Dolby Vision video safely blocked";
+"本地首帧 RPU／帧元数据" = "Local first-frame RPU / metadata";
+"运行时 DV 帧标记" = "Runtime DV frame marker";
+"RPU 推断 Profile" = "Profile inferred from RPU";
+"是" = "Yes";
+"否" = "No";
+
+// AV-07 PCM output and devices
+"自动（安全声道布局）" = "Automatic (safe channel layout)";
+"立体声（2.0）" = "Stereo (2.0)";
+"最多 5.1 声道" = "Up to 5.1 channels";
+"最多 7.1 声道" = "Up to 7.1 channels";
+"跟随系统默认输出" = "Follow system default output";
+"请求使用所选设备" = "Selected device requested";
+"所选设备不可用，暂用系统默认输出" = "Selected device unavailable; using system default temporarily";
+"所选设备打开失败，暂用系统默认输出" = "Selected device failed to open; using system default temporarily";
+"设备信息未确认，使用安全自动输出" = "Device information unconfirmed; using safe automatic output";
+"系统休眠，等待音频设备恢复" = "System asleep; waiting for audio devices";
+"音频设备不可用，已暂停。设备恢复后可继续播放。" = "Audio output is unavailable. Playback is paused; resume after the device recovers.";
+"音频输出与设备" = "Audio output and devices";
+"输出设备偏好" = "Preferred output device";
+"自动（系统默认设备）" = "Automatic (system default device)";
+"所选设备（当前不可用）" = "Selected device (currently unavailable)";
+"PCM 声道偏好" = "Preferred PCM channels";
+"设备未确认环绕布局，当前安全下混为立体声。" = "Surround layout is unconfirmed; safely downmixing to stereo.";
+"所选设备不可用时暂用系统默认设备，恢复连接后重新尝试；声道选择不改变系统扬声器配置。" = "Temporarily uses the system default when the selected device is unavailable and retries after reconnection. Channel preferences do not change system speaker configuration.";
+"多声道 PCM 不包含 Atmos 对象、压缩直通或头部追踪。" = "Multichannel PCM does not include Atmos objects, compressed passthrough, or head tracking.";
+"恢复音频输出默认" = "Reset audio output";
+"输入声道映射" = "Input channel map";
+"输出声道映射" = "Output channel map";
+"设备请求状态" = "Device request status";
+"请求声道布局" = "Requested channel layouts";
+"进程输出设备数" = "Process output device count";
+"设备连接类型" = "Device transport";
+"设备配置声道顺序" = "Configured device channel order";
+"设备可用声道数" = "Device channel capacity";
+"设备标称采样率" = "Device nominal sample rate";
+"设备报告延迟" = "Device reported latency";
+"设备缓冲帧数" = "Device buffer frames";
+"引擎报告音画偏差" = "Engine reported A/V offset";
+"设备配置不代表物理声道验证；设备延迟不含软件缓冲和声学传播，音画偏差为引擎报告值。" = "Device configuration does not verify physical speakers. Device latency excludes software buffering and acoustic propagation; A/V offset is reported by the engine.";
+"虚拟或聚合设备尚未支持，暂用系统默认输出" = "Virtual or aggregate output is not supported yet; using system default temporarily";
+"系统默认设备为未支持的虚拟或聚合设备，请选择实体音频输出" = "System default is an unsupported virtual or aggregate device. Select a physical audio output.";
+"虚拟与聚合设备尚未通过输出验收，本阶段不提供选择。" = "Virtual and aggregate devices have not passed output validation and are not selectable in this stage.";
+
+// AV-08 optional dialogue clarity
+"轻度" = "Light";
+"中度" = "Medium";
+"较强" = "Strong";
+"已关闭，使用原音频处理" = "Off; original audio processing";
+"等待确认当前音轨与 PCM 输出" = "Waiting for the current audio track and PCM output";
+"正在切换对白处理…" = "Changing dialogue processing…";
+"中央声道优先：降低其它声道，保留中央声道" = "Center priority: reduce other channels and preserve the center";
+"立体声均衡与动态压缩" = "Stereo equalization and dynamic compression";
+"当前声道布局未验证，保留偏好并使用原音频" = "Unverified channel layout; preference retained, original audio used";
+"压缩直通与对白处理互斥；已保留偏好，当前不处理" = "Dialogue processing is unavailable during compressed passthrough; preference retained";
+"片源已有音频滤镜，保留原处理与对白偏好" = "Source audio filters are active; original processing and dialogue preference retained";
+"对白处理未能生效，已恢复原音频；可关闭后重试" = "Dialogue processing failed; original audio restored. Turn off to retry.";
+"对白清晰度" = "Dialogue clarity";
+"处理强度" = "Processing strength";
+"多声道优先保留中央声道；立体声使用均衡与动态压缩，不分离人声和音乐。" = "Multichannel audio prioritizes the center; stereo uses equalization and compression. Voices and music are not separated.";
+"默认关闭。点播与直播共享此偏好，换片后保留；调整时会短暂淡出淡入，音量设置不变。" = "Off by default. Shared by on-demand and live playback and retained across media. Changes briefly fade audio out and in without changing your volume setting.";
+"恢复原音频" = "Restore original audio";
+"音频处理恢复失败，已暂停。请关闭对白处理后重试，或重新打开媒体。" = "Audio processing could not be restored; playback is paused. Turn dialogue processing off and retry, or reopen the media.";
+
+"引擎报告压缩码流" = "Engine reports encoded bitstream";
+"E-AC-3（JOC 未确认）" = "E-AC-3 (JOC unconfirmed)";
+"E-AC-3 JOC（片源标记）" = "E-AC-3 JOC (source profile)";
+"TrueHD（Atmos 未确认）" = "TrueHD (Atmos unconfirmed)";
+"TrueHD Atmos（片源标记）" = "TrueHD Atmos (source profile)";
+"其他或未知编码" = "Other or unknown codec";
+"PCM 解码输出" = "Decoded PCM output";
+"引擎报告压缩码流；接收端未确认" = "Engine reports encoded bitstream; receiver unconfirmed";
+"尚未确认音频输出" = "Audio output not yet confirmed";
+"未请求压缩直通" = "Compressed passthrough not requested";
+"已请求；不代表实际直通" = "Requested; actual passthrough unconfirmed";
+"直通请求未知" = "Passthrough request unknown";
+"未确认接收端及 Atmos 对象输出" = "Receiver and Atmos object output unconfirmed";
+"此版本未开放 HDMI 压缩直通；Atmos 接收端及对象输出尚未验证。" = "HDMI compressed passthrough is not enabled in this version. Receiver and Atmos object output remain unverified.";
+"音频 Profile" = "Audio profile";
+"压缩音频片源" = "Compressed audio source";
+"音频实际处理" = "Actual audio processing";
+"直通请求" = "Passthrough request";
+"Atmos 接收端" = "Atmos receiver";
+"引擎输出格式" = "Engine output format";
+
+"CoreAudio PCM；未确认系统空间化" = "CoreAudio PCM; system spatialization unverified";
+"AVFoundation PCM；未确认系统空间化" = "AVFoundation PCM; system spatialization unverified";
+"其他 PCM 路线；空间化未确认" = "Other PCM route; spatialization unverified";
+"压缩码流；空间渲染由接收端决定" = "Encoded stream; receiver controls spatial rendering";
+"应用未启用虚拟环绕" = "App virtual surround is not enabled";
+"系统空间音频未确认" = "System Spatial Audio is unverified";
+"未取得实际姿态与方向响应" = "No measured pose and directional response";
+"未验证 Atmos 对象渲染" = "Atmos object rendering is unverified";
+"此版本未启用应用虚拟环绕；系统空间音频、头部追踪与 Atmos 对象效果尚未验证。" = "App virtual surround is not enabled in this version. System Spatial Audio, head tracking, and Atmos object effects remain unverified.";
+"空间音频与追踪" = "Spatial audio and tracking";
+"空间音频路线" = "Spatial audio route";
+"应用虚拟环绕" = "App virtual surround";
+"系统空间音频" = "System Spatial Audio";
+"动态头部追踪" = "Dynamic head tracking";
+"Atmos 对象渲染" = "Atmos object rendering";
+"多声道、耳机型号或系统选项不能证明空间效果；头部追踪需要实际姿态与方向响应。" = "Channel count, headphone model, and system settings do not prove spatial effects. Head tracking requires measured pose and directional response.";
+"应用未切换系统刷新率" = "The app has not changed the system refresh rate";
+"QMS 完整链路未验证" = "The complete QMS chain is unverified";
+"显示模式刷新率" = "Display mode refresh rate";
+"帧率匹配" = "Frame rate matching";
+"模式刷新率不代表实际面板时序；VRR 或无明显黑屏不能证明 QMS。" = "Mode refresh rate does not establish physical panel timing. VRR or an apparently seamless switch does not prove QMS.";
+
+/* AV-12 display inspection, not calibration */
+"灰阶测试图" = "Grayscale";
+"近黑测试图" = "Near Black";
+"高光测试图" = "Highlights";
+"色块测试图" = "Color Patches";
+"从左到右为 0、17…255 的中性灰阶，观察层次和明显偏色。" = "Neutral steps from 0 to 255 in increments of 17. Look for separation and visible color casts.";
+"从左到右为 0…15 的近黑灰阶。环境光会影响辨识；不要为了看清每一级而抬高黑位。" = "Near-black steps from 0 to 15. Ambient light affects visibility; do not raise the black level just to distinguish every step.";
+"从左到右为 240…255 的高光灰阶，观察亮部层次；这不是 HDR 亮度测试。" = "Highlight steps from 240 to 255. Look for separation; this is not an HDR luminance test.";
+"依次为白、黄、青、绿、品红、红、蓝、黑。色块用于目视检查，不用于测量色域或色差。" = "White, yellow, cyan, green, magenta, red, blue, and black. These patches are for visual inspection, not gamut or color-error measurement.";
+"显示测试图与指引" = "Display Test Patterns & Guide";
+"关闭测试图" = "Close Test Patterns";
+"测试图" = "Test Pattern";
+"测试图生成失败" = "Unable to generate test pattern";
+"显示器信息不可用" = "Display information unavailable";
+"色彩配置未知" = "Unknown color profile";
+"图中数值为 sRGB 8 位码值；系统负责显示转换。本工具不测量屏幕，也不验证视频播放的颜色。" = "The patterns use 8-bit sRGB code values and system color management. This tool does not measure the display or validate video playback colors.";
+"检查前" = "Before You Begin";
+"将窗口移到要检查的屏幕，并保持环境光稳定。记录显示器模式、亮度及夜览／原彩设置；比较前后时使用相同条件。" = "Move this window to the display you want to inspect and keep ambient light stable. Record the display mode, brightness, and Night Shift / True Tone settings; use the same conditions for comparisons.";
+"ICC 与应用设置" = "ICC and App Settings";
+"播放器自动使用所在屏幕的系统 ICC。系统色彩配置会影响该屏的色彩管理；应用中的映射算法和参考峰值只影响本应用。测试图不会改变这些设置，关闭即可返回。" = "The player follows the system ICC profile for its display. System color profiles affect color management on that display; tone mapping and reference peak settings affect this app. Test patterns do not change these settings. Close the window to return.";
+"仪器与 iPhone" = "Instruments and iPhone";
+"可靠校准需要适配显示器的色度计或光谱辐射计，并比较校准前后的测量。当前未提供 iPhone 测量、ICC 导入或 LUT 校准；手机自动白平衡不能代替专业测量。" = "Reliable calibration requires a suitable colorimeter or spectroradiometer and measurements before and after calibration. iPhone measurement, ICC import, and LUT calibration are not available here; phone auto white balance cannot replace professional measurement.";
+"查看 Apple 显示器色彩配置说明" = "Read Apple’s Display Color Profile Guide";
+"蓝光读取组件不可用" = "Blu-ray reader is unavailable";
+"未找到可读取的蓝光标题" = "No readable Blu-ray titles found";
+"此光盘受保护，当前无法读取" = "This protected disc cannot be read";
+"所选蓝光标题或角度不可用" = "The selected Blu-ray title or angle is unavailable";
+"蓝光读取失败，请检查文件来源后重试" = "Blu-ray read failed. Check the source and try again.";
+"蓝光标题" = "Blu-ray titles";
+"EDR 呈现（实验性，亮度未校准）" = "EDR presentation (experimental; luminance uncalibrated)";
+"正在请求 EDR，暂按 SDR 白限制高光" = "Requesting EDR; highlights are temporarily limited to SDR white";
+"HDR 选择启用实验性 EDR 呈现；自动保持 SDR。设备条件不足时回退，完整亮度与设备验收仍待完成。" = "HDR enables experimental EDR presentation; Auto stays SDR. Unavailable devices fall back. Full luminance and device validation is pending.";
+"SDR 使用显示器色彩配置，默认 BT.2390、203 nit。上述映射设置仅用于 SDR；EDR 高光随当前可用余量调整，信号峰值不代表实测亮度。" = "SDR uses the display profile with BT.2390 and 203 nit defaults. These mapping controls apply to SDR. EDR highlights follow current headroom; signal peaks are not measured luminance.";
+
+// Text subtitle translation
+"文本字幕翻译" = "Text subtitle translation";
+"翻译未完成，继续显示原字幕。可重试恢复已保存的进度。" = "Translation did not finish. Original subtitles remain available. Retry to resume saved progress.";
+"无法读取文本字幕，请选择有效的 SRT、ASS、SSA 或 VTT 文件。" = "Cannot read subtitles. Choose a valid SRT, ASS, SSA, or VTT file.";
+"请先下载字幕到本机，再选择文本字幕文件。" = "Download the subtitles locally, then choose the text subtitle file.";
+"字幕缓存无法恢复，原字幕保持可用。" = "Cannot restore the subtitle cache. Original subtitles remain available.";
+"本机翻译未就绪。请检查语言支持或模型下载后重试，原字幕保持可用。" = "On-device translation is not ready. Check language support or model downloads and retry. Original subtitles remain available.";
+"Apple 本机翻译仅处理所选字幕文本，不发送音频或视频。首次使用可能由系统提示下载语言模型。" = "Apple on-device translation processes only the selected subtitle text, without sending audio or video. The system may ask to download language models on first use.";
+"选择文本字幕…" = "Choose text subtitles…";
+"已有外挂字幕" = "Existing external subtitles";
+"源语言" = "Source language";
+"目标语言" = "Target language";
+"跟随播放翻译" = "Translate during playback";
+"补全整份字幕" = "Translate the whole file";
+"停止翻译" = "Stop translation";
+"Apple 本机翻译需要 macOS 15 或更新版本。当前系统可导出原字幕。" = "Apple on-device translation requires macOS 15 or later. You can export original subtitles on this system.";
+"已保存 {0}／{1} 条；完整覆盖后可导出译文和双语字幕。" = "Saved {0}/{1} cues. Export translated or bilingual subtitles after full coverage.";
+"此来源缺少稳定身份，缓存仅限当前播放会话。" = "This source has no stable identity. The cache is limited to this playback session.";
+"双语字幕" = "Bilingual subtitles";
+"导出原字幕…" = "Export originals…";
+"导出译文…" = "Export translation…";
+"部分缓存保存在本机，可停止后重试恢复。翻译失败或迟到继续使用原字幕；导出仅写入你选择的本地文件。ASS 导出保留时间轴，使用统一文本样式。" = "Partial results are saved locally for resuming. Failed or late translations fall back to original subtitles. Exports write only to the local file you choose. ASS exports preserve timing with a uniform text style.";
+"字幕已导出到所选本地文件。" = "Subtitles were exported to the selected local file.";
+"字幕导出失败，请重试。" = "Subtitle export failed. Please try again.";
+
+"请填写有效的媒体服务器地址；HTTP 须明确启用。" = "Enter a valid media server address; HTTP must be explicitly enabled.";
+
+"媒体服务器登录已失效，请重新连接账号。" = "Media server login expired. Reconnect your account.";
+
+"媒体服务器响应无效或超出读取上限。" = "Invalid media server response or response exceeds the read limit.";
+
+"此条目暂不能读取原始文件；当前客户端不请求转码。" = "The original file is unavailable. This client does not request transcoding.";
+
+"媒体服务器播放会话已关闭。" = "The media server playback session is closed.";
+
+"媒体服务器返回 HTTP {0}。" = "Media server returned HTTP {0}.";
+
+"媒体服务器连接失败（{0}）。" = "Media server connection failed ({0}).";
+
+"媒体服务器（Emby / Jellyfin）" = "Media servers (Emby / Jellyfin)";
+
+"浏览服务器媒体库，播放原始文件并同步进度。" = "Browse server libraries, play original files and sync progress.";
+
+"服务器类型" = "Server type";
+
+"媒体服务器地址" = "Media server address";
+
+"HTTP 会明文传送登录信息。密码不保存；登录令牌仅存于本机凭据存储，不进入播放地址或备份。" = "HTTP sends login information without encryption. Passwords are not saved; login tokens stay in local credential storage and are excluded from playback URLs and backups.";
+
+"媒体服务器已连接，可在影视来源中选择。" = "Connected. Select this server in video sources.";
+
+"已取消" = "Cancelled";
+
+"图片字幕／音频识别" = "Image subtitle / audio recognition";
+
+"使用 Apple 本机 OCR 或语音识别。识别内容保存在本机；准备语音模型时可能下载 Apple 系统资源。" = "Use Apple on-device OCR or speech recognition. Results stay on this Mac; preparing speech models may download Apple system resources.";
+
+"选择 SUP／WAV 文件…" = "Choose SUP / WAV File…";
+
+"支持本地 PGS（SUP）及 16-bit PCM／32-bit float WAV，单声道或双声道。请选择与影片时间轴匹配的文件；内嵌轨道和远程自动提取尚未接入。" = "Supports local PGS (SUP) and mono or stereo 16-bit PCM / 32-bit float WAV. Choose a file matching the movie timeline. Embedded tracks and automatic remote extraction are not yet supported.";
+
+"识别语言" = "Recognition language";
+
+"本机语音模型已就绪。" = "On-device speech models are ready.";
+
+"准备本机语音模型" = "Prepare On-device Speech Models";
+
+"当前设备或语言的本机语音识别不可用。" = "On-device speech recognition is unavailable for this device or language.";
+
+"本机音频识别需要 macOS 26 或更新版本；图片字幕识别仍可使用。" = "On-device audio recognition requires macOS 26 or later. Image subtitle recognition is still available.";
+
+"识别／恢复整份文件" = "Recognize / Resume Entire File";
+
+"停止识别" = "Stop Recognition";
+
+"已保存 {0}／{1} 个识别片段。" = "Saved {0} of {1} recognition segments.";
+
+"导出识别字幕…" = "Export Recognized Subtitles…";
+
+"使用并打开字幕翻译" = "Use and Open Subtitle Translation";
+
+"识别可能有误，请核对结果。整份识别完成后可导出或作为文本字幕继续翻译；关闭面板继续识别，停止或换片会取消当前任务。" = "Recognition may contain errors; review the result. After the entire file is processed, export it or continue with text subtitle translation. Recognition continues when this panel closes; stopping or changing media cancels the current task.";
+
+"正在准备 Apple 本机语音模型…" = "Preparing Apple on-device speech models…";
+
+"识别已完成，未检测到文字或语音。" = "Recognition completed. No text or speech was detected.";
+
+"本机语音模型尚未就绪，请准备模型后重试。" = "On-device speech models are not ready. Prepare the models and try again.";
+
+"识别未完成。请检查本地文件、语言或本机模型后重试，已保存的进度可恢复。" = "Recognition did not complete. Check the local file, language, or on-device models and retry. Saved progress can be resumed.";
+
+"支持已有本地或已下载的 SRT、ASS、SSA、VTT，也可使用图片字幕／音频识别结果。请选与当前影片时间轴匹配的文本；内嵌轨道自动提取尚未接入。" = "Supports local or downloaded SRT, ASS, SSA, and VTT, including image subtitle / audio recognition results. Choose text matching the movie timeline. Automatic embedded-track extraction is not yet supported.";
+
+// DSD source, PCM decoding and HAL format readback.
+"未启用" = "Not enabled";
+"源音频采样率" = "Source audio sample rate";
+"源音频声道数" = "Source audio channel count";
+"DSD 处理" = "DSD processing";
+"DSD 已解码为 PCM" = "DSD decoded to PCM";
+"DSD 解码格式未确认" = "DSD decoded format unconfirmed";
+"音频解码器" = "Audio decoder";
+"解码后格式" = "Decoded format";
+"解码后声道" = "Decoded channels";
+"解码后声道映射" = "Decoded channel map";
+"解码后采样率" = "Decoded sample rate";
+"设备当前虚拟格式" = "Current device virtual format";
+"设备当前物理格式" = "Current device physical format";
+"设备格式为系统读回值，不代表已测量 DAC 载荷或模拟输出。" = "Device formats are system readbacks, not measurements of DAC payloads or analog output.";
+
+/* Native Dolby playback */
+"DV／增强层／FEL 渲染帧" = "DV / enhancement / FEL frames";
+"Dolby Vision FEL 增强层合成与动态色调映射" = "Dolby Vision FEL reconstruction and dynamic tone mapping";
+"Dolby Vision 动态元数据重建与色调映射" = "Dolby Vision reconstruction and dynamic tone mapping";
+"Dolby Vision 画面重建失败，播放已暂停。请重试或切换版本。" = "Dolby Vision reconstruction failed. Playback paused. Retry or choose another version.";
+"E-AC-3 JOC（已解析 Atmos 元数据）" = "E-AC-3 JOC (Atmos metadata parsed)";
+"HDMI 压缩码流" = "HDMI compressed bitstream";
+"HDR 已通过 EDR 呈现" = "HDR presented through EDR";
+"使用兼容耳机时，可在系统控制中心选择空间音频与头部追踪。TrueHD 对象音频需要支持原码的 HDMI 接收端。" = "With compatible headphones, select spatial audio and head tracking in Control Center. TrueHD object audio requires an HDMI receiver that accepts the original bitstream.";
+"兼容输出（PCM）" = "Compatible output (PCM)";
+"准备中" = "Preparing";
+"原始压缩音频交由系统解码与空间渲染" = "Original compressed audio decoded and spatially rendered by the system";
+"原生压缩音频" = "Native compressed audio";
+"原生压缩音频；系统按输出设备进行空间渲染" = "Native compressed audio; spatial rendering follows the output device";
+"原生音频准备中" = "Preparing native audio";
+"原生音频包" = "Native audio packets";
+"原生音频已就绪，等待播放数据" = "Native audio ready; waiting for playback data";
+"原生音频格式" = "Native audio format";
+"已应用" = "Applied";
+"文件夹" = "Folder";
+"未输出；画面由播放器重建后显示" = "Not sent; the player reconstructs and displays the image";
+"杜比音频" = "Dolby audio";
+"正在准备 Dolby Vision 画面" = "Preparing Dolby Vision video";
+"系统原生压缩音频" = "System native compressed audio";
+"自动保留 E-AC-3／Atmos 音频交给系统；HDMI 设备支持相应格式时直通，无法使用时恢复 PCM。" = "Preserve E-AC-3 / Atmos audio for the system. Use passthrough when the HDMI device supports the format; otherwise fall back to PCM.";
+"自动模式会根据片源与显示器启用 HDR；显示器不支持或当前亮度余量不足时，自动映射为 SDR。" = "Automatic mode enables HDR according to the source and display. It maps to SDR when the display is unsupported or current HDR headroom is insufficient.";
+"自动（保留 Atmos 音频）" = "Automatic (preserve Atmos audio)";
+"倍速、对白增强或音频滤镜启用时使用 PCM；恢复原速并关闭处理后，自动恢复原生音频。" = "Playback speed changes, dialogue enhancement and audio filters use PCM. Native audio resumes at normal speed when processing is off.";
+
+/* Post-1.1.4 interface hierarchy and feedback. */
+"Apple 本机翻译 · 保留原字幕时间轴" = "Apple on-device translation · Original subtitle timing";
+"Apple 本机识别 · 生成可编辑、可翻译的文本字幕" = "Apple on-device recognition · Create text subtitles for editing and translation";
+"HTTP 会明文传送登录信息，请仅在信任的网络中使用。" = "HTTP sends login information without encryption. Use it only on a trusted network.";
+"SUP 图片字幕 · WAV 音频" = "SUP image subtitles · WAV audio";
+"仅提供支持选择的实体设备；虚拟与聚合设备暂不提供选择。" = "Only supported physical devices are available. Virtual and aggregate devices cannot currently be selected.";
+"关闭面板后继续识别；停止或换片会取消任务。" = "Recognition continues when this panel closes. Stop it or change the video to cancel.";
+"可随时停止并恢复" = "Stop and resume at any time";
+"填写服务地址与用户名后，即可验证连接。" = "Enter the server address and username to verify the connection.";
+"复制诊断" = "Copy diagnostics";
+"密码不保存；登录令牌仅存于本机凭据存储，不进入播放地址或备份。" = "Passwords are not saved. Login tokens stay in local credential storage and are excluded from playback URLs and backups.";
+"对白设置说明" = "About dialogue settings";
+"导出字幕" = "Export subtitles";
+"导出或继续翻译" = "Export or translate";
+"尚未选择字幕" = "No subtitles selected";
+"尚未选择文件" = "No file selected";
+"已保存的翻译进度" = "Saved translation progress";
+"已保存的识别进度" = "Saved recognition progress";
+"已复制" = "Copied";
+"常用设置" = "Settings";
+"开始播放后可查看片源与实际输出。" = "Start playback to see source details and actual output.";
+"开始翻译" = "Start translation";
+"开始识别" = "Start recognition";
+"当前实际输出" = "Current actual output";
+"技术详情" = "Details";
+"播放时优先翻译当前片段；暂停时可切换为“整份字幕”。" = "Prioritize the current segment during playback. Choose Entire file to translate while paused.";
+"整份字幕" = "Entire file";
+"整份识别完成后可导出或继续翻译。" = "Complete recognition of the entire file to export or translate.";
+"映射算法和参考峰值仅影响 SDR 输出。" = "Tone mapping and reference peak settings affect SDR output only.";
+"服务器" = "Server";
+"格式、隐私与恢复说明" = "Formats, privacy and recovery";
+"检查步骤与能力说明" = "Instructions and limitations";
+"正在翻译…" = "Translating…";
+"正在识别…" = "Recognizing…";
+"正在退出…" = "Signing out…";
+"正在验证连接…" = "Verifying connection…";
+"此地址使用 HTTP；如需连接，请明确启用上方 HTTP 选项。" = "This address uses HTTP. Enable the HTTP option above to connect.";
+"源语言与目标语言相同，请选择不同语言。" = "Source and target languages match. Choose a different language.";
+"登录信息" = "Login";
+"目视检查，不替代仪器校准" = "Visual inspection, not instrument calibration";
+"继续翻译" = "Continue translation";
+"继续识别" = "Resume recognition";
+"翻译" = "Translate";
+"翻译已完成" = "Translation complete";
+"翻译方式" = "Translation mode";
+"色彩设置说明" = "About color settings";
+"补全全部字幕，暂停播放时也可进行。" = "Translate the entire subtitle file, including while playback is paused.";
+"设备与音频能力说明" = "Devices and audio capabilities";
+"识别为文本字幕" = "Recognize text subtitles";
+"识别已完成" = "Recognition complete";
+"译文完整后可导出；原字幕可随时导出。" = "Export translations once complete. Original subtitles can be exported at any time.";
+"请先准备本机语音模型，再开始识别。" = "Prepare the on-device speech model before starting recognition.";
+"请先开始播放，再选择对应字幕。" = "Start playback first, then choose matching subtitles.";
+"跟随播放" = "Follow playback";
+"输出概览" = "Overview";
+"输出设备" = "Output device";
+"这里显示实际播放结果。需要调整时打开“常用设置”，完整参数在“技术详情”。" = "Actual playback results appear here. Use Settings to make changes and Details to inspect all parameters.";
+"连接已取消，可重新验证。" = "Connection canceled. You can verify it again.";
+"选择字幕" = "Choose subtitles";
+"选择已有外挂字幕" = "Choose an existing external subtitle";
+"选择文件…" = "Choose file…";
+"选择识别文件" = "Choose a file to recognize";
+"音频输出" = "Audio output";
+"停用译文" = "Disable translations";
+"使用译文" = "Use translations";
+"停止等待" = "Stop waiting";
+"取消连接" = "Cancel connection";
+
+// Media server account state and rich details
+"{0} 声道" = "{0} channels";
+"分级" = "Content rating";
+"原始文件" = "Original file";
+"取消重新登录" = "Cancel re-login";
+"填写服务器与登录信息，验证成功后保存账号。" = "Enter the server and sign-in details. The account is saved after verification.";
+"媒体服务器" = "Media server";
+"尚未添加账号" = "No account added";
+"已保存登录，待验证" = "Sign-in saved · not checked";
+"已保存登录" = "Sign-in saved";
+"已登录" = "Signed in";
+"无法连接或读取服务器，已保留本机登录。请检查网络后重试。" = "The server could not be reached or read. Your saved sign-in is retained. Check the network and retry.";
+"暂时无法验证登录" = "Unable to check sign-in";
+"服务器不再接受当前登录，请重新输入用户名和密码。" = "The server no longer accepts this sign-in. Enter your username and password again.";
+"服务器未提供" = "Not supplied by the server";
+"服务器未提供文件与轨道资料；仍可使用上方播放入口。" = "The server did not supply file or track details. You can still play using the button above.";
+"服务器评分" = "Server rating";
+"服务器配置已保留，本机没有可用登录。请填写登录信息。" = "The server configuration is retained, but no usable sign-in is stored. Enter your sign-in details.";
+"服务地址或类型已更改，请重新登录以保存。" = "The server address or type has changed. Sign in again to save it.";
+"未登录" = "Signed out";
+"本机已保存登录令牌；用户名将在连接服务器后确认。密码不保存。" = "A sign-in token is stored on this Mac. The username will be confirmed by the server. Passwords are not saved.";
+"检查连接" = "Check connection";
+"正在检查登录…" = "Checking sign-in…";
+"特别篇" = "Specials";
+"登录已失效" = "Sign-in expired";
+"登录验证成功，可浏览媒体库、播放影片并同步观看进度。" = "Sign-in verified. You can browse libraries, play media, and sync watch progress.";
+"资料来自服务器；未显示的字段尚未提供。" = "Details are supplied by the server. Missing fields were not provided.";
+"输入密码（不保存）" = "Enter password (not saved)";
+"重新登录" = "Sign in again";
+"当前登录已保留，无需再次输入密码。更换登录用户时，请选择“重新登录”。" = "Your sign-in is retained. You do not need to enter a password again. Choose “Sign in again” to change users.";
+"账号名称已保存。" = "Account name saved.";
+"保存名称" = "Save name";
+
+"所选版本已不可用或无法原始播放，请刷新详情后重新选择。" = "The selected version is unavailable or cannot play as an original file. Refresh the details and select another version.";
+"播放版本" = "Playback version";
+"所选版本（当前不可用）" = "Selected version (currently unavailable)";
+"选择要播放的文件版本，也可在下方逐项查看。" = "Choose a file version to play. You can also inspect each version below.";
+"此版本暂无法原始播放" = "Original playback is unavailable for this version";
+"已选择此版本" = "This version is selected";
+"选择版本：{0}" = "Select version: {0}";
+"未选择" = "Not selected";
+"播放此版本" = "Play this version";
+"播放版本：{0}" = "Play version: {0}";
+"音轨与字幕" = "Audio tracks and subtitles";
+"已选择" = "Selected";
+
+/* Main player: verified Dolby and HDR output status. */
+"HDR · EDR 呈现" = "HDR · EDR presentation";
+"HDR 映射" = "HDR tone mapping";
+"HDR → SDR 映射" = "HDR → SDR tone mapping";
+"HDR 基础层 · EDR 呈现" = "HDR base layer · EDR presentation";
+"HDR 输出尚未确认，点亮状态以当前呈现结果为准。" = "HDR output is not yet confirmed. The indicator reflects the current presentation.";
+"PCM · {0} 声道" = "PCM · {0} channels";
+"PCM 立体声" = "PCM stereo";
+"SDR 显示" = "SDR presentation";
+"关闭格式详情" = "Close format details";
+"兼容基础层 · SDR 呈现" = "Compatible base layer · SDR presentation";
+"动态映射 · EDR HDR" = "Dynamic mapping · EDR HDR";
+"动态映射 · SDR 呈现" = "Dynamic mapping · SDR presentation";
+"压缩码流输出" = "Compressed bitstream output";
+"原始压缩音频已交给系统，接收端的 Atmos 对象渲染未确认。" = "Compressed audio has been handed to the system. Atmos object rendering at the receiver is not confirmed.";
+"原码输出" = "Bitstream output";
+"Dolby Atmos · 原码输出" = "Dolby Atmos · Bitstream output";
+"Atmos 音轨正在原码输出，由音箱解码。此处高亮表示直通正在工作；最终解码格式请查看音箱的输入信息。" = "The Atmos track is being sent as a bitstream for the sound system to decode. Highlighting indicates active passthrough. Check the sound system's input information for the final decoded format.";
+"呈现格式" = "Presentation format";
+"声道与采样率来自当前实际输出。" = "Channels and sample rate reflect the current audio output.";
+"实际输出" = "Actual output";
+"尚未确认" = "Not yet confirmed";
+"尚未确认当前音频已经开始输出。" = "Audio output has not yet been confirmed.";
+"尚未确认当前音频输出，片源标记不会点亮杜比全景声。" = "Audio output is not yet confirmed. Source metadata alone does not enable the Dolby Atmos indicator.";
+"已交给系统处理" = "Handed to the system";
+"已回退" = "Fallback";
+"已转为 PCM" = "Converted to PCM";
+"已转为 SDR" = "Mapped to SDR";
+"引擎已报告原码输出，接收端的 Atmos 对象渲染未确认。" = "The engine reports bitstream output. Atmos object rendering at the receiver is not confirmed.";
+"当前以 PCM 输出，未确认杜比全景声对象渲染。" = "Audio is currently output as PCM. Dolby Atmos object rendering is not confirmed.";
+"当前使用兼容基础层，杜比视界动态映射未启用。" = "The compatible base layer is in use. Dolby Vision dynamic mapping is not enabled.";
+"当前声音" = "Current audio";
+"当前播放格式" = "Current playback formats";
+"当前画面" = "Current video";
+"当前画面以 SDR 呈现。" = "Video is currently presented in SDR.";
+"当前画面已通过 EDR 呈现 HDR。" = "Video is currently presented in HDR through EDR.";
+"技术信息" = "Technical information";
+"收到当前播放会话的实际结果后更新状态。" = "The status updates when output is confirmed for the current playback session.";
+"杜比视界动态映射已生效。外接电视的杜比视界信号未确认。" = "Dolby Vision dynamic mapping is active. Dolby Vision signaling to an external TV is not confirmed.";
+"杜比视界画面不可用" = "Dolby Vision video unavailable";
+"查看当前实际输出" = "Show current output";
+"标准输出" = "Standard output";
+"正在准备杜比视界画面" = "Preparing Dolby Vision video";
+"正在准备系统音频" = "Preparing system audio";
+"正在确认 HDR 输出" = "Confirming HDR output";
+"正在确认实际输出" = "Confirming output";
+"正在确认杜比视界画面" = "Confirming Dolby Vision video";
+"片源为 HDR，当前使用 SDR 映射。" = "The source is HDR. Video is currently tone mapped to SDR.";
+"片源标记不代表动态映射已经生效。" = "Source metadata does not confirm active dynamic mapping.";
+"画面格式" = "Video format";
+"等待片源信息" = "Waiting for source information";
+"系统处理" = "System processing";
+"色调映射" = "Tone mapping";
+"输出格式" = "Output format";
+"音频格式" = "Audio format";
+
+/* HDMI passthrough and source sample rate */
+"音频直通" = "Audio Passthrough";
+"自动（保留无损音质）" = "Automatic (Preserve Lossless Audio)";
+"开启（优先直通）" = "On (Prefer Passthrough)";
+"关闭（PCM）" = "Off (PCM)";
+"优先传输完整 DTS-HD MA；实际输出会显示 DTS-HD、DTS 核心或 PCM。DTS 核心不包含 HD 无损扩展。" = "Prefer the complete DTS-HD MA stream. The current output shows DTS-HD, DTS core, or PCM. DTS core does not include the lossless HD extension.";
+"PCM 采样率" = "PCM Sample Rate";
+"跟随设备" = "Follow Device";
+"跟随片源" = "Follow Source";
+"按片源尝试切换设备采样率，设备不支持时使用可用频率；停止播放后恢复。压缩直通保持原始码流。" = "Try the source sample rate, using an available rate if unsupported. Restore the device format when playback stops. Compressed passthrough preserves the original bitstream.";
+"直通时由音箱解码并调节音量；不支持直通时自动使用 PCM。" = "During passthrough, decoding and volume are controlled by the receiver. Use PCM automatically when passthrough is unavailable.";
+"自动保留 Dolby／Atmos 与 DTS-HD MA 音频；开启直通后也尝试 AC-3 与 DTS。设备不兼容时使用 PCM；DTS:X 对象输出以音箱输入信息为准。" = "Automatic preserves Dolby/Atmos and DTS-HD MA audio. Turning passthrough on also attempts AC-3 and DTS. Incompatible devices use PCM. Check the receiver for DTS:X object output.";
+"DTS 核心" = "DTS Core";
+"DTS 核心 · 原码输出" = "DTS Core · Passthrough";
+"DTS · 原码输出" = "DTS · Passthrough";
+"当前仅传输 DTS 核心，未传输 HD 无损扩展；关闭直通可用 PCM 保留完整声道音频。" = "Only the DTS core is passing through, without the lossless HD extension. Turn passthrough off to preserve the complete channel audio as PCM.";
+"DTS-HD MA · 原码输出" = "DTS-HD MA · Bitstream output";
+"正在直通完整 DTS-HD MA 码流（含 HD 扩展）。最终解码及 DTS:X 对象输出请查看音箱的输入信息。" = "The complete DTS-HD MA stream, including its HD extension, is passing through. Check the receiver for the final decoded format and DTS:X object output.";
+"DTS 码流正在直通，由音箱解码。最终解码格式请查看音箱的输入信息。" = "The DTS bitstream is passing through for receiver decoding. Check the receiver input information for its decoded format.";
+"片源采样率" = "Source Sample Rate";
+"码流逻辑频率" = "Logical Bitstream Rate";
+"播放器输出采样率" = "Player Output Sample Rate";
+"设备传输频率" = "Device Carrier Rate";
+"设备实际采样率" = "Actual Device Sample Rate";
+
+/* Follow-system HDR and explicit temporary switching */
+"自动（跟随系统）" = "Automatic (Follow System)";
+"临时开启 HDR（结束后恢复）" = "Temporary HDR (Restore After Playback)";
+"跟随系统 HDR 状态，不切换电视模式。系统 HDR 关闭时映射为 SDR；已开启或内建显示器有可用余量时呈现 HDR。" = "Follow system HDR without switching TV modes. Tone map to SDR when system HDR is off; present HDR when it is already enabled or a built-in display has available EDR headroom.";
+"将 HDR 画面映射为 SDR，不更改系统 HDR 设置。" = "Tone map HDR video to SDR without changing the system HDR setting.";
+"仅在 HDR 播放期间临时开启受支持外接显示器的系统 HDR，结束后恢复。切换可能短暂黑屏，并影响整个桌面的显示。" = "Temporarily enable system HDR on supported external displays during HDR playback, then restore it. Switching may briefly blank the screen and change the appearance of the entire desktop.";
+"临时 HDR 不会关闭原先已开启的系统 HDR；播放期间手动关闭后，本次播放不再自动开启。" = "Temporary HDR never turns off HDR that was already enabled. If you disable HDR manually during playback, it stays off for that playback.";
+"杜比视界片源会重建并映射为当前可用的 EDR HDR 或 SDR，不发送电视原生 Dolby Vision 信号。" = "Dolby Vision sources are reconstructed and mapped to available EDR HDR or SDR, without sending a native Dolby Vision TV signal.";
+"杜比视界动态映射已生效，当前输出为 EDR HDR 或 SDR，不发送电视原生 Dolby Vision 信号。" = "Dolby Vision dynamic mapping is active. Output uses EDR HDR or SDR, without sending a native Dolby Vision TV signal.";
+"自动模式跟随系统；当前未获得可用 HDR 输出，已映射为 SDR。" = "Automatic follows the system. HDR output is currently unavailable, so the video is tone mapped to SDR.";
+"HDR 策略" = "HDR policy";
+"不更改系统显示模式，按当前可用能力输出。" = "Uses the current display capabilities without changing system HDR.";
+"临时 HDR" = "Temporary HDR";
+"仅本次播放开启，结束后恢复；切换可能短暂黑屏。" = "Enables HDR for this playback and restores it afterward. Switching may briefly blank the screen.";
+"优先直通，不支持时自动使用 PCM。" = "Prefers passthrough; uses PCM when passthrough is unavailable.";
+"切换后不再直通 Atmos 或 DTS:X 对象。" = "Atmos and DTS:X objects will no longer be passed through.";
+"原码直通" = "Bitstream";
+"原码直通保留片源码流；声道和采样率由音箱解码。" = "Bitstream preserves the source audio. Your receiver decodes its channels and sample rate.";
+"将 HDR 片源映射为 SDR，不更改系统显示模式。" = "Maps HDR content to SDR without changing the system display mode.";
+"将关闭音频直通，PCM 多声道按设备能力输出。" = "Disables passthrough. PCM channel output depends on the device.";
+"尚未确认 PCM 输出，请检查音频设备后重试。" = "PCM output is not confirmed. Check the audio device and try again.";
+"开启" = "On";
+"恢复上次显示设置" = "Restore previous display settings";
+"按片源和设备能力选择，无法直通时使用 PCM。" = "Chooses output for the source and device; uses PCM when needed.";
+"播放后显示实际输出" = "Actual output appears during playback";
+"播放器调音" = "Player volume";
+"播放器音量" = "Player volume";
+"显示帮助" = "Display help";
+"正在切换为 PCM…" = "Switching to PCM…";
+"由播放器解码，可调节音量与音效。" = "Decodes in the player, with volume and audio controls.";
+"画面" = "Video";
+"直通" = "Passthrough";
+"确认中" = "Checking";
+"系统音频" = "System audio";
+"音箱调音" = "Receiver volume";
+"高级设置" = "Advanced";
+"正在确认音频输出，确认后可调节音量。" = "Checking audio output. Volume controls will appear when it is confirmed.";
+"重试播放器调音" = "Retry player volume";
+"使用播放器调音" = "Use player volume";
+"当前实际画面：{0}" = "Current video output: {0}";
+"当前实际声音：{0}" = "Current audio output: {0}";
+"标准" = "Standard";
+"取消静音" = "Unmute";
+"无法确认上次播放的文件" = "Unable to confirm the previous file";
+"原文件暂时不可用或已经变化。请选择当前可用的文件，旧文件的播放进度不会自动套用。" = "The original file is unavailable or has changed. Choose an available file. The previous file's playback position will not be applied automatically.";
+
+"无法保存启动状态，请检查本机存储空间和权限，然后退出重试。" = "Unable to save startup state. Check local storage space and permissions, then quit and try again.";
+
+"应用初始化未完成。请退出后重试，并可选择暂缓恢复上次状态。" = "Application initialization did not complete. Quit and try again; you can defer restoring the previous state.";
+
+"清理尚未完成，应用仍在运行。请重试退出。" = "Cleanup has not completed and the app is still running. Try quitting again.";
+
+"暂缓恢复上次状态" = "Defer restoring the previous state";
+
+"继续并恢复上次状态" = "Continue and restore the previous state";
+
+"暂缓仅影响本次启动。配置和历史会保留，可稍后手动恢复。" = "Deferring only affects this launch. Your configurations and history are kept and can be restored later.";
+
+"已暂存 {0} 个文件请求；进入应用后由你选择打开。" = "{0} file requests are waiting. Choose which to open after startup.";
+
+"最多暂存 8 个本地文件；超出或不支持的请求已忽略。" = "Up to 8 local files can wait. Excess or unsupported requests were ignored.";
+
+"取消待打开的文件" = "Discard pending file requests";
+
+"关闭自动诊断共享" = "Turn off automatic diagnostic sharing";
+
+"退出 NetVplayer" = "Quit NetVplayer";
+
+"恢复启动" = "Startup recovery";
+
+"启动或清理未完成" = "Startup or cleanup incomplete";
+
+"正在退出" = "Quitting";
+
+"正在启动 NetVplayer" = "Starting NetVplayer";
+
+"检测到上次运行发生崩溃。请选择本次启动方式。" = "A crash was detected in the previous run. Choose how to start this time.";
+
+"上次运行未正常结束，可能是崩溃、强制退出或断电。请选择本次启动方式。" = "The previous run did not end normally, possibly due to a crash, force quit, or power loss. Choose how to start this time.";
+
+"正在等待播放、后台任务和诊断服务完成清理。" = "Waiting for playback, background tasks, and diagnostic services to finish cleanup.";
+
+"正在准备应用，请稍候。" = "Preparing the app. Please wait.";
+
+"自动诊断共享已关闭。启动恢复仍可使用本地状态。" = "Automatic diagnostic sharing is off. Startup recovery can still use local state.";
+
+"当前构建未配置远端诊断。启动恢复使用本地状态。" = "Remote diagnostics are not configured in this build. Startup recovery uses local state.";
+
+"诊断服务未运行；未确认任何报告已上传。" = "The diagnostic service is not running. No report upload has been confirmed.";
+
+"自动诊断共享沿用现有设置。诊断服务已启用，但此处无法确认报告是否已送达。" = "Automatic diagnostic sharing uses your existing setting. The service is enabled, but report delivery cannot be confirmed here.";
+
+"本次启动已暂缓恢复上次状态" = "Restoring the previous state is deferred for this launch";
+
+"现在恢复" = "Restore now";
+
+"待打开的文件（{0}）" = "Pending files ({0})";
+
+"部分文件请求已忽略" = "Some file requests were ignored";
+
+"显示主窗口" = "Show main window";
+
+"打开文件…" = "Open files…";
+"没有此时段的节目单，无法选择回放。" = "No programme guide is available for this time, so catch-up cannot be selected.";
+"节目起止时间无效，无法回放。" = "The programme times are invalid. Catch-up is unavailable.";
+"节目尚未播出。" = "This programme has not aired yet.";
+"节目正在播出，请观看直播。" = "This programme is on air. Watch the live channel.";
+"节目已超出此来源配置的回放保留期。" = "This programme is outside the catch-up retention period configured for this source.";
+"此频道未配置回放。" = "Catch-up is not configured for this channel.";
+"回放地址模板无效，请检查来源配置。" = "The catch-up URL template is invalid. Check the source configuration.";
+"回放模板含不支持的占位符。" = "The catch-up template contains an unsupported placeholder.";
+"此来源的回放类型暂不支持。" = "This source uses an unsupported catch-up type.";
+"此回放模板需要明确的来源时区。" = "This catch-up template requires an explicit source time zone.";
+"来源已刷新，请重新选择回放节目。" = "The source has been refreshed. Select a catch-up programme again.";
+"回放" = "Catch-up";
+"正在准备回放…" = "Preparing catch-up…";
+"本节目回放已结束。" = "This programme has ended.";
+"可拖动节目进度" = "Drag to seek within the programme";
+"跳转时将重新请求回放" = "Seeking requests a new catch-up stream";
+"此回放不支持跳转" = "This catch-up stream does not support seeking";
+"回放提前结束，可重试或返回直播。" = "Catch-up ended early. Retry or return to live.";
+"回放加载失败，可重试或返回直播。" = "Catch-up failed to load. Retry or return to live.";
+"回放：{0}" = "Catch-up: {0}";
+"重试回放" = "Retry catch-up";
+"重播" = "Replay";
+"返回直播" = "Return to live";
+"节目回放进度" = "Programme catch-up progress";
+
+// OV87-04: historical EPG and date endpoints
+"日期节目单需要明确的来源时区，请设置直播源 timeZone。" = "Date-based guides require an explicit source time zone. Set timeZone on the live source.";
+"部分日期的节目单未能加载，当前节目覆盖不完整。" = "Some guide dates could not be loaded. Programme coverage is incomplete.";
+
+// Xtream archive availability and coverage
+"服务端未保留此节目的归档。" = "The server has no archive for this programme.";
+"尚未取得此节目的历史归档信息。" = "Historical archive information is not available for this programme.";
+"Xtream 服务端未提供有效时区，无法定位归档。" = "The Xtream server did not provide a valid time zone; the archive cannot be located.";
+"归档时间存在夏令时歧义，无法准确定位节目。" = "The archive time is ambiguous because of daylight saving time.";
+"历史节目单刷新失败，缓存覆盖可能不完整。" = "Historical guide refresh failed; cached coverage may be incomplete.";
+"历史接口不可用，仅显示短节目单；历史覆盖不完整。" = "History is unavailable. Only limited short-guide data is shown.";
+"短节目单仅覆盖服务端返回的有限时段。" = "The short guide covers only the limited times returned by the server.";
+"节目数量达到读取上限，当前时段覆盖不完整。" = "The programme limit was reached; coverage of this window is incomplete.";
+
+"媒体标称帧率" = "Nominal media frame rate";
+"估算输出帧率" = "Estimated output frame rate";
+"估算视频码率" = "Estimated video bitrate";
+"估算音频码率" = "Estimated audio bitrate";
+"下载／读取速度" = "Download / input read speed";
+"本地输入文件大小" = "Local input file size";
+"{0} 字节" = "{0} bytes";
+"播放统计" = "Playback statistics";
+"标称帧率来自媒体声明；输出帧率按最近时间戳估算，不代表屏幕实测。暂停、缓冲或跳转时暂不显示估算。" = "Nominal frame rate comes from media metadata. Output rate is estimated from recent timestamps, not measured on the display. Estimates are hidden while paused, buffering or seeking.";
+"码率来自已解复用的压缩包（bit/s）；读取速度为引擎最近一秒的输入量（B/s），不代表网络带宽。k／M 使用十进制。" = "Bitrate is estimated from demuxed packets (bit/s). Read speed is engine input over the last second (B/s), not network bandwidth. k / M use decimal units.";
+"本次运行已播放规格" = "Specifications observed during this run";
+"来自此来源、线路与集数的实际播放；输出状态请查看播放信息。" = "Observed while playing this source, line and episode. See Playback Information for current output.";
+"媒体标称：{0}" = "Nominal media: {0}";
+
+"仅为选中本地输入的字节数，不能证明它包含完整影片。" = "Byte count of the selected local input only; it does not prove that the input contains the complete movie.";
+
+"更新或语言重启正在进行，请完成或取消当前操作后重试。" = "An update or language restart is in progress. Complete or cancel it, then try again.";
+
+"应用尚未就绪或正在退出，请稍后检查更新。" = "The app is not ready or is quitting. Check for updates later.";
+
+"清理尚未完成，更新仍在等待。请重试更新或退出应用。" = "Cleanup is incomplete and the update is waiting. Retry the update or quit the app.";
+
+"清理尚未完成，应用未重启。请重试。" = "Cleanup is incomplete. The app has not restarted. Please try again.";
+
+"安装并重启" = "Install and Restart";
+
+"正在等待播放和后台任务完成清理，然后安装更新。" = "Waiting for playback and background tasks to finish cleanup before installing the update.";
+
+"重试安装并重启" = "Retry Install and Restart";
+
+"重试语言重启" = "Retry Language Restart";
+
+"画中画" = "Picture in Picture";
+
+"返回播放器" = "Return to Player";
+
+"已有画中画窗口，请先返回播放器。" = "A Picture in Picture window is already open. Return to the player first.";
+
+"当前无法开启画中画，请继续使用播放器。" = "Picture in Picture is currently unavailable. Continue using the player.";
+
+"画中画未能完成，已返回播放器。" = "Picture in Picture could not finish. The video has returned to the player.";
+
+"正在画中画中播放" = "Playing in Picture in Picture";
+
+"转存结果仍待确认。请稍后重试以核对文件，本次不会重复提交转存。" = "The transfer result is still unconfirmed. Retry later to check the file; this attempt will not submit another copy.";
+
+"网盘登录凭据已失效。" = "Your cloud drive credentials have expired.";
+
+"请在设置中重新授权该账号后重试。" = "Authorize this account again in Settings, then retry.";
+
+"当前账号没有执行此操作的权限。" = "This account does not have permission to perform this operation.";
+
+"请在对应网盘中确认文件和目录权限，或切换有权限的账号后重试。" = "Check file and folder permissions in the cloud drive, or switch to an authorized account and retry.";
+
+"当前账号的可用配额不足。" = "This account has insufficient available quota.";
+
+"请在对应网盘中检查空间或操作配额，处理后再手动重试。" = "Check storage or operation quotas in the cloud drive, resolve the limit, then retry manually.";
+
+"网盘暂时限制了请求频率。" = "The cloud drive is temporarily limiting requests.";
+
+"请等待服务限制解除后再重试。" = "Wait for the service limit to clear before retrying.";
+
+"网盘连接暂时中断或服务暂时不可用。" = "The cloud drive connection was interrupted or the service is temporarily unavailable.";
+
+"请检查网络，稍后手动重试。" = "Check your connection and retry manually later.";
+
+"网盘文件已不存在。" = "The cloud drive file no longer exists.";
+
+"请在对应网盘中确认文件仍然存在，再重新打开有效的文件或分享。" = "Check that the file still exists in the cloud drive, then reopen a valid file or share.";
+
+"临时播放地址已过期。" = "The temporary playback URL has expired.";
+
+"请重新打开当前文件以刷新播放地址。" = "Reopen the current file to refresh its playback URL.";
+
+"转存结果仍待确认。" = "The transfer result is still awaiting confirmation.";
+
+"请稍后重试以核对文件，本次不会重复提交转存。" = "Retry later to check the file. This will not resubmit the transfer.";
+
+// MSC-03 current-file mapping verification
+"当前文件的本地映射已失效。" = "The local mapping for this file is no longer valid.";
+"请在网盘中确认原文件和转存目录；确认后手动重试，将按现有权限重新转存当前文件。" = "Check the original file and destination folder in your drive, then retry manually to save this file again with your existing permissions.";
+"暂时无法确认当前文件的映射。" = "The mapping for this file could not be confirmed.";
+"请检查账号、目录和文件状态，稍后重试；不会自动重新转存。" = "Check the account, folder and file, then retry later. The file will not be saved again automatically.";
+
+"转存记录" = "Transfer records";
+
+"无法保存或读取转存记录，已停止转存。请检查本机存储后重试。" = "Transfer records could not be saved or read. Transfers have stopped. Check local storage and try again.";
+
+"待核对的转存记录已达上限。请先处理未完成任务。" = "The limit for unresolved transfer records has been reached. Review unfinished tasks first.";
+
+"账号、来源配置或目标目录已变化。请核对原设置，任务未继续。" = "The account, source configuration or destination has changed. Review the original settings before continuing.";
+
+"任务已取消，不会恢复执行。" = "The task was cancelled and will not resume.";
+
+"上次转存仍待核对。请在转存记录中手动继续，本次不会重复提交。" = "The previous transfer still needs review. Continue manually in Transfer records; this attempt will not submit it again.";
+
+"原网盘账号不可用。请先在设置中登录原账号，再手动继续。" = "The original cloud account is unavailable. Sign in to that account in Settings, then continue manually.";
+
+"文件已确认。请重新打开原文件准备播放。" = "The file is confirmed. Reopen the original file to prepare playback.";
+
+"上次尚未提交转存。已核对目标，请重新打开原文件再试。" = "The previous transfer was not submitted. The destination is checked; reopen the original file to try again.";
+
+"任务已取消。已提交的转存可能仍在服务端完成，记录会保留。" = "The task was cancelled. A submitted transfer may still finish on the service; its record will be kept.";
+
+"启动只读取本地记录。手动继续会先核对原账号和目标，不会重新提交未知结果的转存。" = "Startup only reads local records. Continue checks the original account and destination first, without resubmitting transfers with unknown outcomes.";
+
+"暂无转存记录" = "No transfer records";
+
+"继续核对" = "Continue checking";
+
+"取消任务" = "Cancel task";
+
+"已取消；保留已提交证据" = "Cancelled; submission evidence retained";
+
+"尚未提交；可重新打开原文件" = "Not submitted; reopen the original file";
+
+"文件已确认；可重新打开原文件" = "File confirmed; reopen the original file";
+
+"上次操作未完成：尚未提交" = "Previous operation unfinished: not submitted";
+
+"上次已确认文件：仍需核对" = "Previously confirmed file: review required";
+
+"已提交：等待核对文件" = "Submitted: awaiting file confirmation";
+
+"转存结果未知：不会重复提交" = "Transfer outcome unknown: will not resubmit";
+
+"上次提交已被拒绝：需要手动核对" = "Previous submission rejected: manual review required";
+
+"上次转存未完成，请手动核对" = "Previous transfer unfinished. Review it manually.";
+
+"查看转存记录" = "View transfer records";
+
+"已取消；未提交转存" = "Cancelled; transfer not submitted";
+
+"读取扫描检查点" = "Read scan checkpoint";
+"服务、账号或媒体库设置已变化，请重新扫描。旧索引仍可浏览。" = "The service, account, or library settings changed. Scan again; the existing index remains available.";
+"扫描检查点已过期，请手动重新扫描。旧索引仍可浏览。" = "The scan checkpoint expired. Start a new scan manually; the existing index remains available.";
+"扫描已取消，请手动重新扫描。旧索引仍可浏览。" = "The scan was cancelled. Start a new scan manually; the existing index remains available.";
+"扫描达到本次读取或检查点上限，旧索引已保留。请缩小媒体库目录后重扫。" = "The scan reached its read or checkpoint limit. The existing index is preserved. Choose a smaller library folder and scan again.";
+"此扫描检查点已不可继续，请重新扫描。旧索引仍可浏览。" = "This checkpoint cannot be continued. Scan again; the existing index remains available.";
+"上次扫描未完成" = "The previous scan is unfinished";
+"已完成 {0} 个目录 · 待访问 {1} 个 · 失败 {2} 个" = "{0} folders completed · {1} pending · {2} failed";
+"继续扫描" = "Continue scan";
+"重新扫描媒体库" = "Scan library again";
+"重试全部失败目录" = "Retry all failed folders";
+"重试此目录" = "Retry this folder";
+"已扫描 {0} 个视频 · {1}" = "Scanned {0} videos · {1}";
+"扫描完成，共 {0} 个视频" = "Scan complete: {0} videos";
+"部分目录读取失败，旧索引已保留" = "Some folders could not be read. The existing index is preserved.";
+"扫描已取消，旧索引已保留" = "Scan cancelled. The existing index is preserved.";
+"扫描未完成，旧索引已保留" = "The scan is unfinished. The existing index is preserved.";
+
+"扫描媒体库" = "Scan library";
+
+"所选目录扫描完成，其他目录索引未变" = "The selected folders were scanned. Other folders retain their existing index.";
+
+/* MSC-06 local task results */
+"上次操作未完成，请手动继续。" = "The previous operation did not finish. Continue it manually.";
+"任务已完成。" = "The task is complete.";
+"任务已达到本次上限。请先处理待核对任务，或缩小扫描目录。" = "This task reached its limit. Review pending tasks or scan a smaller folder.";
+"任务收尾" = "Finishing task";
+"任务暂时未能完成，请检查服务设置后手动重试。" = "The task could not finish. Check the service settings and retry manually.";
+"任务正在处理中。" = "The task is in progress.";
+"任务记录" = "Task records";
+"准备任务" = "Preparing task";
+"准备播放地址" = "Preparing playback address";
+"处理中" = "In progress";
+"导出任务摘要" = "Export task summary";
+"导出本地任务摘要" = "Export local task summary";
+"已完成" = "Completed";
+"已提交的转存可能仍在服务端完成，记录会保留。" = "A submitted transfer may still finish on the service. Its evidence will be kept.";
+"手动继续会先核对原账号和目标，不会重新提交未知结果的转存。" = "Continuing checks the original account and destination first. Transfers with an unknown result are not submitted again.";
+"提交转存" = "Submitting transfer";
+"文件已确认" = "File confirmed";
+"暂无最近任务" = "No recent tasks";
+"最近任务" = "Recent tasks";
+"服务暂时不可用，请检查设置后重试。" = "The service is unavailable. Check its settings and try again.";
+"服务设置不完整，请在设置中检查连接信息。" = "The service configuration is incomplete. Check the connection information in Settings.";
+"服务错误码 {0}" = "Service error code {0}";
+"本地任务历史暂时不可用，转存核对记录仍独立保留。" = "Local task history is unavailable. Transfer verification records are kept separately.";
+"本地任务摘要已导出，不包含文件、路径或账号信息。" = "Local task summary exported. It contains no file, path, or account information.";
+"本地诊断详情" = "Local diagnostic details";
+"查看任务记录" = "View task records";
+"查看设置" = "View settings";
+"查看转存核对" = "View transfer verification";
+"核对转存结果" = "Verifying transfer result";
+"目录授权已失效，请在设置中重新选择文件夹。" = "Folder authorization has expired. Select the folder again in Settings.";
+"稍后重试" = "Retry later";
+"编辑服务" = "Edit service";
+"转存核对" = "Transfer verification";
+"部分资料读取失败，已继续扫描。" = "Some metadata could not be read. The scan continued.";
+"重试 {0} 次" = "Retries: {0}";
+"需要处理" = "Needs attention";
+
+// MSC-07: optional local read-only API
+"本地只读接口" = "Local read-only API";
+"允许本机工具读取脱敏任务、选定服务的已有连接结果和应用状态。" = "Let local tools read sanitized tasks, cached connection results for selected services, and app status.";
+"启用本次运行的只读接口" = "Enable the read-only API for this session";
+"默认关闭，退出应用后失效。关闭会撤销令牌，不影响播放。" = "Off by default and disabled when the app quits. Turning it off revokes the token and keeps playback running.";
+"本地接口未能启动，请关闭后重试。" = "The local API could not start. Turn it off and try again.";
+"复制访问令牌" = "Copy access token";
+"轮换并复制令牌" = "Rotate and copy token";
+"令牌已复制。仅交给可信的本机工具，勿放入网址或日志。" = "Token copied. Give it only to trusted local tools; keep it out of URLs and logs.";
+"允许读取连接状态的服务（最多 32 个）" = "Services to include (up to 32)";
+"仅使用本次运行已有的连接结果，5 分钟后标记过期；未连接为未知，查询不会检查服务。" = "Uses connection results from this session. Results become stale after 5 minutes; no result means unknown. Queries never check services.";
+"尚未配置文件服务或媒体服务器。" = "No file services or media servers are configured.";
+"最小使用说明" = "Quick usage guide";
+"向上方地址发送 GET /v1/tasks、/v1/services 或 /v1/health。请求头为 Authorization: Bearer <令牌>，不要使用 URL 参数。" = "Send GET /v1/tasks, /v1/services, or /v1/health to the address above. Use the Authorization: Bearer <token> header, never URL parameters.";
+"每分钟最多 60 次连接；超限返回 429，等待 60 秒再试。轮换立即撤销旧令牌，关闭后端口不可用。" = "Up to 60 connections per minute. A 429 response means wait 60 seconds. Rotation revokes the old token immediately; disabling closes the port.";
+"任务沿用本地诊断白名单；服务仅返回本次运行的匿名编号、类型、结果和时间，不返回名称、地址或账号。此接口不接受任何写操作。" = "Tasks use the local diagnostic allowlist. Services include only a session alias, type, result, and time; names, addresses, and accounts are omitted. The API accepts no write operations.";
+
+// Recent interface refinement and source-format badges.
+"可回放" = "Replay available";
+"失败目录（{0}）" = "Failed folders ({0})";
+"文件名标记的片源格式，尚未验证；实际输出请查看播放器。" = "Format indicated by the filename, not yet verified. See the player for actual output.";
+"旧索引仍可浏览。" = "Your existing library is still available.";
+"服务器标记的片源格式；实际输出请查看播放器。" = "Source format reported by the server. See the player for actual output.";
+"本机地址" = "Local address";
+"正在回看" = "Replaying";
+"正在播出" = "On air";
+"片源格式" = "Source format";
+"片源格式：{0}" = "Source format: {0}";
+"诊断与隐私" = "Diagnostics and privacy";
+"本次运行已开启" = "Enabled for this session";
+"回放未完成" = "Replay interrupted";
+"回放结束" = "Replay ended";
+"复制地址" = "Copy address";
+
+/* Player presentation */
+"将当前影片移回播放器" = "Move the current video back to the player";
+"当前影片已移到悬浮窗口。可最小化此窗口，或在下方调整播放。" = "The current video is in a floating window. Minimize this window or adjust playback below.";
+"当前频道已移到悬浮窗口，可最小化此窗口继续观看。" = "The current channel is in a floating window. You can minimize this window and keep watching.";
+"小窗" = "Mini Player";
+"将播放器缩小并置顶，继续播放当前视频" = "Shrink and pin the player above other windows, keeping the current video playing";
+
+"{0}凭据已修改，尚未保存" = "{0} credentials edited; not saved yet";
+
+"{0}账号已验证" = "{0} account verified";
+
+"{0}账号已保存，播放时自动校验" = "{0} account saved; checked automatically during playback";
+
+"HDR Vivid 动态映射已生效，画面已适配当前显示亮度。" = "HDR Vivid dynamic mapping is active and adapts the image to this display's luminance.";
+"当前 HDR Vivid 元数据暂不可用，正在使用 PQ 或 HLG 基础画面。" = "HDR Vivid metadata cannot currently be applied. Using the PQ or HLG base image.";
+
+"自动（使用原生输出）" = "Automatic (native output)";
+
+"7.1.4 PCM（需要 12 声道设备）" = "7.1.4 PCM (requires a 12-channel device)";
+
+"耳机空间音频（固定）" = "Headphone spatial audio (fixed)";
+
+"耳机空间音频（头部追踪）" = "Headphone spatial audio (head tracking)";
+
+"TrueHD 对象渲染" = "TrueHD object rendering";
+
+"TrueHD 对象渲染使用 PCM，可调音量和对白增强；其他音轨按 PCM 输出。耳机模式需佩戴耳机；头部追踪需要兼容耳机与运动权限，无姿态时使用固定空间音频。" = "TrueHD object rendering uses PCM with volume and dialogue controls; other tracks also use PCM. Use headphones for headphone modes. Head tracking requires compatible headphones and motion permission; spatial audio stays fixed without motion data.";
+
+"当前运行库或设备不满足所选对象渲染模式，继续使用自动输出。7.1.4 PCM 需要明确配置的 12 声道设备。" = "This runtime or device cannot use the selected object mode; automatic output continues. 7.1.4 PCM requires a configured 12-channel device.";
+
+"应用 HRTF 双耳渲染运行中" = "Application HRTF binaural rendering is running";
+
+"等待耳机姿态；当前固定空间音频" = "Waiting for headphone motion; spatial audio is fixed";
+
+"已接入实时耳机姿态；听感待实机验收" = "Live headphone motion is connected; listening validation is pending";
+
+"TrueHD 对象与位置已参与应用渲染；设备效果待验收" = "TrueHD objects and positions are used by the application renderer; device validation is pending";
+
+"对象渲染存在回退或解码错误，详见诊断" = "Object rendering has fallback or decode errors; see diagnostics";
+
+/* Experimental system Dolby Vision presentation */
+"已提交系统 DV 呈现，接收端待确认" = "Submitted for system DV presentation; receiver format unverified";
+"系统 DV 呈现 · 待设备确认" = "System DV presentation · receiver unverified";
+"重建画面已生成新的逐帧杜比视界元数据并提交系统显示层。电视实际接收格式仍待确认。" = "Reconstructed frames carry newly generated Dolby Vision metadata submitted to the system display layer. The format received by the TV still needs verification.";
+"系统显示层已接收带逐帧杜比视界元数据的画面；电视接收格式需连接设备确认。" = "The system display layer has received frames with Dolby Vision metadata. Connect a compatible device to verify the received format.";
+"系统杜比视界呈现（实验）" = "System Dolby Vision presentation (experimental)";
+"需 macOS 15 或更高版本及可用 HDR 输出。生成新的逐帧元数据交给系统；电视接收格式待设备确认，失败时返回常规映射。" = "Requires macOS 15 or later and available HDR output. Generates new per-frame metadata for the system; the receiver format needs device verification. Falls back to regular mapping on failure.";
+
+// Plex, FTP and SFTP
+"媒体服务器（Emby / Jellyfin / Plex）" = "Media servers (Emby / Jellyfin / Plex)";
+"Plex 访问令牌" = "Plex access token";
+"如何获取 Plex 访问令牌" = "How to find your Plex access token";
+"访问令牌仅保存于本机凭据存储，不进入播放地址或备份。" = "The access token is stored only in local credentials, never in playback URLs or backups.";
+"连接 FTP 文件服务器；FTP 为明文连接，支持加密连接的服务器可填写 ftps:// 地址。" = "Connect an FTP file server. FTP is unencrypted; use an ftps:// address if the server supports encrypted connections.";
+"通过 SSH 读取文件，使用用户名、密码和服务器的 SHA256 主机指纹。" = "Read files over SSH using a username, password, and the server’s SHA256 host fingerprint.";
+"SSH 主机指纹" = "SSH host fingerprint";
+"松开以播放本地文件" = "Drop to play a local media file";
+"向服务器管理员核对 SHA256 指纹；首次测试连接会显示服务器指纹，不会发送密码。" = "Verify the SHA256 fingerprint with your server administrator. An initial connection test shows the fingerprint without sending your password.";
+"实验功能" = "Experimental features";
+"使用 PCM，可调音量和对白增强；其他音轨也按 PCM 输出。" = "Uses PCM with volume control and dialogue enhancement. Other tracks also use PCM.";
+"当前设备或运行库不支持所选模式，继续使用自动输出。" = "The current device or runtime does not support this mode. Automatic output remains in use.";
+"默认保持原生输出，由片源和设备决定。" = "Keeps native output by default, based on the source and device.";
+"需要已配置的 12 声道设备，才能输出 7.1.4 PCM。" = "7.1.4 PCM requires a device configured for 12 channels.";
+"请佩戴耳机，使用固定空间音频。" = "Wear headphones for fixed spatial audio.";
+"需要兼容耳机与运动权限；无姿态数据时使用固定空间音频。" = "Requires compatible headphones and motion permission. Uses fixed spatial audio when pose data is unavailable.";
+"系统杜比视界呈现" = "System Dolby Vision presentation";
+"偏好已开启，实际输出以诊断为准" = "Preference enabled; playback diagnostics show the actual output";
+"需要 macOS 15 和 HDR 输出；无法使用时返回常规映射。" = "Requires macOS 15 and HDR output. Falls back to regular mapping when unavailable.";
+"当前系统或运行库暂不支持此功能。" = "This system or runtime does not currently support this feature.";
+"偏好已开启；实际呈现请查看输出状态与技术信息。" = "Preference enabled. See output status and technical information for the actual presentation.";
+"支持 Emby、Jellyfin 与 Plex；播放原始文件并同步进度。" = "Supports Emby, Jellyfin and Plex. Play original files and sync progress.";
+"从 Plex Web 获取访问令牌，粘贴后验证连接。" = "Get an access token from Plex Web, paste it here, then verify the connection.";
+"正在验证 Plex 访问令牌…" = "Verifying Plex access token…";
+"Plex 服务器已连接" = "Plex server connected";
+"Plex 访问令牌已失效" = "Plex access token expired";
+"填写 Plex 服务器地址和访问令牌，验证成功后保存。" = "Enter the Plex server address and access token. They are saved after verification.";
+"本机没有可用 Plex 访问令牌，请填写后验证连接。" = "No Plex access token is available on this Mac. Enter one and verify the connection.";
+"本机已保存访问令牌，验证连接后确认登录状态。" = "An access token is saved on this Mac. Verify the connection to confirm sign-in status.";
+"访问令牌已失效，请重新获取 Plex 访问令牌并验证连接。" = "The access token has expired. Get a new Plex access token and verify the connection.";
+"请先测试连接并核对主机指纹，再连接文件夹。" = "Test the connection and verify the host fingerprint before connecting to the folder.";
+"填写已向管理员核对的指纹" = "Enter the fingerprint verified with the administrator";
+"首次连接 SFTP" = "First SFTP connection";
+"1. 测试连接，获取服务器的 SHA256 指纹。" = "1. Test the connection to get the server’s SHA256 fingerprint.";
+"2. 向服务器管理员核对指纹。" = "2. Verify the fingerprint with the server administrator.";
+"3. 填写已核对的指纹，再连接文件夹。" = "3. Enter the verified fingerprint, then connect to the folder.";
+"指纹未确认前不会发送密码。" = "No password is sent before the fingerprint is verified.";
+"松开以暂存本地文件" = "Release to queue local files";
+"完成启动确认后，从待打开文件中选择播放。" = "Complete startup confirmation, then choose a queued file to play.";
+"多个文件会先播放第一个有效文件，其余保留待选择。" = "The first valid file plays first. Remaining files are kept for selection.";
+"请填写用户名" = "Enter a username";
+"支持 Emby、Jellyfin、Plex、极影视与飞牛影视。" = "Supports Emby, Jellyfin, Plex, Zspace Media, and FnOS Media.";
+"在极影视中启用 Emby 兼容服务，填写该服务的地址和账号。" = "Enable the Emby-compatible service in Zspace Media, then enter its address and dedicated account.";
+"填写飞牛影视网页的服务地址和影视账号，端口以服务端设置为准。支持原始文件播放。" = "Enter the FnOS Media web address and media account. Use the port configured on the server. Original-file playback is supported.";
+
+"网盘目录" = "Cloud drive folder";
+
+"添加网盘目录" = "Add cloud drive folder";
+
+"选择已登录网盘里的文件夹，添加到媒体库。" = "Select folders from a signed-in cloud drive and add them to your library.";
+
+"可一次选择多个文件夹，扫描后查看海报、详情并直接播放。" = "Select multiple folders, then scan to browse posters, view details, and play files.";
+
+"使用已保存的网盘账号。若尚未登录，请先完成网盘授权。" = "Use your saved cloud drive account. Sign in first if you have not authorized this drive.";
+
+"请先登录此网盘，再重新选择文件夹。" = "Sign in to this cloud drive, then choose your folders again.";
+
+"匹配影视资料" = "Match Media Metadata";
+
+// BMH-03 metadata failure classification
+"信息来源认证失败，请检查凭据或完成登录" = "Metadata source authentication failed. Check your credentials or sign in.";
+"信息来源服务暂时不可用，可稍后重试" = "The metadata service is temporarily unavailable. Try again later.";
+"信息来源未找到此条资料" = "The metadata source could not find this item.";
+"信息来源拒绝了此条资料请求" = "The metadata source rejected the request for this item.";
+"；部分条目暂未更新，可稍后重试" = "; some items could not be updated. Try again later.";
+
+// BMH-04 source metadata experiment
+"保留兼容片源的动态元数据" = "Preserve compatible source dynamic metadata";
+"仅实验支持部分 P8 片源；字幕、画面变换或不兼容时使用重建画面。系统提交不代表电视已接收 DV。" = "Experimental support for some P8 sources. Subtitles, picture transforms or incompatibility use reconstructed frames. System submission does not confirm DV reception by the TV.";
+"系统 DV 元数据来源" = "System DV metadata origin";
+"源元数据实验状态" = "Source metadata experiment status";
+"接收端待确认；系统提交不等于物理 DV 输出" = "Receiver unverified; system submission does not confirm physical DV output";
+
+"已取消节目单加载。" = "Programme guide loading cancelled.";
+
+// OV91-07 Settings search and location
+"115" = "115";
+"PikPak" = "PikPak";
+"TrueHD 对象音频" = "TrueHD Object Audio";
+"UC" = "UC";
+"WebHome URL" = "WebHome URL";
+"{0} 项设置 · ↑↓ 选择，回车定位" = "{0} settings · ↑↓ to select, Return to locate";
+"仅在自定义代理模式下可编辑。" = "Editable in Custom proxy mode.";
+"原码直通时由音箱解码，PCM 选项暂不可用。" = "The receiver decodes passthrough audio. PCM options are currently unavailable.";
+"启用 WebHome 后可编辑地址。" = "Enable WebHome to edit the address.";
+"启用弹幕入口后可编辑。" = "Enable the danmaku entry to edit these options.";
+"定位设置" = "Locate Setting";
+"实际输出取决于片源、系统和设备能力，播放后可查看。" = "Actual output depends on the source, system and device. View it during playback.";
+"尚无可搜索站点，请先加载影视配置。" = "No searchable sites yet. Load a video configuration first.";
+"尚无外部源报告，加载影视配置后可查看。" = "No external source reports yet. Load a video configuration to view them.";
+"尚无直播频道，请先加载直播列表。" = "No live channels yet. Load a live playlist first.";
+"播放设置页面" = "Playback Settings Page";
+"来源治理" = "Source Rules";
+"没有匹配的设置，试试其他关键词。" = "No matching settings. Try another keyword.";
+"清除搜索" = "Clear Search";
+"系统杜比视界" = "System Dolby Vision";
+"结束定位" = "Dismiss Location";
+"设置分区" = "Settings Section";
+
+"原详情" = "Original details";
+"TMDB 资料" = "TMDB details";
+"此构建未配置 TMDB 凭据" = "TMDB credentials are not configured in this build";
+"资料暂不可用，仍可使用原片源播放" = "Metadata is unavailable. You can still play from the original source.";
+"请选择匹配的作品；确认前保留原详情" = "Choose the matching title. Original details remain until you confirm.";
+"未找到匹配资料，可修改名称重试" = "No matching metadata. Edit the title to try again.";
+"修正资料匹配" = "Correct metadata match";
+"搜索资料" = "Search metadata";
+"片源：{0}" = "Source title: {0}";
+"在 TMDB 查看人物与作品" = "View this person and their credits on TMDB";
+"在 TMDB 查看完整资料" = "View full details on TMDB";
+"资料来自 TMDB；播放线路与选集来自原片源" = "Metadata from TMDB; playback routes and episodes from the original source.";
+
+// OV91-10 live cached frames
+"账号连接额度不足或未知，已为主播放保留连接。" = "The account connection allowance is insufficient or unknown. A connection is reserved for playback.";
+"此频道暂不支持缓存画面。" = "Cached frames are not supported for this channel.";
+"画面刷新失败，已保留已有缓存。" = "Frame refresh failed. Existing cached frames have been kept.";
+"主播放繁忙或窗口隐藏，请稍后刷新画面。" = "Playback is busy or the window is hidden. Refresh frames later.";
+"没有可见频道可刷新。" = "No visible channels to refresh.";
+"缓存画面，非实时" = "Cached frames, not live";
+"刷新可见画面" = "Refresh visible frames";
+"尚无缓存画面" = "No cached frame";
+"缓存画面拍摄于 {0}" = "Cached frame captured at {0}";
+// Provider execution paths
+"Android 原版不可用" = "Android original unavailable";
+"Android 原版优先（实验）" = "Prefer Android original (experimental)";
+"Android 原版（模拟执行）" = "Android original (emulated)";
+"Mac 原生适配" = "Native Mac implementation";
+"Mac 扩展适配" = "Mac extension implementation";
+"Mac 适配优先" = "Prefer Mac implementation";
+"优先使用" = "Preferred implementation";
+"优先使用为 Mac 编写的完整适配，通常更轻量；没有匹配适配时使用 Android 原版。站点改动可能需要适配更新。" = "Prefer complete Mac implementations, which usually use fewer resources. Use the Android original when no matching implementation exists. Source changes may require a Mac update.";
+"入口源解析方式" = "Source implementation";
+"当前入口 {0}：{1}" = "Current source {0}: {1}";
+"当前构建未提供 Android 原版运行组件。" = "This build does not include the Android original runtime.";
+"按配置运行原始 Android Provider，以 FongMi 的实际行为为兼容标准。可能较慢；缺少运行能力或原始 JAR 时会显示错误。" = "Run the configured original Android Provider, using FongMi behavior as the compatibility standard. It may be slower. Missing runtime capabilities or original JARs are reported as errors.";
+"更改在重启后生效。切换解析方式后，请重新选择影片；原方式的历史与收藏会保留。" = "Changes take effect after restarting. Select the title again after switching implementations. History and favorites from the previous mode are retained.";
+"本次启动：{0}" = "Active for this session: {0}";
+"此入口没有精确匹配的 Mac 适配，使用 Android 原版。" = "This source has no exact Mac implementation; using the Android original.";
+"此来源使用独立的本地或媒体服务接口。" = "This source uses a separate local or media service interface.";
+"沿用已验证的入口选择，结合 Mac 适配和 Android 原版。" = "Use the existing verified source selection, combining Mac implementations and Android originals.";
+"立即重启并应用" = "Restart and apply";
+"自动选择（推荐）" = "Automatic (recommended)";
+"请恢复原始配置与解析方式，或在当前来源重新选择影片。旧记录已保留。" = "Restore the original configuration and implementation, or select the title again in the current source. The previous record is retained.";
+"选择站点解析使用的实现。" = "Choose how sources are executed.";
+"此入口的原版脚本或加载接口尚未接入通用运行环境。" = "This source's original script engine or loader is not yet supported by the runtime.";
+"此 Android 入口未提供原始 JAR，请检查配置中的 spider 或 jar。" = "This Android source has no original JAR. Check the spider or jar field in the configuration.";
+
+/* Runtime UI refinement — 2026-11-01 */
+"来源解析方式" = "Source processing";
+"选择内容来源的解析方式，更改后重启应用。" = "Choose how content sources are processed. Restart to apply changes.";
+"本次启动" = "This session";
+"当前来源" = "Current source";
+"实际解析方式" = "Actual processing method";
+"选择来源后，可在这里查看实际使用的解析方式。" = "Select a source to see the processing method it actually uses.";
+"下次启动优先使用" = "Preferred for the next launch";
+"安装下方的运行组件后，才能选择 Android 原版优先。" = "Install the runtime below to select Android original first.";
+"更改已保存，重启后应用" = "Changes saved. Restart to apply.";
+"本次运行仍使用启动时的设置。重启后请重新选择影片；历史与收藏会保留。" = "This session still uses its startup settings. Select the video again after restarting; history and favorites are preserved.";
+"兼容性说明" = "Compatibility details";
+"Android 原版按配置运行原始 JAR；缺少组件或运行能力时会显示错误，不会在失败后自动改用 Mac 适配。" = "Android original runs the original JAR from your configuration. Missing components or unsupported runtime features produce an error; a failure does not automatically switch to a Mac adapter.";
+"根据来源选择兼容的解析方式。" = "Choose a compatible processing method for each source.";
+"优先使用 Mac 适配；没有匹配适配时使用 Android 原版。" = "Prefer a Mac adapter; use Android original when no matching adapter is available.";
+"使用来源提供的原版解析组件，兼容性与速度因来源而异。" = "Use the original processing component supplied by the source. Compatibility and speed vary by source.";
+"Android 原版运行组件" = "Android original runtime";
+"磁盘组件版本：{0}" = "Runtime version on disk: {0}";
+"运行组件随应用提供" = "Runtime supplied with the app";
+"尚未安装原版运行组件" = "Original runtime is not installed";
+"正在验证并准备组件…" = "Verifying and preparing the runtime…";
+"选择解压后的签名组件文件夹。安装、更新或回滚后，重启才能使用。" = "Select the extracted signed runtime folder. Restart after installing, updating, or rolling back.";
+"安装或更新…" = "Install or update…";
+"选择组件文件夹…" = "Choose runtime folder…";
+"切回上一组件版本，重启后生效。" = "Restore the previous runtime version. Takes effect after restarting.";
+"选择网盘 → 选择文件夹" = "Choose a cloud drive → Choose folders";
+"使用已保存的账号，将一个或多个文件夹加入媒体库。" = "Use a saved account to add one or more folders to your media library.";
+"下一步可多选文件夹。尚未登录时，请先登录此网盘。" = "You can select multiple folders next. Sign in to this cloud drive first if needed.";
+"正在连接网盘" = "Connecting to the cloud drive";
+"连接前准备" = "Before connecting";
+"尝试沿用兼容片源的逐帧色彩信息。" = "Try using the frame-by-frame color information from compatible sources.";
+"适用范围与回退" = "Compatibility and fallback";
+"电视接收格式仍需设备确认。" = "The format received by the TV still requires device confirmation.";
+"来源弹幕" = "Source danmaku";
+"选择当前来源提供的弹幕轨道。" = "Choose a danmaku track supplied by the current source.";
+"开启弹幕后可选择轨道。" = "Enable danmaku to choose a track.";
+
+"Android 原版运行组件校验失败，请重新安装或回滚组件。" = "Android original runtime verification failed. Reinstall the runtime or roll back to the previous version.";
+"回滚到 {0}" = "Roll back to {0}";
+"弹幕 {0}" = "Danmaku {0}";
+"播放扩展不包含视频源。Android 原版组件会按您提供的配置执行原始 JAR。" = "Playback extensions do not include video sources. The Android original runtime executes the original JAR specified in your configuration.";
+"请先在设置中安装 Android 原版运行组件。" = "Install the Android original runtime in Settings first.";
+
+/* OV91 merged interface refinement */
+"使用此作品" = "Use this title";
+"正在刷新可见画面…" = "Refreshing visible frames…";
+"节目单已加载" = "Guide loaded";
+"节目单状态" = "Guide status";
+"正在加载更多结果…" = "Loading more results…";
+"已达到加载上限" = "Loading limit reached";
+
+/* Source component preparation and pending capability checks. */
+"视频源组件地址或校验信息无效，请更新配置或切换视频源。" = "The source component address or checksum is invalid. Update the configuration or switch sources.";
+"视频源组件下载失败，请稍后重试或切换视频源。" = "The source component could not be downloaded. Try again later or switch sources.";
+"视频源组件校验失败，请更新配置或切换视频源。" = "The source component failed verification. Update the configuration or switch sources.";
+"视频源组件格式无效，请更新配置或切换视频源。" = "The source component format is invalid. Update the configuration or switch sources.";
+"视频源组件准备失败，请稍后重试或切换视频源。" = "The source component could not be prepared. Try again later or switch sources.";
+"尚未检查" = "Not checked yet";
+"数据源配置尚未加载完成，暂时无法确认此来源是否可用。" = "The source configuration has not finished loading. Availability has not been checked yet.";
+"组件不可用" = "Component unavailable";
+"此来源所需的组件未能加载，请刷新配置或切换视频源。" = "The component required by this source could not be loaded. Refresh the configuration or switch sources.";
+"二维码暂不可用" = "QR code unavailable";
+"请刷新二维码重试。" = "Refresh the QR code to try again.";
+"弹幕源未返回内容，暂时无法显示弹幕。" = "The comment source returned no content. Comments are unavailable for now.";
+"所选来源暂无弹幕。" = "There are no comments in this source yet.";
+"弹幕源暂时不可用，请稍后重试。" = "The comment source is unavailable. Try again later.";
+"弹幕数据过大，无法加载。" = "The comment data is too large to load.";
+"弹幕源返回的数据无法识别。" = "The comment source returned an unsupported response.";
+"弹幕请求超时，请稍后重试。" = "The comment request timed out. Try again later.";
+"此处账号用于原生实现和网盘目录。Android 原版在各视频源内扫码，授权单独保存。" = "These accounts are for native playback and cloud folders. Android original sources keep their own separate QR authorizations.";
+"扫码或交互等待超时，请重新播放并按来源提示完成操作。" = "Authorization or interaction timed out. Start playback again and follow the source instructions.";
+
+"视频源未返回播放地址，请重试或切换线路。" = "The source did not return a playback address. Retry or choose another route.";
+"磁力链接无效，请选择其他资源。" = "The magnet link is invalid. Choose another resource.";
+"磁力播放组件不可用，请重新安装应用后重试。" = "Magnet playback components are unavailable. Reinstall the app and try again.";
+"无法启动磁力播放，请稍后重试或选择其他资源。" = "Magnet playback could not start. Try again later or choose another resource.";
+"未能读取磁力文件信息，请稍后重试或选择其他资源。" = "Could not retrieve the magnet file list. Try again later or choose another resource.";
+"等待磁力文件信息超时，请稍后重试或选择其他资源。" = "Timed out waiting for the magnet file list. Try again later or choose another resource.";

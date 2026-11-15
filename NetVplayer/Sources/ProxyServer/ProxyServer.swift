@@ -197,6 +197,7 @@ public typealias ProxyHandler = @Sendable ([String: String]) async throws -> Pro
 public final class ProxyServer: @unchecked Sendable {
 
     public static let shared = ProxyServer()
+    public let androidPlaybackMedia = AndroidPlaybackMediaContext()
     public static let multiplexedRangeConnectionLimit = 2
 
     public init() {}
@@ -224,6 +225,8 @@ public final class ProxyServer: @unchecked Sendable {
     public var proxyHandler: ProxyHandler?
     public var prefetchedProxyHandler: ProxyHandler?
     public var streamingProxyHandler: ProxyStreamingHandler?
+    /// Opt-in HEAD handler; existing GET streaming callbacks retain their contract.
+    public var streamingProxyHeadHandler: ProxyStreamingHandler?
     public var rawProxyHandler: (([String: String]) async throws -> Any?)?
     public var remoteStreamHTTPClient: HTTPClient = .shared
     fileprivate let directRemoteStreamHTTPClient = HTTPClient.shared.withExplicitProxy(nil)
@@ -260,16 +263,118 @@ public final class ProxyServer: @unchecked Sendable {
     private let seekableLock = NSLock()
     private var seekableResources: [String: SeekableResource] = [:]
     private let seekableBuffer = SeekableResourceBuffer()
+    private let readLeaseLock = NSLock()
+    private var readAliases: [String: (source: String, path: String, binding: PlaybackReadBinding)] = [:]
+    private var releasedReadSources: Set<String> = []
+
+    /// A disc is one playback input with multiple physical segment readers.
+    /// All aliases share the player's generation, including preview cancellation.
+    public func readLease(for spec: PlaySpec, session: PlaybackReadSession,
+                          mediaIdentity: PlaybackMediaIdentity, purpose: PlaybackReadPurpose,
+                          lifetime: TimeInterval? = nil) -> PlaybackReadLease? {
+        guard let disc = spec.disc else {
+            return readLease(forLocalURL: spec.url, session: session, mediaIdentity: mediaIdentity, purpose: purpose, lifetime: lifetime)
+        }
+        var leases: [PlaybackReadLease] = []
+        for url in disc.segmentURLs {
+            guard let lease = readLease(forLocalURL: url, session: session, mediaIdentity: mediaIdentity, purpose: purpose, lifetime: lifetime) else {
+                leases.forEach { $0.cancel() }; return nil
+            }
+            leases.append(lease)
+        }
+        let retained = leases
+        return PlaybackReadLease(url: disc.edl(urls: leases.map(\.url))) { retained.forEach { $0.cancel() } }
+    }
+
+    public func readLease(forLocalURL url: String, session: PlaybackReadSession,
+                          mediaIdentity: PlaybackMediaIdentity, purpose: PlaybackReadPurpose,
+                          lifetime: TimeInterval? = nil) -> PlaybackReadLease? {
+        guard var components = URLComponents(string: url), components.scheme == "http",
+              components.host == "127.0.0.1", components.port == port,
+              components.user == nil, components.password == nil, components.fragment == nil,
+              ["/stream", "/resource"].contains(components.path),
+              let items = components.queryItems, items.count == 1,
+              items[0].name == "id", let token = items[0].value else { return nil }
+        let id = UUID().uuidString
+        let binding = PlaybackReadBinding(session: session, identity: mediaIdentity, purpose: purpose, lifetime: lifetime)
+        let retained = readLeaseLock.withLock {
+            guard readAliases[token] != nil || !releasedReadSources.contains(token) else { return false }
+            let source = readAliases[token]?.source ?? token
+            let exists = components.path == "/stream"
+                ? streamLock.withLock { streams[source] != nil }
+                : seekableLock.withLock { seekableResources[source] != nil }
+            guard exists else { return false }
+            readAliases[id] = (source, components.path, binding); return true
+        }
+        guard retained else { return nil }
+        components.queryItems = [URLQueryItem(name: "id", value: id)]
+        guard let alias = components.url?.absoluteString else { releaseReadAlias(id); return nil }
+        return PlaybackReadLease(url: alias) { [weak self] in self?.releaseReadAlias(id) }
+    }
+
+    private func canonicalReadSourceID(_ id: String) -> String {
+        readLeaseLock.withLock { readAliases[id]?.source ?? id }
+    }
+    private func canReadSource(_ id: String) -> Bool {
+        readLeaseLock.withLock { readAliases[id] != nil || !releasedReadSources.contains(id) }
+    }
+    /// Returns false while another owner retains this source.
+    private func releaseRegisteredReadSource(_ id: String) -> Bool {
+        readLeaseLock.withLock {
+            releasedReadSources.insert(id)
+            if readAliases.values.contains(where: { $0.source == id }) {
+                return false
+            }
+            return true
+        }
+    }
+    private func releaseReadAlias(_ id: String) {
+        let retired = readLeaseLock.withLock { () -> ((source: String, path: String, binding: PlaybackReadBinding), Bool)? in
+            guard let alias = readAliases.removeValue(forKey: id) else { return nil }
+            let last = !readAliases.values.contains { $0.source == alias.source }
+            return (alias, last && releasedReadSources.contains(alias.source))
+        }
+        guard let (alias, final) = retired else { return }
+        alias.binding.cancel()
+        if final {
+            if alias.path == "/stream" { _ = unregisterRemoteStream(id: alias.source) }
+            else { unregisterSeekableResource(url: getAddress("/resource?id=" + alias.source)) }
+        }
+    }
+
+    fileprivate func ownedReadTask(id: String, cancelled: @escaping @Sendable () -> Void,
+                                   operation: @escaping @Sendable () async -> Void) -> Task<Void, Never> {
+        let binding = readLeaseLock.withLock { readAliases[id]?.binding }
+        return Task {
+            do {
+                if let binding {
+                    let owner = try binding.begin()
+                    defer { binding.finish(owner) }
+                    try await owner.perform { await operation() }
+                } else {
+                    guard self.canReadSource(id) else { throw CancellationError() }
+                    await operation()
+                }
+            } catch { cancelled() }
+        }
+    }
 
     public func registerSeekableResource(_ resource: SeekableResource) throws -> String {
         guard isRunning else { throw ProxyServerError.serverNotRunning }
         let id = UUID().uuidString
-        seekableLock.withLock { seekableResources[id] = resource }
+        let lifetime = SeekableResourceLifetime(resource)
+        let retained = SeekableResource(size: resource.size, contentType: resource.contentType,
+            readChunkSize: resource.readChunkSize, transferProfile: resource.transferProfile,
+            mediaIdentity: resource.mediaIdentity, managesReadBudget: resource.managesReadBudget) { range in try await lifetime.resource.read(range) }
+        seekableLock.withLock { seekableResources[id] = retained }
         return getAddress("/resource?id=" + id)
     }
     public func unregisterSeekableResource(url: String) {
         guard let id = URLComponents(string: url)?.queryItems?.first(where: { $0.name == "id" })?.value else { return }
+        if readLeaseLock.withLock({ readAliases[id] != nil }) { releaseReadAlias(id); return }
+        guard releaseRegisteredReadSource(id) else { return }
         _ = seekableLock.withLock { seekableResources.removeValue(forKey: id) }
+        _ = readLeaseLock.withLock { releasedReadSources.remove(id) }
         Task { await seekableBuffer.close(id: id) }
     }
     /// Only the current server's live, opaque resource URL is a trusted file playback endpoint.
@@ -280,19 +385,43 @@ public final class ProxyServer: @unchecked Sendable {
               components.percentEncodedPath == "/resource",
               let items = components.queryItems, items.count == 1,
               items[0].name == "id", let id = items[0].value else { return false }
-        return seekableLock.withLock { seekableResources[id] != nil }
+        return seekableResource(id: id) != nil
     }
     fileprivate func seekableResource(id: String) -> SeekableResource? {
-        seekableLock.withLock { seekableResources[id] }
+        guard canReadSource(id) else { return nil }
+        let source = canonicalReadSourceID(id)
+        return seekableLock.withLock { seekableResources[source] }
     }
     public func seekableResourceTransferProfile(forLocalURL url: String) -> PlaybackTransferProfile? {
         guard isRegisteredSeekableResource(url: url),
               let id = URLComponents(string: url)?.queryItems?.first?.value else { return nil }
         return seekableResource(id: id)?.transferProfile
     }
+    /// In-process VFS access uses exactly the HTTP resource's cache and admission.
+    /// No arbitrary URL fetch or second unbounded cache is introduced.
+    public func readRegisteredResource(url: String, range: Range<Int64>) async throws -> Data {
+        guard isRegisteredSeekableResource(url: url), range.lowerBound >= 0,
+              range.upperBound - range.lowerBound <= 4 * 1024 * 1024,
+              let id = URLComponents(string: url)?.queryItems?.first?.value else { throw CancellationError() }
+        if let binding = readLeaseLock.withLock({ readAliases[id]?.binding }) {
+            let owner = try binding.begin(); defer { binding.finish(owner) }
+            return try await owner.perform { try await self.readSeekableResource(id: id, range: range) }
+        }
+        return try await readSeekableResource(id: id, range: range)
+    }
     fileprivate func readSeekableResource(id: String, range: Range<Int64>, phase: PlaybackTransferPhase = .playback) async throws -> Data {
         guard let resource = seekableResource(id: id) else { throw CancellationError() }
-        let data = try await seekableBuffer.read(id: id, range: range, resource: resource, phase: phase)
+        let source = canonicalReadSourceID(id)
+        let owner = PlaybackReadScope.owner
+        let read: @Sendable () async throws -> Data = {
+            try await self.seekableBuffer.read(id: source, range: range, resource: resource, phase: owner?.purpose.phase ?? phase)
+        }
+        let data: Data
+        if resource.managesReadBudget { data = try await read() }
+        else {
+            data = try await PlaybackBackgroundBudget.shared.withRead(owner: owner,
+                purpose: phase == .preload ? .nextEpisode : .foreground, bytes: range.upperBound - range.lowerBound, operation: read)
+        }
         guard seekableResource(id: id) != nil else { throw CancellationError() }
         await enforceRemoteStreamBufferLimit()
         return data
@@ -335,7 +464,14 @@ public final class ProxyServer: @unchecked Sendable {
     }
 
     /// 停止代理服务器
-    public func stop() {
+    public func stop() { _ = stopWithCleanup() }
+
+    private func stopWithCleanup() -> Task<Void, Never> {
+        let bindings = readLeaseLock.withLock {
+            let bindings = readAliases.values.map(\.binding)
+            readAliases.removeAll(); releasedReadSources.removeAll(); return bindings
+        }
+        for binding in bindings { binding.cancel() }
         cleanupTimer?.cancel()
         cleanupTimer = nil
         try? channel?.close().wait()
@@ -349,12 +485,15 @@ public final class ProxyServer: @unchecked Sendable {
         localFiles.removeAll()
         localFileLock.unlock()
         let resourceIDs = seekableLock.withLock { let ids = Array(seekableResources.keys); seekableResources.removeAll(); return ids }
-        Task { for id in resourceIDs { await seekableBuffer.close(id: id) } }
+        let cleanup = Task { for id in resourceIDs { await seekableBuffer.close(id: id) } }
         recentErrorLock.lock()
         recentErrors.removeAll()
         recentErrorLock.unlock()
         print("ProxyServer: 已停止")
+        return cleanup
     }
+
+    public func stopAndWait() async { await stopWithCleanup().value }
 
     /// 获取代理地址
     public func getAddress(_ path: String = "") -> String {
@@ -449,6 +588,7 @@ public final class ProxyServer: @unchecked Sendable {
                 ? remoteStreamHTTPClient.withExplicitProxy(nil)
                 : remoteStreamHTTPClient
         }
+        readLeaseLock.lock()
         streamLock.lock()
         streams[id] = RemoteStream(
             id: id,
@@ -476,6 +616,7 @@ public final class ProxyServer: @unchecked Sendable {
         )
         let removed = trimRemoteStreamsLocked()
         streamLock.unlock()
+        readLeaseLock.unlock()
         cancelRemovedStreams(removed)
 
         var components = URLComponents(string: getAddress("/stream"))!
@@ -490,9 +631,12 @@ public final class ProxyServer: @unchecked Sendable {
 
     @discardableResult
     public func unregisterRemoteStream(id: String) -> Bool {
+        if readLeaseLock.withLock({ readAliases[id] != nil }) { releaseReadAlias(id); return true }
+        guard releaseRegisteredReadSource(id) else { return true }
         streamLock.lock()
         let removed = streams.removeValue(forKey: id)
         streamLock.unlock()
+        _ = readLeaseLock.withLock { releasedReadSources.remove(id) }
         if let removed {
             Task { await removed.buffer.cancelAll() }
             DiagnosticLog.write("[REMOTE_STREAM_UNREGISTER] id=\(id)")
@@ -543,7 +687,7 @@ public final class ProxyServer: @unchecked Sendable {
     public func remoteStreamBufferSnapshot(forLocalURL urlString: String) async -> RemoteStreamBufferSnapshot? {
         if isRegisteredSeekableResource(url: urlString),
            let id = URLComponents(string: urlString)?.queryItems?.first?.value {
-            return await seekableBuffer.snapshot(id: id)
+            return await seekableBuffer.snapshot(id: canonicalReadSourceID(id))
         }
         guard let components = URLComponents(string: urlString),
               let host = components.host?.lowercased(),
@@ -582,7 +726,28 @@ public final class ProxyServer: @unchecked Sendable {
     public func prefetchRemoteStream(
         forLocalURL urlString: String,
         byteLimit: Int64 = 16 * 1024 * 1024,
-        mode: RemoteStreamPreloadMode = .full
+        mode: RemoteStreamPreloadMode = .full,
+        session: PlaybackReadSession? = nil,
+        mediaIdentity: PlaybackMediaIdentity? = nil
+    ) async throws -> RemoteStreamBufferSnapshot? {
+        let session = session ?? PlaybackReadSession()
+        let identity = mediaIdentity ?? .init(source: "registered", account: "session", item: session.id.uuidString)
+        let owner = session.makeOwner(mediaIdentity: identity, purpose: .nextEpisode,
+            expiry: ProcessInfo.processInfo.systemUptime + 120)
+        defer { owner.cancel() }
+        let lease = readLease(forLocalURL: urlString, session: session, mediaIdentity: identity,
+                              purpose: .nextEpisode, lifetime: 120)
+        defer { lease?.cancel() }
+        let sourceURL = lease?.url ?? urlString
+        return try await owner.perform {
+            try await self.prefetchOwnedRemoteStream(forLocalURL: sourceURL, byteLimit: byteLimit, mode: mode)
+        }
+    }
+
+    private func prefetchOwnedRemoteStream(
+        forLocalURL urlString: String,
+        byteLimit: Int64,
+        mode: RemoteStreamPreloadMode
     ) async throws -> RemoteStreamBufferSnapshot? {
         if isRegisteredSeekableResource(url: urlString), byteLimit > 0,
            let id = URLComponents(string: urlString)?.queryItems?.first?.value,
@@ -596,7 +761,7 @@ public final class ProxyServer: @unchecked Sendable {
                 _ = try await readSeekableResource(id: id, range: start..<end, phase: .preload)
                 start = end
             }
-            return await seekableBuffer.snapshot(id: id)
+            return await seekableBuffer.snapshot(id: canonicalReadSourceID(id))
         }
         guard isRunning,
               byteLimit > 0,
@@ -739,6 +904,8 @@ public final class ProxyServer: @unchecked Sendable {
     }
 
     func stream(for id: String) -> RemoteStream? {
+        guard canReadSource(id) else { return nil }
+        let id = canonicalReadSourceID(id)
         cleanupExpiredRemoteStreams()
         streamLock.lock()
         defer { streamLock.unlock() }
@@ -836,9 +1003,11 @@ public final class ProxyServer: @unchecked Sendable {
         guard total > Self.remoteStreamGlobalBufferMaxBytes else { return }
 
         let sorted = measured.sorted { $0.lastAccessAt < $1.lastAccessAt }
-        let removedBuffers = removeRemoteStreamsUntilWithinCacheLimit(sorted, totalCachedBytes: total)
-        for buffer in removedBuffers {
-            await buffer.cancelAll()
+        // Memory pressure evicts bytes, never a source still held by a reader.
+        // Keep admission/registration intact so the next demand can refill it.
+        var remaining = total
+        for entry in sorted where remaining > Self.remoteStreamGlobalBufferMaxBytes {
+            remaining -= await entry.buffer.evictCachedBytes(remaining - Self.remoteStreamGlobalBufferMaxBytes)
         }
     }
 
@@ -852,23 +1021,6 @@ public final class ProxyServer: @unchecked Sendable {
         streamLock.lock()
         defer { streamLock.unlock() }
         return streams.values.map { ($0.id, $0.lastAccessAt, 0, $0.buffer) }
-    }
-
-    private func removeRemoteStreamsUntilWithinCacheLimit(
-        _ entries: [(id: String, lastAccessAt: Date, cachedBytes: Int64, buffer: RemoteStreamBuffer)],
-        totalCachedBytes: Int64
-    ) -> [RemoteStreamBuffer] {
-        var total = totalCachedBytes
-        var removedBuffers: [RemoteStreamBuffer] = []
-        streamLock.lock()
-        for entry in entries where total > Self.remoteStreamGlobalBufferMaxBytes {
-            if streams.removeValue(forKey: entry.id) != nil {
-                total -= entry.cachedBytes
-                removedBuffers.append(entry.buffer)
-            }
-        }
-        streamLock.unlock()
-        return removedBuffers
     }
 
     private func currentRecentErrors() -> [String] {
@@ -902,18 +1054,23 @@ public final class ProxyServer: @unchecked Sendable {
 
     private func cleanupExpiredRemoteStreams() {
         let now = Date()
+        readLeaseLock.lock()
+        let retained = Set(readAliases.values.map(\.source))
         streamLock.lock()
         let expiredIDs = streams.compactMap { id, stream in
-            now.timeIntervalSince(stream.lastAccessAt) > Self.remoteStreamIdleTTL ? id : nil
+            !retained.contains(id) && now.timeIntervalSince(stream.lastAccessAt) > Self.remoteStreamIdleTTL ? id : nil
         }
         let removed = expiredIDs.compactMap { streams.removeValue(forKey: $0) }
         streamLock.unlock()
+        readLeaseLock.unlock()
         cancelRemovedStreams(removed)
     }
 
     private func trimRemoteStreamsLocked() -> [RemoteStream] {
         guard streams.count > Self.remoteStreamMaxActive else { return [] }
-        let sorted = streams.values.sorted { $0.lastAccessAt < $1.lastAccessAt }
+        // Caller holds readLeaseLock before streamLock.
+        let retained = Set(readAliases.values.map(\.source))
+        let sorted = streams.values.filter { !retained.contains($0.id) }.sorted { $0.lastAccessAt < $1.lastAccessAt }
         let removeCount = streams.count - Self.remoteStreamMaxActive
         let removed = Array(sorted.prefix(removeCount))
         for stream in removed {
@@ -931,7 +1088,8 @@ public final class ProxyServer: @unchecked Sendable {
     private static func redactedHeaders(_ headers: [String: String]) -> [String: String] {
         headers.reduce(into: [:]) { result, item in
             if item.key.caseInsensitiveCompare("Cookie") == .orderedSame
-                || item.key.caseInsensitiveCompare("Authorization") == .orderedSame {
+                || item.key.caseInsensitiveCompare("Authorization") == .orderedSame
+                || ["x-emby-token", "x-mediabrowser-token", "x-api-key", "x-auth-token"].contains(item.key.lowercased()) {
                 result[item.key] = "<redacted>"
             } else {
                 result[item.key] = item.value
@@ -1332,9 +1490,9 @@ struct RemoteStreamInFlight: Sendable {
     let task: Task<RemoteStreamChunk, Error>
     let read: PlaybackSharedRead<RemoteStreamChunk>
 
-    init(id: UUID, generation: Int, kind: RemoteStreamLoadKind, task: Task<RemoteStreamChunk, Error>) {
+    init(id: UUID, generation: Int, kind: RemoteStreamLoadKind, task: Task<RemoteStreamChunk, Error>, priority: PlaybackReadPriority? = nil) {
         self.id = id; self.generation = generation; self.kind = kind; self.task = task
-        self.read = PlaybackSharedRead(task: task)
+        self.read = PlaybackSharedRead(task: task, priority: priority)
     }
 }
 
@@ -1395,15 +1553,30 @@ actor RemoteStreamBuffer {
         nextPrefetchStart = nil
     }
 
+    @discardableResult
+    func evictCachedBytes(_ target: Int64) -> Int64 {
+        var removed: Int64 = 0
+        var count = 0
+        while removed < target, !chunks.isEmpty {
+            let chunk = chunks.removeFirst()
+            removed += Int64(chunk.data.count); count += 1
+        }
+        cachedBytes -= removed
+        recordEviction(chunkCount: count, byteCount: removed, reason: "global-budget")
+        return removed
+    }
+
     func response(
         for requestedRange: RemoteStreamRange,
         stream: RemoteStream,
         method: NIOHTTP1.HTTPMethod,
         isPriming: Bool = false,
+        readerPhase: PlaybackTransferPhase? = nil,
         fetch: @escaping @Sendable (RemoteStreamRange, RemoteStreamLoadKind) async throws -> RemoteStreamChunk
     ) async throws -> ProxyResponse {
         try Task.checkCancellation()
         guard !closed else { throw CancellationError() }
+        let phase = readerPhase ?? PlaybackReadScope.owner?.purpose.phase ?? (isPriming ? .preload : .playback)
         if let cached = assembledCachedChunk(containing: requestedRange),
            !isPriming || cached.range.contains(requestedRange) {
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_HIT] id=\(id), range=\(requestedRange.headerValue)")
@@ -1416,7 +1589,7 @@ actor RemoteStreamBuffer {
 
         if let marker = inFlightMarker(containing: requestedRange) {
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_WAIT] id=\(id), range=\(requestedRange.headerValue)")
-            let chunk = try await marker.read.value(phase: isPriming ? .preload : .playback)
+            let chunk = try await marker.read.value(phase: phase)
             try Task.checkCancellation()
             guard !closed else { throw CancellationError() }
             removeCompletedMarker(marker)
@@ -1439,11 +1612,40 @@ actor RemoteStreamBuffer {
             return proxyResponse(from: chunk, requestedRange: requestedRange, method: method)
         }
 
+        if inFlight.keys.contains(where: { $0.start <= requestedRange.end && $0.end >= requestedRange.start }) {
+            // Split only at existing transfer boundaries. A partially overlapping
+            // reader joins the shared prefix and fetches each uncovered gap once.
+            var start = requestedRange.start
+            var data = Data()
+            var headers: [String: String] = [:]
+            var contentType = stream.contentType
+            var totalLength = stream.contentLength
+            while start <= requestedRange.end {
+                try Task.checkCancellation()
+                let covering = inFlight.keys.first { $0.start <= start && $0.end >= start }
+                let next = inFlight.keys.filter { $0.start > start }.map(\.start).min() ?? (requestedRange.end + 1)
+                let end = min(requestedRange.end, covering?.end ?? (next - 1))
+                let part = try await response(for: .init(start: start, end: end), stream: stream,
+                    method: .GET, isPriming: true, readerPhase: phase, fetch: fetch)
+                guard !part.data.isEmpty else { throw ProxyServerError.emptyUpstreamResponse("shared-gap") }
+                data.append(part.data); headers = part.headers; contentType = part.contentType
+                if let raw = part.headers.first(where: { $0.key.lowercased() == "content-range" })?.value,
+                   let total = raw.split(separator: "/").last.flatMap({ Int64($0) }) { totalLength = total }
+                start += Int64(part.data.count)
+            }
+            let chunk = RemoteStreamChunk(range: requestedRange, data: data, headers: headers,
+                contentType: contentType, totalLength: totalLength)
+            processDemandChunk(chunk, requestedRange: requestedRange, markerGeneration: generation,
+                stream: stream, isPriming: isPriming, fetch: fetch)
+            return proxyResponse(from: chunk, requestedRange: requestedRange, method: method)
+        }
+
         DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_MISS] id=\(id), range=\(requestedRange.headerValue)")
         let loadKind: RemoteStreamLoadKind = isPriming ? .prime : .demand
         let (chunk, markerGeneration) = try await loadDemand(
             range: requestedRange,
             kind: loadKind,
+            phase: phase,
             fetch: fetch
         )
         processDemandChunk(
@@ -1489,7 +1691,7 @@ actor RemoteStreamBuffer {
         }
 
         let task = Task<RemoteStreamChunk, Error> {
-            try await fetch(requestedRange)
+            try await PlaybackReadScope.$owner.withValue(nil) { try await fetch(requestedRange) }
         }
         let marker = RemoteStreamInFlight(
             id: UUID(),
@@ -1509,7 +1711,7 @@ actor RemoteStreamBuffer {
             store(chunk, prefetch: false)
             return assembledCachedChunk(containing: requestedRange) ?? chunk
         } catch {
-            if inFlight[requestedRange]?.id == marker.id, !marker.read.hasForegroundReaders {
+            if inFlight[requestedRange]?.id == marker.id, !marker.read.hasReaders {
                 inFlight.removeValue(forKey: requestedRange)
             }
             throw error
@@ -1576,10 +1778,6 @@ actor RemoteStreamBuffer {
         }
     }
 
-    private func cachedChunk(containing range: RemoteStreamRange) -> RemoteStreamChunk? {
-        chunks.first { $0.range.contains(range) }
-    }
-
     private func assembledCachedChunk(containing range: RemoteStreamRange) -> RemoteStreamChunk? {
         guard range.count > 0 else { return nil }
 
@@ -1644,19 +1842,24 @@ actor RemoteStreamBuffer {
     private func loadDemand(
         range: RemoteStreamRange,
         kind: RemoteStreamLoadKind = .demand,
+        phase: PlaybackTransferPhase = .playback,
         fetch: @escaping @Sendable (RemoteStreamRange, RemoteStreamLoadKind) async throws -> RemoteStreamChunk
     ) async throws -> (RemoteStreamChunk, Int) {
         if let existing = inFlight[range], !existing.read.isCancelled {
-            return (try await existing.read.value(phase: kind == .prime ? .preload : .playback), existing.generation)
+            return (try await existing.read.value(phase: phase), existing.generation)
         }
 
+        let priority = PlaybackReadPriority(purpose: PlaybackReadScope.owner?.purpose
+            ?? (phase == .preview ? .chapterPreview : phase == .preload ? .nextEpisode : .foreground))
         let task = Task<RemoteStreamChunk, Error> {
-            try await fetch(range, kind)
+            try await PlaybackReadScope.$owner.withValue(nil) {
+                try await PlaybackReadScope.$priority.withValue(priority) { try await fetch(range, kind) }
+            }
         }
-        let marker = RemoteStreamInFlight(id: UUID(), generation: generation, kind: kind, task: task)
+        let marker = RemoteStreamInFlight(id: UUID(), generation: generation, kind: kind, task: task, priority: priority)
         inFlight[range] = marker
         do {
-            let chunk = try await marker.read.value(phase: kind == .prime ? .preload : .playback)
+            let chunk = try await marker.read.value(phase: phase)
             try Task.checkCancellation()
             guard !closed else { throw CancellationError() }
             if inFlight[range]?.id == marker.id {
@@ -1664,7 +1867,7 @@ actor RemoteStreamBuffer {
             }
             return (chunk, marker.generation)
         } catch {
-            if inFlight[range]?.id == marker.id, !marker.read.hasForegroundReaders {
+            if inFlight[range]?.id == marker.id, !marker.read.hasReaders {
                 inFlight.removeValue(forKey: range)
             }
             throw error
@@ -1735,10 +1938,13 @@ actor RemoteStreamBuffer {
             nextStart = nextEnd + 1
             let isFullyCached = assembledCachedChunk(containing: nextRange)?.range.contains(nextRange) == true
             if !isFullyCached, inFlightMarker(containing: nextRange) == nil {
+                let priority = PlaybackReadPriority()
                 let task = Task<RemoteStreamChunk, Error> {
-                    try await fetch(nextRange, .prefetch)
+                    try await PlaybackReadScope.$owner.withValue(nil) {
+                        try await PlaybackReadScope.$priority.withValue(priority) { try await fetch(nextRange, .prefetch) }
+                    }
                 }
-                let marker = RemoteStreamInFlight(id: UUID(), generation: generation, kind: .prefetch, task: task)
+                let marker = RemoteStreamInFlight(id: UUID(), generation: generation, kind: .prefetch, task: task, priority: priority)
                 inFlight[nextRange] = marker
                 DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_START] id=\(id), range=\(nextRange.headerValue)")
                 Task {
@@ -1755,7 +1961,11 @@ actor RemoteStreamBuffer {
         fetch: @escaping @Sendable (RemoteStreamRange, RemoteStreamLoadKind) async throws -> RemoteStreamChunk
     ) async {
         do {
-            let chunk = try await marker.read.value(phase: .preload)
+            let owner = try PlaybackReadScope.owner?.sibling(purpose: .readAhead)
+            defer { owner?.cancel() }
+            let chunk: RemoteStreamChunk
+            if let owner { chunk = try await owner.perform { try await marker.read.value(phase: .preload) } }
+            else { chunk = try await marker.read.value(phase: .preload) }
             if inFlight[range]?.id == marker.id {
                 inFlight.removeValue(forKey: range)
             }
@@ -1766,7 +1976,7 @@ actor RemoteStreamBuffer {
             store(chunk, prefetch: true)
             fillPrefetchQueue(stream: stream, fetch: fetch)
         } catch {
-            if inFlight[range]?.id == marker.id, !marker.read.hasForegroundReaders {
+            if inFlight[range]?.id == marker.id, !marker.read.hasReaders {
                 inFlight.removeValue(forKey: range)
             }
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_ERROR] id=\(id), range=\(range.headerValue), error=\(error.localizedDescription)")
@@ -2073,15 +2283,33 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         guard let head = requestHead else { return }
         let path = head.uri.components(separatedBy: "?").first ?? head.uri
         var params = queryParams(from: head.uri)
-        params.removeValue(forKey: "__downstream_range")
         for header in head.headers {
             params[header.name.lowercased()] = header.value
         }
+        for key in ["__downstream_range", "__downstream_if_range", "__downstream_method"] { params.removeValue(forKey: key) }
         if let range = head.headers.first(name: "Range"), !range.isEmpty {
             params["__downstream_range"] = range
         }
+        params["__downstream_method"] = head.method.rawValue
+        if let value = head.headers.first(name: "If-Range") { params["__downstream_if_range"] = value }
         guard !bodyTooLarge, body.count <= ProxyServer.maxRequestBodyBytes else {
             sendErrorResponse(context: context, version: head.version, status: HTTPResponseStatus(statusCode: 413), message: "请求 body 过大")
+            return
+        }
+
+        // The original Android SDK probes its host before reading /media.
+        // This exact discovery request must not enter a source's media proxy.
+        if (path == "/proxy" || path == "/proxy/play"),
+           URLComponents(string: head.uri)?.queryItems == [URLQueryItem(name: "do", value: "ck")] {
+            guard head.method == .GET || head.method == .HEAD else {
+                sendTextResponse(context: context, version: head.version, status: .methodNotAllowed,
+                                 contentType: "text/plain", text: "")
+                return
+            }
+            sendResponse(context: context, version: head.version, response: ProxyResponse(
+                statusCode: 200, contentType: "text/plain; charset=utf-8",
+                data: head.method == .HEAD ? Data() : Data("ok".utf8),
+                headers: ["Cache-Control": "no-store"]))
             return
         }
 
@@ -2107,9 +2335,9 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                         }
                         return
                     }
-                    if method == .GET,
+                    if (method == .GET || method == .HEAD),
                        params["preload"] != "1",
-                       let streamingHandler = self.server.streamingProxyHandler {
+                       let streamingHandler = method == .HEAD ? self.server.streamingProxyHeadHandler : self.server.streamingProxyHandler {
                         let didStream = try await streamingHandler(
                             params,
                             { responseHead in
@@ -2121,6 +2349,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                                 )
                             },
                             { data in
+                                guard method != .HEAD else { return }
                                 try await self.writeOpenEndedRemoteStreamBody(
                                     channel: channel,
                                     data: data
@@ -2155,17 +2384,11 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                         }
                     }
                 } catch {
-                    guard let measurements = Self.requestFailureDiagnosticMeasurements(
+                    guard let message = Self.requestFailureDiagnosticMessage(
                         for: error,
                         taskIsCancelled: Task.isCancelled,
                         channelIsActive: channel.channel.isActive
                     ) else { return }
-                    let targetURL = self.targetURL(from: params) ?? ""
-                    let errorValue = error as NSError
-                    let fields = measurements.keys.sorted().map {
-                        "\($0)=\(measurements[$0]!)"
-                    }.joined(separator: " ")
-                    let message = "[PROXY_SERVER_ERROR] \(fields) 代理转发发生异常 url=\(ProxyServer.redactedURL(targetURL)) error=\(errorValue.localizedDescription) [\(errorValue.domain):\(errorValue.code)]"
                     print(message)
                     DiagnosticLog.write(message)
                     fflush(stdout)
@@ -2183,6 +2406,19 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
 
         switch true {
+        case path == "/media":
+            // Original SDK contract: actual current title / episode, only while
+            // the owning source has an active comment request. Never cached.
+            guard head.method == .GET || head.method == .HEAD else {
+                sendTextResponse(context: context, version: head.version, status: .methodNotAllowed,
+                                 contentType: "application/json", text: "{}")
+                return
+            }
+            let media = server.androidPlaybackMedia.snapshot(expectedSource: params["source"])
+            sendResponse(context: context, version: head.version, response: ProxyResponse(
+                statusCode: media == nil ? 204 : 200, contentType: "application/json; charset=utf-8",
+                data: head.method == .HEAD || media == nil ? Data() : Data(media!.utf8),
+                headers: ["Cache-Control": "no-store"]))
         case path == "/resource":
             handleSeekableResource(context: context, head: head, params: params)
         case path.hasPrefix("/parse"):
@@ -2226,7 +2462,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         let channel = SendableChannel(channel: context.channel)
         let state = ProxyStreamState()
         remoteStreamTask?.cancel()
-        remoteStreamTask = Task {
+        remoteStreamTask = server.ownedReadTask(id: id, cancelled: { channel.channel.close(promise: nil) }) {
             do {
                 var headers = ["Accept-Ranges": "bytes"]
                 if header != nil { headers["Content-Range"] = "bytes \(range.lowerBound)-\(range.upperBound - 1)/\(resource.size)" }
@@ -2385,9 +2621,9 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             range: range,
             method: method
         )
-        remoteStreamTask = Task {
+        remoteStreamTask = server.ownedReadTask(id: id, cancelled: { safeChannel.channel.close(promise: nil) }) {
             do {
-                if usesContinuousResponse {
+                if usesContinuousResponse, PlaybackReadScope.owner?.purpose.isBackground != true {
                     try await self.streamOpenEndedRemoteStream(
                         channel: safeChannel,
                         version: version,
@@ -2400,7 +2636,7 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                         range: range,
                         ifRange: ifRange,
                         method: method,
-                        isPriming: isPriming
+                        isPriming: isPriming || PlaybackReadScope.owner?.purpose.isBackground == true
                     )
                     safeContext.context.eventLoop.execute {
                         self.sendResponse(context: safeContext.context, version: version, response: response)
@@ -2433,6 +2669,16 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    static func requestFailureDiagnosticMessage(
+        for error: Error, taskIsCancelled: Bool, channelIsActive: Bool
+    ) -> String? {
+        guard let measurements = requestFailureDiagnosticMeasurements(
+            for: error, taskIsCancelled: taskIsCancelled, channelIsActive: channelIsActive
+        ) else { return nil }
+        let fields = measurements.keys.sorted().map { "\($0)=\(measurements[$0]!)" }.joined(separator: " ")
+        return "[PROXY_SERVER_ERROR] stage=request \(fields)"
     }
 
     static func requestFailureDiagnosticMeasurements(
@@ -3053,6 +3299,17 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     private func fetchRemoteStreamChunkWithRetry(
+        stream: RemoteStream, range: RemoteStreamRange, ifRange: String?,
+        kind: RemoteStreamLoadKind, useCurl: Bool = false
+    ) async throws -> RemoteStreamChunk {
+        let purpose: PlaybackReadPurpose = kind == .demand ? .foreground : kind == .prefetch ? .readAhead : .nextEpisode
+        return try await PlaybackBackgroundBudget.shared.withRead(owner: nil, purpose: purpose, bytes: range.count) {
+            try await self.fetchAdmittedRemoteStreamChunkWithRetry(stream: stream, range: range,
+                ifRange: ifRange, kind: kind, useCurl: useCurl)
+        }
+    }
+
+    private func fetchAdmittedRemoteStreamChunkWithRetry(
         stream: RemoteStream,
         range: RemoteStreamRange,
         ifRange: String?,

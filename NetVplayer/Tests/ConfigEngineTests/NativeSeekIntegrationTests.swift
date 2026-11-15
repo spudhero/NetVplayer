@@ -32,13 +32,16 @@ func nativeSeekRecoversLongGOPAndPreservesPause() async throws {
         metadata: [DrivePlaybackMetadataKey.route: DrivePlaybackRoute.personalTranscode]))
     let started = await nativeSeekWait { state.duration > 100 && !state.isMediaLoading }
     try #require(started, "Native fixture did not start: \(state.errorMessage ?? "no error")")
+    #expect(engine.nativeEventPumpSnapshot != nil)
     engine.seek(to: 92_000)
     engine.seek(to: 65_000)
+    #expect(!PlaybackBackgroundBudget.shared.permitsOptionalWork)
     let recovered = await nativeSeekWait { !state.isSeeking && !state.isMediaLoading }
     #expect(recovered)
     #expect(state.position.isFinite)
     #expect(state.errorMessage == nil)
     engine.pause()
+    #expect(PlaybackBackgroundBudget.shared.permitsBackgroundWork)
     let paused = await nativeSeekWait { !state.isPlaying }
     try #require(paused)
     engine.seek(to: 17_000)
@@ -55,6 +58,25 @@ func nativeSeekRecoversLongGOPAndPreservesPause() async throws {
     await engine.play(spec: PlaySpec(url: URL(fileURLWithPath: path).absoluteString))
     let replayed = await nativeSeekWait { !state.hasEnded && state.isPlaying && !state.isMediaLoading && state.position < 5 }
     #expect(replayed)
+    #expect(await nativeSeekWait { PlaybackBackgroundBudget.shared.permitsOptionalWork })
+
+    // Exercise native callback retirement and an immediate rebuild on the same
+    // engine. Old queued notifications must not consume the replacement queue.
+    for _ in 0..<3 {
+        await engine.stopAndWaitForRetirement()
+        #expect(engine.nativeEventPumpSnapshot == nil)
+        await engine.play(spec: PlaySpec(url: URL(fileURLWithPath: path).absoluteString))
+        try #require(await nativeSeekWait { state.duration > 100 && state.isPlaying && !state.isMediaLoading })
+        #expect(engine.nativeEventPumpSnapshot != nil)
+        engine.seek(to: 31_000)
+        #expect(!PlaybackBackgroundBudget.shared.permitsOptionalWork)
+        try #require(await nativeSeekWait { !state.isSeeking && !state.isMediaLoading })
+        #expect(state.errorMessage == nil)
+        #expect(await nativeSeekWait { PlaybackBackgroundBudget.shared.permitsOptionalWork })
+    }
+    await engine.stopAndWaitForRetirement()
+    #expect(engine.nativeEventPumpSnapshot == nil)
+    #expect(PlaybackBackgroundBudget.shared.permitsOptionalWork)
 }
 
 @MainActor

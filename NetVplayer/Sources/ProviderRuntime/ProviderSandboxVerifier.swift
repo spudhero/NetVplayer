@@ -90,13 +90,8 @@ public enum ProviderSandboxVerifier {
         guard canonicalPackage.deletingLastPathComponent() == providerRoot else {
             throw ProviderSandboxVerificationError.invalidInstallLocation(packageRoot.path)
         }
-        let expectedState = applicationSupport
-            .appendingPathComponent("NetVplayer/Providers/.state", isDirectory: true)
-            .appendingPathComponent(providerID, isDirectory: true)
-            .standardizedFileURL.resolvingSymlinksInPath()
-        guard stateDirectory.standardizedFileURL.resolvingSymlinksInPath() == expectedState else {
-            throw ProviderSandboxVerificationError.invalidStateLocation(stateDirectory.path)
-        }
+        try verifyStateDirectory(stateDirectory, providerID: providerID,
+            applicationSupport: applicationSupport, fileManager: fileManager)
 
         try verifySignatureAndEntitlements(
             bundle: bundle,
@@ -104,6 +99,32 @@ public enum ProviderSandboxVerifier {
             providerID: providerID
         )
         return launcher
+    }
+
+    static func verifyStateDirectory(_ stateDirectory: URL, providerID: String,
+                                     applicationSupport: URL, fileManager: FileManager = .default) throws {
+        let stateRoot = applicationSupport.appendingPathComponent("NetVplayer/Providers/.state", isDirectory: true)
+            .standardizedFileURL
+        let ordinary = stateRoot.appendingPathComponent(providerID, isDirectory: true)
+        let audits = ordinary.appendingPathComponent(".audit", isDirectory: true)
+        let candidate = stateDirectory.standardizedFileURL
+        let isAudit = candidate.deletingLastPathComponent() == audits
+            && UUID(uuidString: candidate.lastPathComponent) != nil
+        guard candidate == ordinary || isAudit else {
+            throw ProviderSandboxVerificationError.invalidStateLocation(stateDirectory.path)
+        }
+        let directories = [stateRoot, ordinary] + (isAudit ? [audits, candidate] : [])
+        for directory in directories {
+            guard (try? fileManager.destinationOfSymbolicLink(atPath: directory.path)) == nil else {
+                throw ProviderSandboxVerificationError.invalidStateLocation(stateDirectory.path)
+            }
+            if fileManager.fileExists(atPath: directory.path) {
+                let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard values.isDirectory == true, values.isSymbolicLink != true else {
+                    throw ProviderSandboxVerificationError.invalidStateLocation(stateDirectory.path)
+                }
+            }
+        }
     }
 
     static func verifySignatureAndEntitlements(

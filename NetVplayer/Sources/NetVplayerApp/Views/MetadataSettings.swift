@@ -6,6 +6,8 @@ import MediaLibraryEngine
 struct MetadataSettings: View {
     @Environment(\.appThemePalette) private var palette
     @ObservedObject private var state = FileServicesState.shared
+    var searchRequest: UUID? = nil
+    @State private var credentialExpanded = false
     @State private var overrideKind = TMDBCredential.Kind.apiKey
     @State private var overrideValue = ""
     @State private var hasApplicationCredential = false
@@ -25,7 +27,7 @@ struct MetadataSettings: View {
                 }
                 Text(L10n.text("自动模式优先使用本地资料，再尝试可用的 TMDB 和豆瓣。选择仅本地，也能整理和播放。"))
                     .font(.system(size: 12)).foregroundStyle(palette.muted)
-                DisclosureGroup(L10n.text("高级：自定义 TMDB 访问凭据")) {
+                DisclosureGroup(L10n.text("高级：自定义 TMDB 访问凭据"), isExpanded: $credentialExpanded) {
                     Text(hasApplicationCredential ? L10n.text("TMDB 已配置应用凭据，无需填写令牌。") : L10n.text("TMDB 暂不可用，可继续使用本地资料和豆瓣。"))
                         .font(.caption).foregroundStyle(palette.muted)
                     SettingsChoicePicker(title: L10n.text("凭据类型"), selection: $overrideKind, choices: [TMDBCredential.Kind.apiKey, .readAccessToken]) { $0 == .apiKey ? "API Key" : "Read Access Token" }
@@ -37,9 +39,13 @@ struct MetadataSettings: View {
                     }
                     Text(L10n.text("凭据在本机加密保存，不导出到备份。")) .font(.caption).foregroundStyle(palette.muted)
                 }
+                .disclosureGroupStyle(FullRowDisclosureGroupStyle())
+                .settingsSearchAnchor(.tmdbCredential)
                 if let error { SettingsInlineMessage(message: error) }
             }.padding(.leading, 27)
         }
+        .onAppear { if searchRequest != nil { credentialExpanded = true } }
+        .onChange(of: searchRequest) { _, request in if request != nil { credentialExpanded = true } }
         .task {
             let personal = await Task.detached { MetadataCredentials.personal() }.value
             overrideValue = personal?.value ?? ""; overrideKind = personal?.kind ?? .apiKey

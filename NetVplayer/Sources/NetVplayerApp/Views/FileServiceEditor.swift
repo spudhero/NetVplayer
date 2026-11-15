@@ -37,7 +37,17 @@ struct FileServiceEditor: View {
         if configuration.kind == .smb && !configuration.guest && credentials.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return L10n.text("请填写用户名，或启用访客连接")
         }
+        if configuration.kind == .sftp && credentials.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return L10n.text("请填写用户名")
+        }
         return nil
+    }
+
+    // Fingerprint discovery must remain available before a pin is entered.
+    // Only the final connection action requires the user-confirmed fingerprint.
+    private var needsSFTPFingerprint: Bool {
+        configuration.kind == .sftp
+            && (configuration.sshHostKeySHA256 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -62,10 +72,14 @@ struct FileServiceEditor: View {
             fields.disabled(loading || busy)
             if loading { ProgressView(L10n.text("正在读取账号信息")).controlSize(.small).padding(.vertical, 8) }
             if let message {
-                SettingsInlineMessage(message: message, role: messageIsError ? .danger : .success).padding(.top, 12)
+                SettingsInlineMessage(message: message, role: messageIsError ? .danger : .success)
+                    .textSelection(.enabled).padding(.top, 12)
             }
             if !loading, message == nil, let missingRequiredField {
                 Text(missingRequiredField).font(.system(size: 12)).foregroundStyle(palette.muted).padding(.top, 12)
+            } else if !loading, message == nil, needsSFTPFingerprint {
+                Text(L10n.text("请先测试连接并核对主机指纹，再连接文件夹。"))
+                    .font(.system(size: 12)).foregroundStyle(palette.muted).padding(.top, 12)
             }
         } actions: {
             if busy { ProgressView().controlSize(.small) }
@@ -73,7 +87,8 @@ struct FileServiceEditor: View {
             Spacer()
             Button(L10n.text("取消")) { task?.cancel(); dismiss() }.keyboardShortcut(.cancelAction)
             Button(isEditing ? L10n.text("保存") : L10n.text("连接并选择文件夹")) { perform(save: true) }
-                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(loading || busy || missingRequiredField != nil)
+                .buttonStyle(ThemedDialogButtonStyle(isPrimary: true)).keyboardShortcut(.defaultAction)
+                .disabled(loading || busy || missingRequiredField != nil || needsSFTPFingerprint)
         }
         .task {
             advancedExpanded = (configuration.kind != .smb && configuration.port != nil && configuration.port != configuration.kind.defaultPort)
@@ -121,7 +136,7 @@ struct FileServiceEditor: View {
                 smbAddressField
             } else {
                 SettingsControlRow(title: L10n.text("服务器地址"), labelWidth: 140, requirement: .required) {
-                    TextField("https://server.example", text: $configuration.address)
+                    TextField(configuration.kind == .ftp ? "ftp://nas.local:21" : configuration.kind == .sftp ? "sftp://nas.local:22" : "https://server.example", text: $configuration.address)
                         .accessibilityLabel(L10n.text("服务器地址"))
                 }
             }
@@ -137,11 +152,19 @@ struct FileServiceEditor: View {
                     .fixedSize(horizontal: false, vertical: true).padding(.bottom, 8)
             }
             if configuration.kind != .local && !(configuration.kind == .smb && configuration.guest) {
-                SettingsControlRow(title: L10n.text("用户名"), caption: configuration.kind == .smb ? "" : L10n.text("公开目录可留空；需要登录时填写"), labelWidth: 140, requirement: configuration.kind == .smb ? .required : .serverDependent) {
+                SettingsControlRow(title: L10n.text("用户名"), caption: configuration.kind == .smb || configuration.kind == .sftp ? "" : L10n.text("公开目录可留空；需要登录时填写"), labelWidth: 140, requirement: configuration.kind == .smb || configuration.kind == .sftp ? .required : .serverDependent) {
                     TextField(L10n.text("用户名"), text: $credentials.username)
                 }
                 SettingsControlRow(title: L10n.text("登录密码"), caption: L10n.text("使用服务方提供的密码"), labelWidth: 140, requirement: .serverDependent) {
                     SettingsPasswordField(L10n.text("登录密码"), text: $credentials.password)
+                }
+            }
+            if configuration.kind == .sftp {
+                SFTPHostKeyGuidance().padding(.vertical, 10)
+                SettingsControlRow(title: L10n.text("SSH 主机指纹"), caption: L10n.text("填写已向管理员核对的指纹"), labelWidth: 140, requirement: .required) {
+                    TextField("SHA256:…", text: Binding(get: { configuration.sshHostKeySHA256 ?? "" }, set: { configuration.sshHostKeySHA256 = $0 }))
+                        .font(.system(size: 12, design: .monospaced))
+                        .accessibilityLabel(L10n.text("SSH 主机指纹"))
                 }
             }
             if isFileList {
@@ -155,7 +178,8 @@ struct FileServiceEditor: View {
             if configuration.kind != .local {
                 DisclosureGroup(L10n.text("高级连接设置"), isExpanded: $advancedExpanded) {
                     advancedSettings.padding(.top, 8)
-                }.padding(.vertical, 12)
+                }.disclosureGroupStyle(FullRowDisclosureGroupStyle())
+                    .padding(.vertical, 6)
             }
         }
     }
@@ -231,6 +255,7 @@ struct FileServiceEditor: View {
     }
 
     private func perform(save: Bool) {
+        guard !save || !needsSFTPFingerprint else { return }
         busy = true; message = nil
         task = Task {
             defer { busy = false }
@@ -255,5 +280,24 @@ struct FileServiceEditor: View {
                 if !Task.isCancelled { message = error.localizedDescription; messageIsError = true }
             }
         }
+    }
+}
+
+struct SFTPHostKeyGuidance: View {
+    @Environment(\.appThemePalette) private var palette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L10n.text("首次连接 SFTP"))
+                .font(.system(size: 12, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            Text(L10n.text("1. 测试连接，获取服务器的 SHA256 指纹。"))
+            Text(L10n.text("2. 向服务器管理员核对指纹。"))
+            Text(L10n.text("3. 填写已核对的指纹，再连接文件夹。"))
+            Text(L10n.text("指纹未确认前不会发送密码。"))
+                .foregroundStyle(palette.muted)
+        }
+        .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+        .background(palette.foreground.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
     }
 }

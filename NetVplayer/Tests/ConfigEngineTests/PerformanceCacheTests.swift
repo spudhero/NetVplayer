@@ -284,9 +284,18 @@ private actor DeferredPerformanceResult {
         searchable: 1
     )
     await SpiderReplacementRegistry.shared.register(originalAPI: site.api, provider: provider)
+    let uniqueID = UUID().uuidString
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("progressive-detail-\(uniqueID)", isDirectory: true)
+    let defaults = UserDefaults(suiteName: "progressive-detail-\(uniqueID)")!
+    defer {
+        defaults.removePersistentDomain(forName: "progressive-detail-\(uniqueID)")
+        try? FileManager.default.removeItem(at: root)
+    }
     let state = AppState(
         loadDefaultConfig: false,
         startProxyServer: false,
+        storageManager: StorageManager(storageDirectory: root),
+        userPreferences: UserPreferences(defaults: defaults, credentialStore: MemoryCredentialStore()),
         providerRuntimeRegistrationOverride: { true },
         providerRuntimeStartupOverride: { true }
     )

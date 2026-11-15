@@ -5,6 +5,30 @@ import Storage
 @testable import DanmakuEngine
 
 struct DanmakuPlaybackTests {
+    @Test func providerResponseDistinguishesEmptyNoCommentsMalformedAndHTTPFailure() throws {
+        #expect(throws: ProviderDanmakuLoadError.emptyResponse) {
+            try DanmakuEngine.parseProviderResponse(Data(), statusCode: 200)
+        }
+        #expect(throws: ProviderDanmakuLoadError.emptyResponse) {
+            try DanmakuEngine.parseProviderResponse(Data(" \n\t".utf8), statusCode: 200)
+        }
+        #expect(throws: ProviderDanmakuLoadError.noComments) {
+            try DanmakuEngine.parseProviderResponse(Data("<i></i>".utf8), statusCode: 200)
+        }
+        #expect(throws: ProviderDanmakuLoadError.invalidPayload(.invalidJSON)) {
+            try DanmakuEngine.parseProviderResponse(Data("{broken".utf8), statusCode: 200)
+        }
+        #expect(throws: ProviderDanmakuLoadError.invalidPayload(.invalidEncoding)) {
+            try DanmakuEngine.parseProviderResponse(Data([0xff]), statusCode: 200)
+        }
+        #expect(throws: ProviderDanmakuLoadError.httpStatus(503)) {
+            try DanmakuEngine.parseProviderResponse(Data(), statusCode: 503)
+        }
+        let result = try DanmakuEngine.parseProviderResponse(Data("<i><d p=\"1,1,25,16777215\">fixture</d></i>".utf8), statusCode: 200)
+        #expect(result.cues.count == 1)
+        #expect(result.cues.first?.timeMs == 1000)
+    }
+
     @Test func clockFollowsRateAndStopsForPauseBufferAndSeek() {
         var clock = DanmakuPlaybackClock()
         clock.synchronize(position: 10, uptime: 100, rate: 2, playing: true, buffering: false, seeking: false, epoch: "one")
@@ -59,6 +83,41 @@ struct DanmakuPlaybackTests {
         let huge = String(repeating: "x", count: DanmakuPayloadParser.maximumPayloadBytes + 1)
         #expect(DanmakuPayloadParser.parseWithDiagnostic(payload: huge, format: .text).diagnostic.failureCategory == .payloadTooLarge)
         #expect(DanmakuPayloadParser.parse(payload: "inf|cue", format: .text).first?.timeMs == 0)
+    }
+
+    @Test func originalHostJSONPreservesTimeModeColorAndRejectsInvalidParameters() {
+        let payload = #"[{"d":"first","p":"12.25,5,25,16711680"},{"d":"reverse","p":"3,6,25,255"},{"d":"invalid","p":"bad,1,25,0"},{"d":"advanced","p":"1,7,25,0"},{"content":"missing time"}]"#
+        let cues = DanmakuPayloadParser.parse(payload: payload, format: .json)
+        #expect(cues.count == 2)
+        #expect(cues[0].timeMs == 3000)
+        #expect(cues[0].mode == .reverseScroll)
+        #expect(cues[0].color == "#0000FF")
+        #expect(cues[1].timeMs == 12250)
+        #expect(cues[1].mode == .top)
+        #expect(cues[1].color == "#FF0000")
+        #expect(DanmakuPayloadParser.parse(payload: "<i><d p='bad,1,25,0'>bad</d></i>", format: .xml).isEmpty)
+    }
+
+    @Test func originalPlatformJSONUsesMilliseconds() {
+        for payload in [
+            #"{"barrage_list":[{"content":"qq","time_offset":"1234"}]}"#,
+            #"{"data":{"result":[{"content":"youku","playat":1234}]}}"#,
+            #"{"data":{"items":[{"content":"mgtv","time":1234}]}}"#
+        ] {
+            let cues = DanmakuPayloadParser.parse(payload: payload, format: .json)
+            #expect(cues.count == 1)
+            #expect(cues[0].timeMs == 1234)
+        }
+    }
+
+    @Test func reverseCuesMoveRightAndOppositeDirectionsDoNotShareOccupiedLanes() {
+        var layout = DanmakuLaneLayout()
+        layout.replace(cues: [DanmakuCue(timeMs: 0, text: "reverse", mode: .reverseScroll),
+                              DanmakuCue(timeMs: 100, text: "forward")])
+        let sprites = layout.advance(to: 1, width: 800, height: 220, laneHeight: 40, revision: 1) { _ in 100 }
+        #expect(sprites.count == 2)
+        #expect(sprites[0].x(at: 2) > sprites[0].x(at: 1))
+        #expect(sprites[0].lane != sprites[1].lane)
     }
 
     @Test func fileImportCopiesPayloadAndBindingsSeparateEpisodesAndSources() throws {

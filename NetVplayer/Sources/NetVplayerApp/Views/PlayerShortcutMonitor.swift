@@ -119,6 +119,11 @@ final class PlayerWindowContext: ObservableObject {
     @Published private(set) var contentSize = CGSize.zero
     @Published private(set) var isAlwaysOnTop = false
     private var lastRegularWindowFrame: CGRect?
+    private var pendingFloatingWindow = false
+    private var floatingAspectRatio: Double?
+    private var regularContentAspectRatio: CGSize?
+    private var regularContentResizeIncrements: CGSize?
+    @Published private(set) var isFloatingWindow = false
     private let preferenceStore: PlayerWindowPreferenceStore?
 
     init(preferenceStore: PlayerWindowPreferenceStore? = nil) {
@@ -131,12 +136,18 @@ final class PlayerWindowContext: ObservableObject {
 
     func attach(_ window: NSWindow) {
         let isNewWindow = self.window !== window
+        if isNewWindow { pendingFloatingWindow = false }
         if isNewWindow, let previous = self.window { PlayerFullScreenCoordinator.detach(from: previous) }
         self.window = window
         PlayerFullScreenCoordinator.attached(to: window).onStateChange = { [weak self, weak window] actual in
             guard let self, let window else { return }
             self.updateFullScreenState(actual, for: window)
             self.updateWindowMetrics(for: window)
+            if self.pendingFloatingWindow,
+               PlayerFullScreenCoordinator.attached(to: window).state.transition == nil {
+                self.pendingFloatingWindow = false
+                if !actual { _ = self.enterFloatingWindow() }
+            }
         }
         updateFullScreenState(window.styleMask.contains(.fullScreen), for: window)
         if isNewWindow {
@@ -149,15 +160,19 @@ final class PlayerWindowContext: ObservableObject {
         guard self.window === window else { return }
         if let window { PlayerFullScreenCoordinator.detach(from: window) }
         setAlwaysOnTop(false)
+        clearFloatingAspectConstraint()
         self.window = nil
         isFullScreen = false
         contentSize = .zero
         lastRegularWindowFrame = nil
+        pendingFloatingWindow = false
+        floatingAspectRatio = nil
     }
 
     func updateFullScreenState(_ isFullScreen: Bool, for window: NSWindow) {
         guard self.window === window else { return }
         guard self.isFullScreen != isFullScreen else { return }
+        if isFullScreen { clearFloatingAspectConstraint() }
         self.isFullScreen = isFullScreen
     }
 
@@ -171,6 +186,7 @@ final class PlayerWindowContext: ObservableObject {
         guard !CompactPlayerLayoutPolicy.isCompact(contentSize: measuredSize) else {
             return
         }
+        clearFloatingAspectConstraint()
         setAlwaysOnTop(false)
         guard !isFullScreen, PlayerFullScreenCoordinator.attached(to: window).state.transition == nil else { return }
         lastRegularWindowFrame = window.frame
@@ -184,6 +200,41 @@ final class PlayerWindowContext: ObservableObject {
     }
 
     @discardableResult
+    func enterFloatingWindow() -> Bool {
+        guard let window,
+              let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame else { return false }
+        let fullScreen = PlayerFullScreenCoordinator.attached(to: window)
+        if window.styleMask.contains(.fullScreen) || fullScreen.state.transition != nil {
+            pendingFloatingWindow = true
+            fullScreen.request(false)
+            return true
+        }
+
+        // Reuse the original window and retain its last regular frame for Restore.
+        updateWindowMetrics(for: window)
+        if !isFloatingWindow {
+            regularContentAspectRatio = window.contentAspectRatio
+            regularContentResizeIncrements = window.contentResizeIncrements
+        }
+        isFloatingWindow = true
+        let contentRect = window.contentRect(forFrameRect: window.frame)
+        let chrome = CGSize(width: window.frame.width - contentRect.width, height: window.frame.height - contentRect.height)
+        let videoSize = CompactPlayerLayoutPolicy.floatingContentSize(aspectRatio: floatingAspectRatio,
+            availableSize: CGSize(width: visibleFrame.width - chrome.width, height: visibleFrame.height - chrome.height))
+        let preferredFrameSize = window.frameRect(forContentRect: CGRect(origin: .zero, size: videoSize)).size
+        window.contentAspectRatio = videoSize
+        let size = CGSize(width: min(preferredFrameSize.width, visibleFrame.width),
+                          height: min(preferredFrameSize.height, visibleFrame.height))
+        let frame = CGRect(x: max(visibleFrame.minX, visibleFrame.maxX - size.width - 20),
+                           y: min(visibleFrame.minY + 20, visibleFrame.maxY - size.height),
+                           width: size.width, height: size.height)
+        window.setFrame(frame, display: true, animate: false)
+        updateWindowMetrics(for: window)
+        setAlwaysOnTop(true)
+        return true
+    }
+
+    @discardableResult
     func toggleAlwaysOnTop() -> Bool {
         guard window != nil, isCompact else { return false }
         setAlwaysOnTop(!isAlwaysOnTop)
@@ -192,12 +243,14 @@ final class PlayerWindowContext: ObservableObject {
 
     @discardableResult
     func restoreRegularWindow() -> Bool {
+        pendingFloatingWindow = false
         guard let window,
               let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame else {
             return false
         }
 
         setAlwaysOnTop(false)
+        clearFloatingAspectConstraint()
         let fallbackFrameSize = PlayerWindowChromePolicy.minimumFrameSize(
             preserving: CompactPlayerLayoutPolicy.regularThreshold,
             in: window
@@ -214,11 +267,48 @@ final class PlayerWindowContext: ObservableObject {
     }
 
     func finishPlayback(restoreRegularWindowIfNeeded: Bool) {
+        pendingFloatingWindow = false
         if restoreRegularWindowIfNeeded, isCompact {
             _ = restoreRegularWindow()
         } else {
             setAlwaysOnTop(false)
+            clearFloatingAspectConstraint()
         }
+    }
+
+    func updateVideoAspectRatio(_ ratio: Double?) {
+        guard floatingAspectRatio != ratio else { return }
+        floatingAspectRatio = ratio
+        guard isFloatingWindow, let window,
+              let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame else { return }
+        let contentRect = window.contentRect(forFrameRect: window.frame)
+        let chrome = CGSize(width: window.frame.width - contentRect.width, height: window.frame.height - contentRect.height)
+        let size = CompactPlayerLayoutPolicy.floatingContentSize(aspectRatio: ratio,
+            availableSize: CGSize(width: visibleFrame.width - chrome.width, height: visibleFrame.height - chrome.height))
+        window.contentAspectRatio = size
+        let frameSize = window.frameRect(forContentRect: CGRect(origin: .zero, size: size)).size
+        let frame = CGRect(x: min(max(window.frame.minX, visibleFrame.minX), visibleFrame.maxX - frameSize.width),
+                           y: min(max(window.frame.maxY - frameSize.height, visibleFrame.minY), visibleFrame.maxY - frameSize.height),
+                           width: frameSize.width, height: frameSize.height)
+        window.setFrame(frame, display: true)
+        updateWindowMetrics(for: window)
+    }
+
+    private func clearFloatingAspectConstraint() {
+        if let ratio = regularContentAspectRatio {
+            if ratio.width > 0, ratio.height > 0 { window?.contentAspectRatio = ratio }
+            else {
+                // AppKit cancels aspect constraints through resize increments. Setting a zero
+                // aspect alone leaves zero increments and can break native fullscreen resizing.
+                let increments = regularContentResizeIncrements ?? CGSize(width: 1, height: 1)
+                window?.contentResizeIncrements = CGSize(width: max(1, increments.width), height: max(1, increments.height))
+            }
+        }
+        regularContentAspectRatio = nil
+        regularContentResizeIncrements = nil
+        // Reattaching an unchanged regular window must not publish another
+        // SwiftUI update and schedule this same cleanup again.
+        if isFloatingWindow { isFloatingWindow = false }
     }
 
     private func restorePersistedFrameIfAvailable(for window: NSWindow) {

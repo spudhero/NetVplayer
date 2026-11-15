@@ -51,5 +51,6 @@ public enum DriveEpisodeSeries {
 
     public static func source(for episode: Episode) -> EpisodeSeries? {
         episode.series ?? DriveFileReference.parse(episode.url).map { source(for: $0) }
+            ?? OriginalAndroidPlaybackIdentity.episodeSeries(for: episode.url)
     }
 }

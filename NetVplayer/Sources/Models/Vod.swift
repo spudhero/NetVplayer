@@ -19,6 +19,9 @@ public struct Vod: Codable, Identifiable, Sendable {
     public var vodBackground: String
     public var vodLogo: String
     public var episodeDetails: [Episode]
+    /// Browsable container; unlike a series, it must not open a playback detail sheet.
+    public var isFolder: Bool
+    public var mediaServerDetail: MediaServerDetail?
 
     // MARK: - 播放数据
     /// 播放源名称，多源用 "$$$" 分隔
@@ -28,6 +31,9 @@ public struct Vod: Codable, Identifiable, Sendable {
 
     // MARK: - 运行时
     public var siteKey: String
+    /// Local Android adapter provenance, retained by the app's detail cache.
+    /// Raw Provider play strings are never rewritten to select this parser.
+    public var originalAndroidEpisodeParsing: Bool = false
 
     public var id: String { vodId }
 
@@ -47,7 +53,8 @@ public struct Vod: Codable, Identifiable, Sendable {
         episodeDetails: [Episode] = [],
         vodPlayFrom: String = "",
         vodPlayUrl: String = "",
-        siteKey: String = ""
+        siteKey: String = "",
+        isFolder: Bool = false
     ) {
         self.vodId = vodId
         self.vodName = vodName
@@ -65,6 +72,8 @@ public struct Vod: Codable, Identifiable, Sendable {
         self.vodPlayFrom = vodPlayFrom
         self.vodPlayUrl = vodPlayUrl
         self.siteKey = siteKey
+        self.isFolder = isFolder
+        self.mediaServerDetail = nil
     }
 
     // MARK: - 解析播放源
@@ -77,12 +86,16 @@ public struct Vod: Codable, Identifiable, Sendable {
         var flags: [Flag] = []
         for (index, name) in froms.enumerated() where !name.isEmpty {
             let episodeStr = index < urls.count ? urls[index] : ""
-            let episodes = Episode.parse(from: episodeStr).map { parsed in
+            let flagName = originalAndroidEpisodeParsing ? Episode.originalAndroidTrim(name) : name
+            if originalAndroidEpisodeParsing && (flagName.isEmpty || episodeStr.isEmpty) { continue }
+            let parsedEpisodes = originalAndroidEpisodeParsing
+                ? Episode.parseOriginalAndroid(from: episodeStr) : Episode.parse(from: episodeStr)
+            let episodes = parsedEpisodes.map { parsed in
                 guard var detailed = detailByURL[parsed.url] else { return parsed }
                 if detailed.name.isEmpty { detailed.name = parsed.name }
                 return detailed
             }
-            flags.append(Flag(name: name, episodes: episodes))
+            flags.append(Flag(name: flagName, episodes: episodes))
         }
         return flags
     }
@@ -104,6 +117,9 @@ public struct Vod: Codable, Identifiable, Sendable {
         case vodPlayFrom = "vod_play_from"
         case vodPlayUrl = "vod_play_url"
         case siteKey
+        case originalAndroidEpisodeParsing = "_netvplayer_android_original_episodes"
+        case isFolder = "is_folder"
+        case mediaServerDetail = "media_server_detail"
     }
 
     public init(from decoder: Decoder) throws {
@@ -130,6 +146,9 @@ public struct Vod: Codable, Identifiable, Sendable {
         self.vodPlayFrom = try container.decodeIfPresent(String.self, forKey: .vodPlayFrom) ?? ""
         self.vodPlayUrl = try container.decodeIfPresent(String.self, forKey: .vodPlayUrl) ?? ""
         self.siteKey = try container.decodeIfPresent(String.self, forKey: .siteKey) ?? ""
+        self.originalAndroidEpisodeParsing = try container.decodeIfPresent(Bool.self, forKey: .originalAndroidEpisodeParsing) ?? false
+        self.isFolder = try container.decodeIfPresent(Bool.self, forKey: .isFolder) ?? false
+        self.mediaServerDetail = try container.decodeIfPresent(MediaServerDetail.self, forKey: .mediaServerDetail)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -150,5 +169,8 @@ public struct Vod: Codable, Identifiable, Sendable {
         try container.encode(vodPlayFrom, forKey: .vodPlayFrom)
         try container.encode(vodPlayUrl, forKey: .vodPlayUrl)
         try container.encode(siteKey, forKey: .siteKey)
+        if originalAndroidEpisodeParsing { try container.encode(true, forKey: .originalAndroidEpisodeParsing) }
+        if isFolder { try container.encode(true, forKey: .isFolder) }
+        try container.encodeIfPresent(mediaServerDetail, forKey: .mediaServerDetail)
     }
 }

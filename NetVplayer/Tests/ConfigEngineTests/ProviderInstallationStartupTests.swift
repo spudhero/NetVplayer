@@ -120,6 +120,9 @@ private struct InstallationPreferencesFixture {
     init() throws {
         defaults = try #require(UserDefaults(suiteName: suite))
         preferences = UserPreferences(defaults: defaults, credentialStore: MemoryCredentialStore())
+        preferences.providerRuntimeInitialInstallCompleted = false
+        preferences.providerRuntimeInstalledVersions = [:]
+        preferences.providerRuntimePendingVersions = [:]
     }
 
     func makeState(

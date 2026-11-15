@@ -67,6 +67,23 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         for fragment in required:
             self.assertIn(fragment, self.workflow)
 
+    def test_release_selects_rebuilt_dolby_runtime_before_packaging(self) -> None:
+        prepare = self.workflow.split('- name: Verify prepared libmpv runtime', 1)[1].split(
+            '\n      - name:', 1
+        )[0]
+        self.assertIn('python3 script/build_dolby_runtime.py', prepare)
+        self.assertIn('--base-runtime "$runtime_bundle"', prepare)
+        self.assertIn('submodule update --init --recursive', prepare)
+        self.assertIn('brew install mpv meson ninja rustup', self.workflow)
+        self.assertIn('$(brew --prefix rustup)/bin:$PATH', prepare)
+        self.assertIn('rustup toolchain install 1.98.1 --profile minimal --target aarch64-apple-darwin', prepare)
+        self.assertLess(prepare.index('rustup toolchain install'), prepare.index('build_dolby_runtime.py'))
+        self.assertLess(prepare.index('--audit-only'), prepare.index('build_dolby_runtime.py'))
+        self.assertLess(prepare.index('build_dolby_runtime.py'),
+                        prepare.index('runtime_bundle="$dolby_root/build/runtime.app"'))
+        self.assertLess(prepare.index('runtime_bundle="$dolby_root/build/runtime.app"'),
+                        prepare.index('NETVPLAYER_LIBMPV_RUNTIME_BUNDLE='))
+
     def test_tmdb_credential_is_verified_online_and_in_the_extracted_app(self) -> None:
         preflight = self.workflow.split(
             '- name: Validate TMDB application credential and online metadata', 1
@@ -136,8 +153,10 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
             info = plistlib.load(handle)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertEqual(info["CFBundleShortVersionString"], "1.1.4")
-        self.assertEqual(info["CFBundleVersion"], "18")
+        self.assertEqual(info["CFBundleShortVersionString"], "2.0.0")
+        self.assertEqual(info["CFBundleVersion"], "49")
+        self.assertIn("**NetVplayer 2.0.0 (build 49)**", readme)
+        self.assertIn("| Development application | 2.0.0 (unreleased) |", readme)
         self.assertIn("NetVplayer 1.1.4", readme)
         self.assertIn("**NetVplayer 1.1.4 (build 18)**", readme)
         self.assertIn("| Stable application | 1.1.4 |", readme)

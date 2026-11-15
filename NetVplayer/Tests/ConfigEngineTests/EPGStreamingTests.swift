@@ -137,14 +137,14 @@ final class EPGStreamingTests: XCTestCase {
 private actor EPGGuideGate {
     var pending: [CheckedContinuation<EpgLoadResult, Never>] = []
     var count: Int { pending.count }
-    func load(_ name: String) async -> EpgLoadResult { await withCheckedContinuation { pending.append($0) } }
+    func load(_: String) async -> EpgLoadResult { await withCheckedContinuation { pending.append($0) } }
     func releaseAll() {
         let values = pending; pending = []
         values.forEach { $0.resume(returning: EpgLoadResult(data: EpgData(items: [EpgItem(title: "old")]), availability: .available)) }
     }
 }
 
-private final class EPGFixtureProtocol: URLProtocol, @unchecked Sendable {
+final class EPGFixtureProtocol: URLProtocol, @unchecked Sendable {
     struct Fixture: Sendable { var data: Data; var hold: Bool; var onStart: (@Sendable () -> Void)?; var count = 0 }
     private static let lock = NSLock()
     nonisolated(unsafe) private static var fixtures: [String: Fixture] = [:]

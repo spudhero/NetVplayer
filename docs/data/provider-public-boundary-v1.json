@@ -60,11 +60,21 @@
       "FongMi/"
     ],
     "history_requirement": "complete",
-    "private_provider_detection": "SpiderEngine Swift filename containing NativeProvider, except reviewed public adapters",
+    "private_provider_detection": "SpiderEngine Swift filename containing NativeProvider, except reviewed public adapters, plus reviewed private support files",
     "private_provider_staging_prefix": "private-providers/",
+    "private_provider_support_files": [
+      "NetVplayer/Sources/SpiderEngine/AiDjNativePlaybackProvider.swift",
+      "NetVplayer/Sources/SpiderEngine/DevelopmentAndroidSeedPageTransport.swift",
+      "NetVplayer/Sources/SpiderEngine/DevelopmentAndroidAliEpisodeAdapter.swift",
+      "NetVplayer/Sources/SpiderEngine/DevelopmentAndroidUCEpisodeAdapter.swift",
+      "NetVplayer/Sources/SpiderEngine/DevelopmentAndroidDoubaoPageAdapter.swift",
+      "NetVplayer/Sources/SpiderEngine/DevelopmentAndroidDoubaoSignalAdapter.swift",
+      "NetVplayer/Sources/SpiderEngine/DevelopmentAndroidSixVMagnetAdapter.swift"
+    ],
     "public_provider_sources": [
       "NetVplayer/Sources/SpiderEngine/NativeProviders.swift",
-      "NetVplayer/Sources/SpiderEngine/FileServiceNativeProvider.swift"
+      "NetVplayer/Sources/SpiderEngine/FileServiceNativeProvider.swift",
+      "NetVplayer/Sources/SpiderEngine/MediaServerNativeProvider.swift"
     ],
     "target": "clean-public-shell-repository"
   },

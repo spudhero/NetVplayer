@@ -43,7 +43,13 @@ final class FileHTTPRedirectDelegate: NSObject, URLSessionTaskDelegate, @uncheck
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let original = task.originalRequest?.url, let next = request.url,
               Self.sameOrigin(original, next) else { completionHandler(nil); return }
-        completionHandler(request)
+        var redirected = request
+        // CFNetwork drops explicit Basic credentials even for Apache's same-origin
+        // directory slash redirect. Restore them only after the origin check above.
+        if let authorization = task.originalRequest?.value(forHTTPHeaderField: "Authorization") {
+            redirected.setValue(authorization, forHTTPHeaderField: "Authorization")
+        }
+        completionHandler(redirected)
     }
     static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
         HTTPRedirectPolicy.sameOrigin(lhs, rhs)
@@ -51,6 +57,25 @@ final class FileHTTPRedirectDelegate: NSObject, URLSessionTaskDelegate, @uncheck
 }
 
 struct FileHTTPTransport: Sendable {
+    /// A 206 body belongs to the advertised range, not merely to the same URL.
+    /// Short, valid subranges can be retried by the disc reader; shifted or
+    /// truncated responses must never enter its shared byte cache.
+    static func validateRange(data: Data, response: HTTPURLResponse, requested: Range<Int64>) throws {
+        if response.statusCode == 200, requested.lowerBound == 0, data.count <= requested.count { return }
+        guard response.statusCode == 206,
+              let value = response.value(forHTTPHeaderField: "Content-Range"), value.hasPrefix("bytes ") else {
+            throw FileServiceError.protocolFailure("服务器不支持范围读取")
+        }
+        let parts = value.dropFirst(6).split(separator: "/", omittingEmptySubsequences: false)
+        let bounds = parts.first?.split(separator: "-", omittingEmptySubsequences: false) ?? []
+        guard parts.count == 2, bounds.count == 2,
+              let start = Int64(bounds[0]), let end = Int64(bounds[1]),
+              start == requested.lowerBound, end >= start, end < requested.upperBound,
+              Int64(data.count) == end - start + 1,
+              parts[1] == "*" || Int64(parts[1]).map({ $0 > end }) == true else {
+            throw FileServiceError.protocolFailure("服务器返回了不匹配的范围数据")
+        }
+    }
     let session: URLSession
     typealias RequestHandler = @Sendable (URL, String, [String: String], Data?) async throws -> (Data, HTTPURLResponse)
     let requestHandler: RequestHandler?

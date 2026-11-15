@@ -228,6 +228,27 @@ public actor ThunderNextEpisodeCache {
         _ spec: PlaySpec,
         while isStillNeeded: @escaping @Sendable () async -> Bool = { true }
     ) async -> PlaySpec? {
+        // This SDK exposes a whole-file task, not bounded Range windows. Admit
+        // only files that fit the common budget; larger files keep Range preload.
+        guard let size = Self.downloadSource(for: spec)?.expectedSize,
+              size > 0, size <= PlaybackTransferProfile.backgroundByteLimit else { return nil }
+        let session = spec.readSession ?? PlaybackReadSession()
+        let identity = PlaybackMediaIdentity.resolved(for: spec)
+            ?? .init(source: "sdk", account: "session", item: session.id.uuidString)
+        let owner = session.makeOwner(mediaIdentity: identity, purpose: .nextEpisode,
+            expiry: ProcessInfo.processInfo.systemUptime + 120)
+        defer { owner.cancel() }
+        return try? await owner.perform {
+            try await PlaybackBackgroundBudget.shared.withRead(owner: owner, bytes: size) {
+                await self.prepareOwned(spec, while: isStillNeeded)
+            }
+        }
+    }
+
+    private func prepareOwned(
+        _ spec: PlaySpec,
+        while isStillNeeded: @escaping @Sendable () async -> Bool
+    ) async -> PlaySpec? {
         guard !isPreparing, canAttemptAcceleration,
               let source = Self.downloadSource(for: spec) else {
             return nil

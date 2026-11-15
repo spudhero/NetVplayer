@@ -7,18 +7,6 @@ public enum CacheNamespace: String, CaseIterable, Sendable {
     case posters = "Posters-v2"
 }
 
-public struct DiskCacheSnapshot: Sendable, Equatable {
-    public var posterBytes: Int64
-    public var networkBytes: Int64
-
-    public init(posterBytes: Int64, networkBytes: Int64) {
-        self.posterBytes = max(0, posterBytes)
-        self.networkBytes = max(0, networkBytes)
-    }
-
-    public var totalBytes: Int64 { posterBytes + networkBytes }
-}
-
 public final class CacheManager: @unchecked Sendable {
 
     public static let shared = CacheManager()
@@ -45,15 +33,6 @@ public final class CacheManager: @unchecked Sendable {
 
     public func size(for namespace: CacheNamespace) -> Int64 {
         directorySize(directory(for: namespace))
-    }
-
-    public func diskSnapshot(networkBytes: Int64 = Int64(URLCache.shared.currentDiskUsage)) -> DiskCacheSnapshot {
-        DiskCacheSnapshot(posterBytes: size(for: .posters), networkBytes: networkBytes)
-    }
-
-    /// Returns managed, reproducible disk caches only. Feedback and user data are excluded.
-    public func cacheSize() -> Int64 {
-        CacheNamespace.allCases.reduce(0) { $0 + size(for: $1) }
     }
 
     public func clear(_ namespace: CacheNamespace) throws {

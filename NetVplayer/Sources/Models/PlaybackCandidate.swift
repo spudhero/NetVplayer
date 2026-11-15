@@ -26,6 +26,8 @@ public struct PlaybackCandidate: Codable, Identifiable, Sendable {
     public var status: PlaybackCandidateStatus
     public var unavailableReason: String
     public var url: String
+    /// A separate audio track belonging to this specific video candidate.
+    public var externalAudioURL: String?
     public var headers: [String: String]
     public var responseHeaders: [String: String]
     public var format: String
@@ -43,6 +45,7 @@ public struct PlaybackCandidate: Codable, Identifiable, Sendable {
         status: PlaybackCandidateStatus,
         unavailableReason: String = "",
         url: String = "",
+        externalAudioURL: String? = nil,
         headers: [String: String] = [:],
         responseHeaders: [String: String] = [:],
         format: String = "",
@@ -58,6 +61,7 @@ public struct PlaybackCandidate: Codable, Identifiable, Sendable {
         self.status = status
         self.unavailableReason = unavailableReason
         self.url = url
+        self.externalAudioURL = externalAudioURL
         self.headers = headers
         self.responseHeaders = responseHeaders
         self.format = format

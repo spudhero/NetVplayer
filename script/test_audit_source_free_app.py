@@ -36,12 +36,18 @@ class SourceFreeAppAuditTests(unittest.TestCase):
                 self.assertTrue(any("forbidden-binary-marker" in value for value in audit_bundle(self.app)))
 
     def test_rejects_bundled_source_lists_and_user_database(self) -> None:
-        for name in ("channels.m3u", "configs.json", "history.json", "sources.sqlite"):
+        for name in ("channels.m3u", "configs.json", "history.json", "sources.sqlite", "host.apk", "Provider.class", "provider.jar"):
             with self.subTest(name=name):
                 path = self.contents / "Resources" / name
                 path.write_text("fixture")
                 self.assertTrue(any("bundled-source-data" in value for value in audit_bundle(self.app)))
                 path.unlink()
+
+    def test_rejects_original_android_runtime_even_with_renamed_payloads(self) -> None:
+        directory = self.contents / "Resources/AndroidProviderRuntime/inputs"
+        directory.mkdir(parents=True)
+        (directory / "external-input.data").write_bytes(b"user supplied input")
+        self.assertTrue(any("bundled-provider-payload" in value for value in audit_bundle(self.app)))
 
     def test_rejects_disguised_configuration_and_provider_payload(self) -> None:
         (self.contents / "Resources/theme.json").write_text(json.dumps({

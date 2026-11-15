@@ -8,8 +8,6 @@ import Networking
 import DriveEngine
 
 public final class PikPakShareExtractor: SourceExtractorProtocol {
-    public static let accessTokenDefaultsKey = "pikpakAccessToken"
-    public static let refreshTokenDefaultsKey = "pikpakRefreshToken"
     public static let deviceIDDefaultsKey = "pikpakDeviceID"
 
     private let client: PikPakDriveClient
@@ -71,23 +69,34 @@ public final class PikPakShareExtractor: SourceExtractorProtocol {
     }
 
     public func fetchResult(url: String) async throws -> SourceFetchResult {
-        guard let credential = credentialProvider() else {
-            throw DriveEngineError.loginRequired(.pikpak)
+        try await DriveRequestRecovery.withBudget {
+            guard let credential = self.credentialProvider() else { throw DriveEngineError.loginRequired(.pikpak) }
+            return try await DriveRequestRecovery.withAccountOperation(credential: credential) {
+                try await self.resolveResult(url: url, credential: credential)
+            }
         }
+    }
+
+    private func resolveResult(url: String, credential: CloudCredential) async throws -> SourceFetchResult {
+        let auth = try await client.authenticate(credential)
+        // Reuse a token exchanged for a refresh-only credential across both
+        // directory reads and playback resolution in this same operation.
+        let validatedCredential = auth.updatedCredential ?? credential
 
         let link: CloudDriveLink
         if let reference = DriveFileReference.parse(url), reference.provider == .pikpak {
-            link = try await client.link(reference: reference, credential: credential)
+            link = try await client.link(reference: reference, credential: validatedCredential)
         } else {
             let share = try client.shareRequest(from: url)
-            let files = try await client.collectPlayableFiles(share: share, credential: credential)
+            let files = try await client.collectPlayableFiles(share: share, credential: validatedCredential)
             guard let selected = client.selectPlayableFile(from: files, share: share) else {
                 throw DriveEngineError.noPlayableFile(share.originalURL)
             }
-            link = try await client.link(file: selected.file, credential: credential)
+            link = try await client.link(file: selected.file, credential: validatedCredential)
         }
 
-        if let updated = link.updatedCredential {
+        try await DriveTransferContext.current.check()
+        if let updated = link.updatedCredential ?? auth.updatedCredential {
             credentialUpdateHandler(updated)
         }
         let headers = playbackHeaders(from: link.headers)

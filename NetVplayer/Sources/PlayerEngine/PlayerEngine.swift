@@ -138,31 +138,42 @@ public enum PlayerSubtitlePolicy {
         from tracks: [PlayerTrackInfo],
         selectedID: String?
     ) -> PlayerTrackInfo? {
-        let chineseTracks = tracks
-            .filter { $0.kind == .subtitle && !$0.isExternal && isChineseTrack($0) }
-            .sorted { trackSortKey($0.id) < trackSortKey($1.id) }
-        guard let preferred = chineseTracks.first else { return nil }
+        let candidates = tracks.enumerated()
+            .filter { $0.element.kind == .subtitle
+                && (languagePriority($0.element) < 2 || isUnlabelledExternalLyrics($0.element)) }
+            .sorted {
+                let lhs = (languagePriority($0.element), trackSortKey($0.element.id), $0.offset)
+                let rhs = (languagePriority($1.element), trackSortKey($1.element.id), $1.offset)
+                return lhs < rhs
+            }
+        guard let preferred = candidates.first?.element else { return nil }
         return preferred.id == selectedID ? nil : preferred
     }
 
-    private static func isChineseTrack(_ track: PlayerTrackInfo) -> Bool {
-        let value = [
-            track.id,
-            track.name,
-            track.language,
-            track.format
-        ]
-        .joined(separator: " ")
-        .lowercased()
-        return value.contains("chi")
-            || value.contains("zho")
-            || value.contains("zh")
-            || value.contains("cmn")
-            || value.contains("chs")
-            || value.contains("cht")
-            || value.contains("中文")
-            || value.contains("简")
-            || value.contains("繁")
+    private static func isUnlabelledExternalLyrics(_ track: PlayerTrackInfo) -> Bool {
+        // A provider may identify synchronized lyrics by role without declaring
+        // their language. Select that explicit attachment after Chinese/English
+        // subtitles, without inventing a language tag for the lyrics.
+        let language = track.language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let name = track.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return track.isExternal && (language.isEmpty || language == "und")
+            && ["歌词", "lyrics"].contains(name)
+    }
+
+    private static func languagePriority(_ track: PlayerTrackInfo) -> Int {
+        let language = track.language.lowercased().replacingOccurrences(of: "_", with: "-")
+        let code = String(language.split(separator: "-").first ?? "")
+        if ["zh", "chi", "zho", "cmn", "yue", "chs", "cht"].contains(code) { return 0 }
+        if ["en", "eng"].contains(code) { return 1 }
+        // Some servers omit the language tag but provide a descriptive title.
+        guard code.isEmpty || code == "und" else { return 2 }
+        let name = track.name.lowercased()
+        if name.contains("中文") || name.contains("简") || name.contains("繁") || name.contains("中英")
+            || name.range(of: #"\b(chinese|mandarin|cantonese|simplified|traditional|chs|cht|zh|zho|chi|cmn)\b"#,
+                          options: .regularExpression) != nil { return 0 }
+        if name.contains("英语") || name.contains("英文")
+            || name.range(of: #"\b(english|eng|en)\b"#, options: .regularExpression) != nil { return 1 }
+        return 2
     }
 
     private static func trackSortKey(_ id: String) -> Int {

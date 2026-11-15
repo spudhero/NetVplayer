@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "javaRelease": 21,
+  "sources": {
+    "android-presentation/src/main/java/com/netvplayer/provider/android/DesktopAndroidUI.java": "04471b35d6622187a8738aadd712bc06607a66d654f927b50061071323d6a460",
+    "android-presentation/src/main/java/com/netvplayer/provider/android/DesktopAndroidTheme.java": "defbf97c51f687f9f04c7950180548bd7cc7966bf49fe50678d011ee56170c37",
+    "android-presentation/src/main/java/com/netvplayer/provider/android/DesktopPlaybackContext.java": "e963d66862e4bf0cb6e9245d32694c026e886baf3359bd2c4e194fd2427c6218"
+  },
+  "compileDependencies": {
+    "android-framework.jar": "bad1813840bab0cd124afed7b7b84678151566829f277acd160074922d649a5d",
+    "android-adapter.jar": "7dbca0f25d1c33c09079fa4e34bdc3fc3e3c3426c1b36ef1203d15dbfcb5d2ea"
+  },
+  "archiveSHA256": "f2a290f3087b628d624268f8a6076a0b4488ea8c63640c60a27b5ba63cc31f11"
+}

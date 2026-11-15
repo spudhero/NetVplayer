@@ -10,6 +10,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from audit_provider_public_boundary import build_report
+from audit_provider_public_release import REQUIRED_FILES
 from export_provider_public_shell import (
     PublicExportError,
     SWIFT_TEST_COMMAND,
@@ -37,6 +38,17 @@ def git(repo: Path, *arguments: str) -> str:
     ).stdout
 
 
+def required_public_files(source: Path) -> None:
+    """A source export now has to satisfy the complete publication contract."""
+    for relative in REQUIRED_FILES:
+        if relative == "docs/data/provider-public-boundary-v1.json":
+            continue
+        path = source / relative
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture\n", encoding="utf-8")
+
+
 class ProviderPublicExportTests(unittest.TestCase):
     def test_swift_verification_disables_nested_sandbox_and_parallelism(self) -> None:
         self.assertEqual(
@@ -57,6 +69,18 @@ class ProviderPublicExportTests(unittest.TestCase):
             self.assertTrue(Path(environment["TMPDIR"]).is_dir())
 
     def test_exclusions_cover_private_sources_tests_and_reference_trees(self) -> None:
+        self.assertEqual(
+            exclusion_reason("NetVplayer/Sources/SpiderEngine/DevelopmentAndroidSeedPageTransport.swift"),
+            "site-specific-swift-provider",
+        )
+        self.assertEqual(
+            exclusion_reason("NetVplayer/Tests/ProviderRuntimeTests/DevelopmentAndroidSeedPageTransportTests.swift"),
+            "site-specific-swift-provider-test",
+        )
+        self.assertEqual(
+            exclusion_reason("NetVplayer/Tests/ConfigEngineTests/FyNativeProviderTests.swift"),
+            "site-specific-swift-provider-test",
+        )
         self.assertEqual(exclusion_reason("FongMi/app/Spider.java"), "forbidden-private-tree")
         self.assertEqual(exclusion_reason("private-providers/bili-js/provider.mjs"), "forbidden-private-tree")
         self.assertEqual(
@@ -357,6 +381,7 @@ class ProviderPublicExportTests(unittest.TestCase):
                 "NetVplayer/Sources/SpiderEngine/RemoteSiteContentProvider.swift": "public struct Remote {}\n",
                 "NetVplayer/Sources/SpiderEngine/BiliNativeProvider.swift": "private\n",
                 "NetVplayer/Sources/SpiderEngine/FileServiceNativeProvider.swift": "public adapter\n",
+                "NetVplayer/Sources/SpiderEngine/MediaServerNativeProvider.swift": "public media server adapter\n",
                 "NetVplayer/Tests/ConfigEngineTests/ExternalSourceCompatibilityTests.swift": "private test\n",
                 "FongMi/Spider.java": "reference\n",
                 "private-providers/example/provider.py": "private\n",
@@ -365,6 +390,7 @@ class ProviderPublicExportTests(unittest.TestCase):
                 path = source / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
+            required_public_files(source)
             git(source, "init", "--initial-branch=main")
             git(source, "add", "--", ".")
             git(source, "commit", "-m", "fixture")
@@ -392,6 +418,8 @@ class ProviderPublicExportTests(unittest.TestCase):
             self.assertFalse((output / "private-providers").exists())
             self.assertFalse((output / "NetVplayer/Sources/SpiderEngine/BiliNativeProvider.swift").exists())
             self.assertTrue((output / "NetVplayer/Sources/SpiderEngine/FileServiceNativeProvider.swift").is_file())
+            self.assertEqual((output / "NetVplayer/Sources/SpiderEngine/MediaServerNativeProvider.swift").read_text(),
+                             "public media server adapter\n")
             self.assertTrue(build_report(output)["summary"]["release_ready"])
 
     def test_export_rejects_dirty_source_unless_preview_is_explicit(self) -> None:
@@ -402,6 +430,7 @@ class ProviderPublicExportTests(unittest.TestCase):
             source.mkdir()
             readme = source / "README.md"
             readme.write_text("committed\n", encoding="utf-8")
+            required_public_files(source)
             git(source, "init", "--initial-branch=main")
             git(source, "add", "--", ".")
             git(source, "commit", "-m", "fixture")
@@ -412,6 +441,30 @@ class ProviderPublicExportTests(unittest.TestCase):
 
             result = export_public_shell(source, output, allow_dirty=True)
             self.assertTrue(result["ok"])
+
+    def test_experiments_and_personal_agent_rules_do_not_enter_export(self) -> None:
+        for path in ("AGENTS.md", "experiments/android-provider-runtime/EXECUTION_QUEUE.md",
+                     "experiments/android-provider-runtime/compat/java/Provider.java"):
+            self.assertEqual(exclusion_reason(path), "internal-publication-artifact")
+        self.assertIsNone(exclusion_reason("android-presentation/src/main/java/Renderer.java"))
+        self.assertIsNone(exclusion_reason("script/fixtures/web-transport/web_replay_fixture.py"))
+
+    def test_complete_export_gate_rejects_extra_jar_secret_or_missing_link(self) -> None:
+        for relative, content, reason in (
+            ("payload.jar", "unreviewed archive", "forbidden-executable-binaries"),
+            ("credential.txt", "gh" + "p_" + "A" * 25, "potential-secrets"),
+            ("README.md", "[missing](internal.md)", "missing-public-document-targets"),
+        ):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "source"
+                source.mkdir()
+                required_public_files(source)
+                (source / relative).write_text(content)
+                git(source, "init", "--initial-branch=main")
+                git(source, "add", "--", ".")
+                git(source, "commit", "-m", "unsafe export fixture")
+                with self.assertRaisesRegex(PublicExportError, reason):
+                    export_public_shell(source, Path(directory) / "output")
 
 
 if __name__ == "__main__":

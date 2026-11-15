@@ -37,13 +37,11 @@ public enum QuarkShareExtractorError: Error, LocalizedError, Sendable {
 }
 
 public final class QuarkShareExtractor: SourceExtractorProtocol {
-    public static let cookieDefaultsKey = "quarkCookie"
-
     private let httpClient: HTTPClient
     private let client: QuarkDriveClient
     private let cookieDriver: QuarkCookieDriver
     private let cookieProvider: @Sendable () -> String?
-    private let cookieUpdateHandler: @Sendable (String) -> Void
+    private let cookieUpdateHandler: (@Sendable (String) -> Void)?
     private let allowPreviewFallback: Bool
 
     public init(
@@ -55,9 +53,7 @@ public final class QuarkShareExtractor: SourceExtractorProtocol {
             }
             return UserPreferences.shared.quarkCookie
         },
-        cookieUpdateHandler: @escaping @Sendable (String) -> Void = {
-            UserPreferences.shared.quarkCookie = $0
-        },
+        cookieUpdateHandler: (@Sendable (String) -> Void)? = nil,
         allowPreviewFallback: Bool = false,
         pendingPlayPolls: Int = 15,
         pendingPlayIntervalMilliseconds: Int = 2_000
@@ -102,20 +98,25 @@ public final class QuarkShareExtractor: SourceExtractorProtocol {
         guard let cookie = Self.normalizedCookie(cookieProvider()) else {
             throw DriveEngineError.loginRequired(.quark)
         }
+        let refresh = cookieUpdateHandler == nil
+            ? CloudDirectoryCredentialRefresh(original: .cookie(provider: .quark, value: cookie)) : nil
 
         do {
             let link = try await cookieDriver.link(
                 rawURL: url,
                 credential: .cookie(provider: .quark, value: cookie)
             )
+            try await DriveTransferContext.current.check()
             if let updatedCookie = link.updatedCredential?.secret,
                updatedCookie != cookie,
                !updatedCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                cookieUpdateHandler(updatedCookie)
+                if let cookieUpdateHandler { cookieUpdateHandler(updatedCookie) }
+                else { refresh?.save(.cookie(provider: .quark, value: updatedCookie)) }
             }
             return try await streamFetchResult(for: link)
         } catch {
-            let recovered = try await recoverFromShareDownloadLimitIfNeeded(error: error, rawURL: url, cookie: cookie)
+            if DriveServiceFailure.stopsRecovery(error) { throw error }
+            let recovered = try await recoverFromShareDownloadLimitIfNeeded(error: error, rawURL: url, cookie: cookie, refresh: refresh)
             if let recovered {
                 return try await streamFetchResult(for: recovered)
             }
@@ -124,6 +125,9 @@ public final class QuarkShareExtractor: SourceExtractorProtocol {
                case .loginRequired = driveError {
                 throw driveError
             }
+            if error is CancellationError { throw error }
+            if case DriveEngineError.transferConfirmationPending = error { throw error }
+            if case DriveEngineError.officialPlayURLPending = error { throw error }
             let converted = Self.convert(error)
             if case .loginRequired = converted { throw converted }
             if allowPreviewFallback {
@@ -144,7 +148,8 @@ public final class QuarkShareExtractor: SourceExtractorProtocol {
         }
     }
 
-    private func recoverFromShareDownloadLimitIfNeeded(error: Error, rawURL: String, cookie: String) async throws -> CloudDriveLink? {
+    private func recoverFromShareDownloadLimitIfNeeded(error: Error, rawURL: String, cookie: String,
+                                                     refresh: CloudDirectoryCredentialRefresh?) async throws -> CloudDriveLink? {
         guard Self.isShareDownloadLimit(error) else {
             return nil
         }
@@ -152,10 +157,12 @@ public final class QuarkShareExtractor: SourceExtractorProtocol {
             rawURL: rawURL,
             credential: .cookie(provider: .quark, value: cookie)
         )
+        try await DriveTransferContext.current.check()
         if let updatedCookie = link.updatedCredential?.secret,
            updatedCookie != cookie,
            !updatedCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            cookieUpdateHandler(updatedCookie)
+            if let cookieUpdateHandler { cookieUpdateHandler(updatedCookie) }
+            else { refresh?.save(.cookie(provider: .quark, value: updatedCookie)) }
         }
         return link
     }
@@ -223,6 +230,8 @@ extension QuarkShareExtractor {
             return .noDownloadURL(fileName)
         case .officialPlayURLPending(let fileName):
             return .officialPlayURLPending(fileName)
+        case .transferConfirmationPending:
+            return .api(statusCode: -1, code: nil, message: driveError.localizedDescription)
         case .unsupported(let message):
             return .api(statusCode: -1, code: nil, message: message)
         case .api(_, let statusCode, let code, let message):

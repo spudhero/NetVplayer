@@ -51,7 +51,7 @@ struct EpisodeGroupSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
             } label: {
@@ -81,7 +81,8 @@ struct EpisodeGroupSection<Content: View>: View {
                             .foregroundStyle(muted)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -89,9 +90,8 @@ struct EpisodeGroupSection<Content: View>: View {
             .accessibilityValue(isExpanded ? L10n.text("已展开") : L10n.text("已折叠"))
             .help(isExpanded ? L10n.text("折叠资源组") : L10n.text("展开资源组"))
 
-            if isExpanded { content }
+            if isExpanded { content.padding(.horizontal, 12).padding(.bottom, 12) }
         }
-        .padding(12)
         .background(surface.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)

@@ -2,6 +2,7 @@
 // 播放器视图
 
 import SwiftUI
+import SubtitleEngine
 import PlayerEngine
 import AppKit
 import Models
@@ -60,6 +61,7 @@ enum PlayerHUDControlSlot: Equatable {
     case speed
     case volume
     case settings
+    case floatingWindow
     case fullscreen
 }
 
@@ -239,6 +241,7 @@ enum PlayerHUDVisualPolicy {
     static let iconRowHeight: CGFloat = 38
     static let controlLabelFontSize: CGFloat = 13
     static let controlDetailFontSize: CGFloat = 11
+    static let controlRowSpacing: CGFloat = 6
     static let controlLabelHeight: CGFloat = 16
     static let controlDetailHeight: CGFloat = 14
     static let menuControlWidth: CGFloat = 70
@@ -258,7 +261,7 @@ enum PlayerHUDVisualPolicy {
     static let skipIconSize: CGFloat = 27
     static let skipIconStrokeWidth: CGFloat = 1.5
     static let skipIconTextSize: CGFloat = 12
-    static let skipButtonHeight: CGFloat = 62
+    static let skipButtonHeight = iconControlHeight
     static let statusBadgeBottomOffset: CGFloat = 252
     static let statusBadgeFontSize: CGFloat = 14
     static let statusBadgeMinHeight: CGFloat = 38
@@ -411,10 +414,11 @@ enum PlayerHUDVisualPolicy {
         )
     }
 
-    static let episodeColumnMinimumWidth: CGFloat = 210
-    static let jumpColumnMinimumWidth: CGFloat = 136
-    static let skipColumnMinimumWidth: CGFloat = 144
-    static let featureColumnMinimumWidth: CGFloat = 520
+    static let episodeColumnMinimumWidth = iconControlWidth * 3 + controlClusterGap * 2
+    static let jumpColumnMinimumWidth = iconControlWidth * 2 + controlClusterGap
+    static let skipColumnMinimumWidth = skipChipWidth * 2 + skipClusterGap
+    static let featureColumnMinimumWidth = menuControlWidth * CGFloat(unifiedFeatureControlSlots.count)
+        + featureClusterGap * CGFloat(unifiedFeatureControlSlots.count - 1)
     static let episodeColumnGrow: CGFloat = 0.48
     static let jumpColumnGrow: CGFloat = 0.32
     static let skipColumnGrow: CGFloat = 0.34
@@ -434,6 +438,7 @@ enum PlayerHUDVisualPolicy {
         .speed,
         .volume,
         .settings,
+        .floatingWindow,
         .fullscreen,
     ]
 
@@ -444,6 +449,7 @@ enum PlayerHUDVisualPolicy {
         .speed,
         .volume,
         .settings,
+        .floatingWindow,
         .fullscreen,
     ]
 
@@ -456,16 +462,17 @@ enum PlayerHUDVisualPolicy {
 
     static let cyclicControlSlots: [PlayerHUDControlSlot] = []
 
-    static let skipAnchorWidth: CGFloat = 144
+    static let skipAnchorWidth = skipColumnMinimumWidth
     static let skipChipWidth: CGFloat = 66
     static let functionDividerHeight: CGFloat = 82
     static let statusBadgeGapAboveBottomHUD: CGFloat = statusBadgeBottomOffset - bottomMinHeight - bottomBottomInset
 
-    static func controlGridColumns(availableWidth: CGFloat) -> ControlGridColumns {
+    static func controlGridColumns(availableWidth: CGFloat, includesChapters: Bool = false) -> ControlGridColumns {
+        let featureMinimum = featureColumnMinimumWidth + (includesChapters ? menuControlWidth + featureClusterGap : 0)
         let minimumContentWidth = episodeColumnMinimumWidth
             + jumpColumnMinimumWidth
             + skipColumnMinimumWidth
-            + featureColumnMinimumWidth
+            + featureMinimum
         let fixedChromeWidth = controlGridDividerWidth * 3 + controlGridGap * 6
         let extraWidth = max(0, availableWidth - fixedChromeWidth - minimumContentWidth)
         let growTotal = episodeColumnGrow + jumpColumnGrow + skipColumnGrow + featureColumnGrow
@@ -478,7 +485,7 @@ enum PlayerHUDVisualPolicy {
             episode: grown(episodeColumnMinimumWidth, episodeColumnGrow),
             jump: grown(jumpColumnMinimumWidth, jumpColumnGrow),
             skip: grown(skipColumnMinimumWidth, skipColumnGrow),
-            feature: grown(featureColumnMinimumWidth, featureColumnGrow)
+            feature: grown(featureMinimum, featureColumnGrow)
         )
     }
 
@@ -746,6 +753,7 @@ struct PlayerView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var playerState: PlayerState
     @ObservedObject var windowContext: PlayerWindowContext
+    @ObservedObject var pictureInPicture: PlayerPictureInPicture
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
@@ -775,8 +783,14 @@ struct PlayerView: View {
     @State private var skipEditorError: String?
     @State private var isVolumePopoverPresented: Bool = false
     @State private var isOnlineSubtitlePresented = false
+    @State private var isSubtitleTranslationPresented = false
+    @State private var isSubtitleRecognitionPresented = false
+    @State private var openTranslationAfterRecognition = false
+    @StateObject private var subtitleRecognition = SubtitleRecognitionModel()
+    @StateObject private var subtitleTranslation = SubtitleTranslationModel()
     @State private var isSubtitlePopoverPresented: Bool = false
     @State private var isAudioPopoverPresented: Bool = false
+    @State private var formatPopoverSelection: PlaybackFormatStatus.Kind?
     @State private var isSpeedPopoverPresented = false
     @State private var isAspectPopoverPresented = false
     @State private var isChapterPanelPresented = false
@@ -786,9 +800,6 @@ struct PlayerView: View {
     @State private var settingsCategory: PlayerSettingsCategory = .playback
 
     private let visualRegressionConfiguration: PlayerVisualRegressionConfiguration?
-
-    private let hudIconDiameter: CGFloat = PlayerHUDVisualPolicy.iconRowHeight
-    private let hudPrimaryDiameter: CGFloat = 64
 
     private var currentVodSkipIdentity: VodSkipSettingsIdentity? {
         if let vod = appState.detailVod,
@@ -806,10 +817,12 @@ struct PlayerView: View {
     init(
         playerState: PlayerState,
         windowContext: PlayerWindowContext,
-        visualRegressionConfiguration: PlayerVisualRegressionConfiguration? = nil
+        visualRegressionConfiguration: PlayerVisualRegressionConfiguration? = nil,
+        pictureInPicture: PlayerPictureInPicture = .vod
     ) {
         _playerState = ObservedObject(wrappedValue: playerState)
         _windowContext = ObservedObject(wrappedValue: windowContext)
+        _pictureInPicture = ObservedObject(wrappedValue: pictureInPicture)
         self.visualRegressionConfiguration = visualRegressionConfiguration
 
         let state = visualRegressionConfiguration?.state
@@ -863,7 +876,14 @@ struct PlayerView: View {
 
     var body: some View {
         popoverLifecycleContent
+        .onChange(of: playerState.videoDisplayAspectRatio, initial: true) { _, ratio in
+            windowContext.updateVideoAspectRatio(ratio)
+        }
+        .onChange(of: windowContext.isFloatingWindow, initial: true) { _, enabled in
+            pictureInPicture.engine.setFloatingWindowCropping(enabled)
+        }
         .onChange(of: timelineMediaID) { _, _ in
+            formatPopoverSelection = nil
             isChapterPanelPresented = false
             hoveredChapterID = nil
             chapterPreviewStore.reset(mediaID: timelineMediaID)
@@ -900,15 +920,44 @@ struct PlayerView: View {
                 appState.attachSubtitleForCurrentPlayback(sub, slot: slot)
             }
         }
+        .sheet(isPresented: $isSubtitleTranslationPresented) {
+            SubtitleTranslationView(model: subtitleTranslation, player: playerState) { sub in
+                appState.attachSubtitleForCurrentPlayback(sub, slot: .primary)
+            }
+        }
+        .sheet(isPresented: $isSubtitleRecognitionPresented, onDismiss: {
+            let requested = openTranslationAfterRecognition
+            openTranslationAfterRecognition = false
+            if requested, subtitleTranslation.document != nil,
+               subtitleTranslation.owns(playerState.currentSpec, playbackID: playerState.chapterOwnerID) {
+                isSubtitleTranslationPresented = true
+            }
+        }) {
+            SubtitleRecognitionView(model: subtitleRecognition, player: playerState, useDocument: useRecognizedSubtitle)
+        }
+        .overlay(alignment: .top) {
+            translatedSubtitleOverlay
+        }
+        .background {
+            if #available(macOS 15.0, *) { AppleSubtitleTranslationHost(model: subtitleTranslation) }
+        }
+        .onChange(of: playerState.currentSpec.map(SubtitlePlaybackOwner.init), initial: true) { _, _ in updateSubtitleWork() }
+        .onChange(of: playerState.chapterOwnerID) { _, _ in updateSubtitleWork() }
+        .onChange(of: playerState.position) { _, _ in updateSubtitleWork() }
+        .onChange(of: playerState.isSeeking) { _, _ in updateSubtitleWork() }
+        .onChange(of: playerState.speed) { _, _ in updateSubtitleWork() }
+        .onChange(of: playerState.isPlaying) { _, _ in updateSubtitleWork() }
+        .onChange(of: isSeeking) { _, value in updateSubtitleWork(pendingSeek: value) }
         .preferredColorScheme(.dark)
         .background {
             PlayerShortcutMonitor(
-                isPlaybackControlEnabled: !isSkipEditorPresented && !isOnlineSubtitlePresented,
+                isPlaybackControlEnabled: !isSkipEditorPresented && !isOnlineSubtitlePresented && !isSubtitleTranslationPresented && !isSubtitleRecognitionPresented,
                 isScrollVolumeEnabled: overlayPanel == .none
                     && !isSkipEditorPresented
                     && !isVolumePopoverPresented
                     && !isSubtitlePopoverPresented
                     && !isAudioPopoverPresented
+                    && formatPopoverSelection == nil
                     && !isSpeedPopoverPresented
                     && !isAspectPopoverPresented
                     && !isChapterPanelPresented
@@ -916,6 +965,31 @@ struct PlayerView: View {
                 handleKeyboardShortcut(command)
             }
             .frame(width: 0, height: 0)
+        }
+    }
+
+    private func updateSubtitleWork(pendingSeek: Bool = false) {
+        subtitleTranslation.update(playerState, pendingSeek: pendingSeek)
+        subtitleRecognition.update(playerState, pendingSeek: pendingSeek)
+    }
+
+    private func useRecognizedSubtitle(_ document: SubtitleDocument, language: String) {
+        guard let data = try? SubtitleExporter.render(document: document, format: .srt) else { return }
+        subtitleTranslation.update(playerState)
+        subtitleTranslation.sourceLanguage = language == "zh-CN" ? "zh-Hans" : language == "zh-TW" ? "zh-Hant" : String(language.prefix(2))
+        subtitleTranslation.load(data: data, filename: "recognized.srt")
+        if let sub = subtitleTranslation.original { appState.attachSubtitleForCurrentPlayback(sub, slot: .primary) }
+        openTranslationAfterRecognition = true
+    }
+
+    @ViewBuilder
+    private var translatedSubtitleOverlay: some View {
+        if subtitleTranslation.owns(playerState.currentSpec, playbackID: playerState.chapterOwnerID),
+           let text = subtitleTranslation.session.translation(at: playerState.position - playerState.subtitleDelaySeconds) {
+            Text(text).font(.system(size: CGFloat(subtitleFontSize))).multilineTextAlignment(.center)
+                .foregroundStyle(.white).shadow(color: .black, radius: 2)
+                .padding(8).background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
+                .padding(.horizontal, 24).padding(.top, 56).allowsHitTesting(false)
         }
     }
 
@@ -927,8 +1001,16 @@ struct PlayerView: View {
         ZStack {
             videoLayer
 
+            PlaybackVideoCompatibilityView(message: playerState.videoCompatibilityMessage ?? playerState.audioOutputMessage)
+                .zIndex(1.1)
+
             videoInteractionLayer
+                .allowsHitTesting(!pictureInPicture.isPresented)
                 .zIndex(0.5)
+
+            // Keep the return action above the full-canvas video gestures.
+            PictureInPicturePlaceholder(presentation: pictureInPicture, compact: usesCompactControls)
+                .zIndex(1.2)
 
             if isChapterPanelPresented, !usesCompactControls {
                 Color.black.opacity(0.001).contentShape(Rectangle())
@@ -990,6 +1072,22 @@ struct PlayerView: View {
         )
         .zIndex(PlayerOverlayLayerPolicy.playbackActivity)
 
+        if visualRegressionConfiguration == nil {
+            PlayerReferenceCanvas(availableSize: availableSize, verticalAnchor: .top) {
+                VStack {
+                    HStack {
+                        Spacer()
+                        PlaybackFormatNotice(summary: playbackFormatSummary)
+                    }
+                    .padding(.top, PlayerHUDVisualPolicy.topBarHeight + 20)
+                    .padding(.trailing, 28)
+                    Spacer()
+                }
+            }
+            .allowsHitTesting(false)
+            .zIndex(4.5)
+        }
+
         if isPrimaryHUDVisible {
             topHUDBackdrop(availableSize: availableSize)
                 .transition(.opacity)
@@ -1047,11 +1145,18 @@ struct PlayerView: View {
             isPointerInsidePlayer = false
             restorePlayerCursor()
             chapterPreviewStore.reset()
-            appState.cleanupDrivePlaybackIfNeeded(spec: appState.playerState.currentSpec)
+            subtitleTranslation.cancel()
+            subtitleRecognition.cancel()
+            if !pictureInPicture.isPresented {
+                appState.cleanupDrivePlaybackIfNeeded(spec: appState.playerState.currentSpec)
+            }
         }
         .onChange(of: currentVodSkipIdentity) { _, _ in
             guard visualRegressionConfiguration == nil else { return }
             syncVodSkipState()
+        }
+        .onChange(of: appState.mediaServerSnapshot()) { _, _ in
+            appState.reportMediaServerPlayback(spec: appState.playerState.currentSpec)
         }
         .onChange(of: appState.playerState.isPlaying) { _, isPlaying in
             if isPlaying {
@@ -1063,6 +1168,7 @@ struct PlayerView: View {
             }
         }
         .onChange(of: overlayPanel) { _, panel in
+            formatPopoverSelection = nil
             showHUD = true
             isVolumePopoverPresented = false
             isSubtitlePopoverPresented = false
@@ -1089,6 +1195,20 @@ struct PlayerView: View {
 
     private var popoverLifecycleContent: some View {
         playbackLifecycleContent
+        .onChange(of: formatPopoverSelection) { _, selection in
+            updateTrackPopoverTimer(isPresented: selection != nil)
+            if selection != nil {
+                isVolumePopoverPresented = false
+                isSubtitlePopoverPresented = false
+                isAudioPopoverPresented = false
+                isSpeedPopoverPresented = false
+                isAspectPopoverPresented = false
+                isChapterPanelPresented = false
+            }
+        }
+        .onChange(of: playerState.selectedAudioTrackID) { _, _ in
+            formatPopoverSelection = nil
+        }
         .onChange(of: isSubtitlePopoverPresented) { _, isPresented in
             updateTrackPopoverTimer(isPresented: isPresented)
         }
@@ -1104,6 +1224,7 @@ struct PlayerView: View {
         .onChange(of: isChapterPanelPresented) { _, isPresented in
             updateTrackPopoverTimer(isPresented: isPresented)
             if isPresented {
+                formatPopoverSelection = nil
                 isVolumePopoverPresented = false
                 isSubtitlePopoverPresented = false
                 isAudioPopoverPresented = false
@@ -1124,6 +1245,7 @@ struct PlayerView: View {
 
     private func handleCompactModeChange(_ isCompact: Bool) {
         if isCompact {
+            formatPopoverSelection = nil
             hideHUDTimer?.invalidate()
             overlayPanel = .none
             isSkipEditorPresented = false
@@ -1188,7 +1310,7 @@ struct PlayerView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
             } else {
-                MPVVideoView(engine: MPVPlayerEngine.vod, surface: .vod)
+                MPVVideoView(presentation: pictureInPicture)
                     .id(videoSurfaceRevision)
             }
             if shouldRenderDanmaku {
@@ -1280,6 +1402,14 @@ struct PlayerView: View {
                 statusBadges
                     .padding(.horizontal, PlayerHUDVisualPolicy.bottomHorizontalInset + 6)
                     .padding(.bottom, max(0, PlayerHUDVisualPolicy.statusBadgeGapAboveBottomHUD))
+            }
+            if !playbackFormatSummary.items.isEmpty {
+                HStack {
+                    PlaybackFormatStatusBar(summary: playbackFormatSummary, playerState: playerState, selection: $formatPopoverSelection)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, PlayerHUDVisualPolicy.bottomHorizontalInset + 6)
+                .padding(.bottom, 12)
             }
             bottomHUD
                 .padding(.horizontal, PlayerHUDVisualPolicy.bottomHorizontalInset)
@@ -1564,7 +1694,7 @@ struct PlayerView: View {
 
     private var transportControlsRow: some View {
         GeometryReader { proxy in
-            let columns = PlayerHUDVisualPolicy.controlGridColumns(availableWidth: proxy.size.width)
+            let columns = PlayerHUDVisualPolicy.controlGridColumns(availableWidth: proxy.size.width, includesChapters: !playerState.chapters.isEmpty)
             HStack(alignment: .top, spacing: PlayerHUDVisualPolicy.controlGridGap) {
                 episodeControlsCluster
                     .frame(width: columns.episode, height: PlayerHUDVisualPolicy.menuControlHeight, alignment: .top)
@@ -1665,6 +1795,7 @@ struct PlayerView: View {
             featureControlButton(title: L10n.text("设置"), glyph: .settings, isActive: overlayPanel == .settings) {
                 toggleOverlayPanel(.settings)
             }
+            PlayerFloatingWindowButton(windowContext: windowContext, onInteraction: showHUDTemporarily)
             featureControlButton(title: L10n.text("全屏"), glyph: .fullscreen) {
                 toggleFullScreen()
             }
@@ -1698,72 +1829,41 @@ struct PlayerView: View {
     }
 
     private var volumeControl: some View {
-        ZStack(alignment: .top) {
-            Button {
-                isChapterPanelPresented = false
-                isVolumePopoverPresented.toggle()
-                showHUDTemporarily()
-            } label: {
-                featureControlLabel(
-                    title: (appState.playerState.isMuted || appState.playerState.volume <= 0) ? L10n.text("静音") : L10n.text("音量"),
-                    glyph: .volume,
-                    detail: volumePercentText,
-                    isActive: isVolumePopoverPresented || (appState.playerState.isMuted || appState.playerState.volume <= 0)
-                )
-            }
-            .buttonStyle(.plain)
-            .frame(width: PlayerHUDVisualPolicy.menuControlWidth, height: PlayerHUDVisualPolicy.menuControlHeight)
-            .contentShape(Rectangle())
-            .help(L10n.text("音量，点击展开调节条，双击静音"))
-            .simultaneousGesture(TapGesture(count: 2).onEnded {
-                toggleMute()
-            })
-
-            if isVolumePopoverPresented {
-                verticalVolumePopover
-                    .offset(y: -154)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
-                    .zIndex(3)
-            }
+        let control = playerState.volumeControl
+        return Button(action: presentVolumeControl) {
+            featureControlLabel(
+                title: control == .receiver ? L10n.text("音箱调音")
+                    : ((control == .player && (playerState.isMuted || playerState.volume <= 0))
+                        ? L10n.text("静音") : L10n.text("音量")),
+                glyph: .volume,
+                detail: control == .receiver ? L10n.text("原码直通")
+                    : (control == .checking ? L10n.text("确认中") : volumePercentText),
+                isActive: isVolumePopoverPresented || (control == .player && (playerState.isMuted || playerState.volume <= 0))
+            )
         }
-        .frame(width: PlayerHUDVisualPolicy.menuControlWidth, height: PlayerHUDVisualPolicy.menuControlHeight, alignment: .top)
+        .buttonStyle(.plain)
+        .frame(width: PlayerHUDVisualPolicy.menuControlWidth, height: PlayerHUDVisualPolicy.menuControlHeight)
+        .contentShape(Rectangle())
+        .help(L10n.text(control == .receiver ? "原码直通时，请用电视或音箱调节音量。" : "音量，点击展开调节条，双击静音"))
+        .highPriorityGesture(TapGesture(count: 2).exclusively(before: TapGesture(count: 1)).onEnded { gesture in
+            switch gesture {
+            case .first: toggleMute()
+            case .second: presentVolumeControl()
+            }
+        })
+        .popover(isPresented: $isVolumePopoverPresented, arrowEdge: .bottom) {
+            PlaybackVolumePopover(playerState: playerState, setVolume: setVolume,
+                toggleMute: { toggleMute(dismissPopover: false) },
+                usePlayerVolume: { MPVPlayerEngine.vod.requestPlayerVolumeControl() })
+                .environment(\.appThemePalette, AppThemeCatalog.palette(for: .legacyDeepSpace))
+        }
     }
 
-    private var verticalVolumePopover: some View {
-        ZStack {
-            Slider(
-                value: Binding(
-                    get: { appState.playerState.volume },
-                    set: { setVolume($0) }
-                ),
-                in: 0...1.0
-            )
-            .tint(lavender)
-            .frame(width: 106)
-            .rotationEffect(.degrees(-90))
-        }
-        .frame(width: 52, height: 146)
-        .background(glassPanel(cornerRadius: 14, strokeOpacity: 0.26))
-        .overlay(alignment: .bottom) {
-            Diamond()
-                .fill(.ultraThinMaterial)
-                .opacity(PlayerHUDVisualPolicy.glassPanelMaterialOpacity)
-                .frame(width: 10, height: 10)
-                .rotationEffect(.degrees(45))
-                .offset(y: 5)
-                .overlay {
-                    Diamond()
-                        .fill(PlayerHUDPalette.surface.opacity(PlayerHUDVisualPolicy.glassPanelSurfaceOpacity))
-                        .rotationEffect(.degrees(45))
-                        .offset(y: 5)
-                }
-                .overlay {
-                    Diamond()
-                        .stroke(Color.white.opacity(0.13), lineWidth: 1)
-                        .rotationEffect(.degrees(45))
-                        .offset(y: 5)
-                }
-        }
+    private func presentVolumeControl() {
+        isChapterPanelPresented = false
+        formatPopoverSelection = nil
+        isVolumePopoverPresented.toggle()
+        showHUDTemporarily()
     }
 
     private var hudDivider: some View {
@@ -1781,14 +1881,8 @@ struct PlayerView: View {
             if let text = appState.playerState.subtitleStatus {
                 playbackBadge(text, icon: "captions.bubble")
             }
-            if let text = audioStatusText {
-                playbackBadge(text, icon: "waveform")
-            }
             if let text = appState.playerState.drmStatus {
                 playbackBadge(text, icon: "lock.shield")
-            }
-            if let text = appState.playerState.danmakuStatus {
-                playbackBadge(text, icon: "text.bubble")
             }
             Spacer(minLength: 0)
         }
@@ -1841,6 +1935,16 @@ struct PlayerView: View {
                     name: track?.displayName ?? L10n.text("关闭字幕"), format: track?.format ?? "")
             }
             Divider()
+            Button {
+                isSubtitlePopoverPresented = false
+                isSubtitleTranslationPresented = true
+            } label: { Label(L10n.text("文本字幕翻译"), systemImage: "translate") }
+            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(lavender)
+            Button {
+                isSubtitlePopoverPresented = false
+                isSubtitleRecognitionPresented = true
+            } label: { Label(L10n.text("图片字幕／音频识别"), systemImage: "text.viewfinder") }
+            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(lavender)
             HStack(spacing: 12) {
                 Button {
                     isSubtitlePopoverPresented = false
@@ -2044,6 +2148,25 @@ struct PlayerView: View {
             ))
             .toggleStyle(PlayerDrawerSwitchToggleStyle())
 
+            if let status = playerState.danmakuStatus {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(PlayerHUDPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("player.danmaku.status")
+            }
+
+            if let tracks = playerState.currentSpec?.providerDanmaku, !tracks.isEmpty {
+                ProviderDanmakuTrackPicker(tracks: tracks, selection: appState.selectedProviderDanmakuIndex,
+                    enabled: danmakuEnabled) { index in
+                    Task { await appState.selectProviderDanmakuTrack(at: index) }
+                }
+                Button(L10n.text("重试")) {
+                    Task { await appState.selectProviderDanmakuTrack(at: appState.selectedProviderDanmakuIndex ?? 0) }
+                }
+                .disabled(!danmakuEnabled)
+            }
+
             settingInlineActionRow(title: L10n.text("手动搜索当前标题"), actionTitle: L10n.text("搜索"), disabled: !danmakuEnabled) {
                 Task {
                     await appState.manualSearchDanmakuForCurrentPlayback()
@@ -2085,6 +2208,10 @@ struct PlayerView: View {
 
     @ViewBuilder
     private var advancedSettingsContent: some View {
+        PlaybackInformationView(playerState: playerState)
+            .environment(\.appThemePalette, AppThemeCatalog.palette(for: .legacyDeepSpace))
+            .preferredColorScheme(.dark)
+
         if !playerState.mpvOptionDiagnostics.isEmpty {
             MPVOptionDiagnosticsMenu(diagnostics: playerState.mpvOptionDiagnostics)
         }
@@ -2566,14 +2693,12 @@ struct PlayerView: View {
     private var playbackBadgesAvailable: Bool {
         appState.playerState.drivePlaybackStatus != nil ||
             appState.playerState.subtitleStatus != nil ||
-            audioStatusText != nil ||
-            appState.playerState.drmStatus != nil ||
-            appState.playerState.danmakuStatus != nil
+            appState.playerState.drmStatus != nil
     }
 
     private var shouldRenderDanmaku: Bool {
-        danmakuEnabled &&
-            appState.playerState.currentSpec?.danmakuAttachment != nil &&
+        !pictureInPicture.isPresented && danmakuEnabled &&
+            appState.playerState.currentSpec != nil &&
             !appState.currentDanmakuCues.isEmpty
     }
 
@@ -2595,13 +2720,10 @@ struct PlayerView: View {
         return appState.selectedPlayFlag
     }
 
-    private var audioStatusText: String? {
-        guard !appState.playerState.audioTracks.isEmpty else { return nil }
-        if let selectedID = appState.playerState.selectedAudioTrackID,
-           let track = appState.playerState.audioTracks.first(where: { $0.id == selectedID }) {
-            return PlayerHUDVisualPolicy.audioStatusText(for: track)
-        }
-        return L10n.text("音轨 {0} 条", ["\(appState.playerState.audioTracks.count)"])
+    private var playbackFormatSummary: PlaybackFormatSummary {
+        .init(diagnostics: playerState.playbackDiagnostics, ownerID: playerState.chapterOwnerID,
+              hasPlayback: playerState.currentSpec != nil && !appState.isPreparingVodPlayback,
+              selectedAudioTrackID: playerState.selectedAudioTrackID)
     }
 
     private var activeDrivePlaybackRoute: DrivePlaybackRouteOption? {
@@ -2664,7 +2786,6 @@ struct PlayerView: View {
         glyph: PlayerHUDGlyphKind,
         detail: String? = nil,
         isActive: Bool = false,
-        isPrimary: Bool = false,
         disabled: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
@@ -2672,55 +2793,13 @@ struct PlayerView: View {
             action()
             showHUDTemporarily()
         } label: {
-            VStack(spacing: 7) {
-                PlayerHUDGlyph(
-                    kind: glyph,
-                    size: isPrimary ? 34 : PlayerHUDVisualPolicy.menuGlyphSize,
-                    emphasized: isPrimary,
-                    baseStrokeWidth: PlayerHUDVisualPolicy.iconGlyphStrokeWidth
-                )
-                    .frame(
-                        width: isPrimary ? hudPrimaryDiameter : hudIconDiameter,
-                        height: isPrimary ? hudPrimaryDiameter : hudIconDiameter
-                    )
-                    .background {
-                        if isPrimary || isActive {
-                            controlIconBackground(isActive: isActive, isPrimary: isPrimary)
-                        }
-                    }
-                Text(title)
-                    .font(.system(size: PlayerHUDVisualPolicy.controlLabelFontSize, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-                    .frame(height: PlayerHUDVisualPolicy.controlLabelHeight)
-                if let detail {
-                    Text(detail)
-                        .font(.system(size: PlayerHUDVisualPolicy.controlDetailFontSize, design: .monospaced))
-                        .foregroundStyle(disabled ? PlayerHUDPalette.foreground.opacity(PlayerHUDVisualPolicy.disabledControlOpacity) : PlayerHUDPalette.muted.opacity(0.92))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .frame(height: PlayerHUDVisualPolicy.controlDetailHeight)
-                } else {
-                    Text(" ")
-                        .font(.system(size: PlayerHUDVisualPolicy.controlDetailFontSize, design: .monospaced))
-                        .frame(height: PlayerHUDVisualPolicy.controlDetailHeight)
-                        .opacity(0)
-                }
+            PlayerHUDControlLabel(title: title, detail: detail,
+                width: PlayerHUDVisualPolicy.iconControlWidth, isActive: isActive, disabled: disabled) {
+                PlayerHUDGlyph(kind: glyph, size: PlayerHUDVisualPolicy.menuGlyphSize,
+                    baseStrokeWidth: PlayerHUDVisualPolicy.iconGlyphStrokeWidth)
             }
-            .foregroundStyle(disabled ? PlayerHUDPalette.foreground.opacity(PlayerHUDVisualPolicy.disabledControlOpacity) : PlayerHUDPalette.foreground.opacity(PlayerHUDVisualPolicy.controlForegroundOpacity))
-            .frame(
-                width: isPrimary ? 78 : PlayerHUDVisualPolicy.iconControlWidth,
-                height: isPrimary ? PlayerHUDVisualPolicy.iconControlHeight : PlayerHUDVisualPolicy.iconControlHeight,
-                alignment: .top
-            )
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .frame(
-            width: isPrimary ? 78 : PlayerHUDVisualPolicy.iconControlWidth,
-            height: PlayerHUDVisualPolicy.iconControlHeight
-        )
-        .contentShape(Rectangle())
         .disabled(disabled)
         .help(title)
     }
@@ -2836,44 +2915,10 @@ struct PlayerView: View {
         isActive: Bool = false,
         disabled: Bool = false
     ) -> some View {
-        VStack(spacing: 6) {
-            PlayerHUDGlyph(
-                kind: glyph,
-                size: PlayerHUDVisualPolicy.menuGlyphSize,
-                emphasized: false,
-                baseStrokeWidth: PlayerHUDVisualPolicy.menuGlyphStrokeWidth
-            )
-                .frame(width: PlayerHUDVisualPolicy.menuIconBoxSize, height: PlayerHUDVisualPolicy.menuIconBoxSize)
-                .foregroundStyle(disabled ? .white.opacity(PlayerHUDVisualPolicy.disabledControlOpacity) : (isActive ? lavender.opacity(0.96) : .white.opacity(PlayerHUDVisualPolicy.controlForegroundOpacity)))
-                .background {
-                    if isActive {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(lavender.opacity(PlayerHUDVisualPolicy.activeLavenderBackgroundOpacity))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(lavender.opacity(PlayerHUDVisualPolicy.activeLavenderBorderOpacity), lineWidth: 1)
-                            }
-                            .shadow(color: lavender.opacity(PlayerHUDVisualPolicy.activeLavenderShadowOpacity), radius: 22)
-                    }
-                }
-
-            Text(title)
-                .font(.system(size: PlayerHUDVisualPolicy.controlLabelFontSize, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(height: PlayerHUDVisualPolicy.controlLabelHeight)
-
-            Text(detail ?? " ")
-                .font(.system(size: PlayerHUDVisualPolicy.controlDetailFontSize, design: .monospaced))
-                .foregroundStyle(disabled ? PlayerHUDPalette.foreground.opacity(PlayerHUDVisualPolicy.disabledControlOpacity) : PlayerHUDPalette.muted.opacity(0.92))
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-                .frame(height: PlayerHUDVisualPolicy.controlDetailHeight)
-                .opacity(detail == nil ? 0 : 1)
+        PlayerHUDControlLabel(title: title, detail: detail, isActive: isActive, disabled: disabled) {
+            PlayerHUDGlyph(kind: glyph, size: PlayerHUDVisualPolicy.menuGlyphSize,
+                baseStrokeWidth: PlayerHUDVisualPolicy.menuGlyphStrokeWidth)
         }
-        .foregroundStyle(disabled ? PlayerHUDPalette.foreground.opacity(PlayerHUDVisualPolicy.disabledControlOpacity) : PlayerHUDPalette.foreground.opacity(PlayerHUDVisualPolicy.controlForegroundOpacity))
-        .frame(width: PlayerHUDVisualPolicy.menuControlWidth, height: PlayerHUDVisualPolicy.menuControlHeight, alignment: .top)
-        .contentShape(Rectangle())
     }
 
     private func controlIconBackground(isActive: Bool, isPrimary: Bool) -> some View {
@@ -2898,23 +2943,11 @@ struct PlayerView: View {
             action()
             showHUDTemporarily()
         } label: {
-            VStack(spacing: 6) {
-                SkipMarkerIcon(label: label, missingSide: missingSide, accent: isEnabled ? lavender : Color.white.opacity(PlayerHUDVisualPolicy.controlForegroundOpacity))
-                    .frame(width: PlayerHUDVisualPolicy.skipIconBoxSize, height: PlayerHUDVisualPolicy.skipIconBoxSize)
-                    .background {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(isEnabled ? lavender.opacity(PlayerHUDVisualPolicy.activeLavenderBackgroundOpacity) : Color.clear)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(isEnabled ? lavender.opacity(PlayerHUDVisualPolicy.activeLavenderBorderOpacity) : Color.clear, lineWidth: 1)
-                            }
-                    }
-                Text(formatSkipDuration(seconds))
-                    .font(.system(size: PlayerHUDVisualPolicy.controlDetailFontSize, weight: .semibold, design: .monospaced))
+            PlayerHUDControlLabel(title: target.title, detail: formatSkipDuration(seconds),
+                width: PlayerHUDVisualPolicy.skipChipWidth, isActive: isEnabled) {
+                SkipMarkerIcon(label: label, missingSide: missingSide,
+                    accent: isEnabled ? lavender : PlayerHUDPalette.foreground.opacity(PlayerHUDVisualPolicy.controlForegroundOpacity))
             }
-            .foregroundStyle(.white.opacity(isEnabled ? 0.9 : PlayerHUDVisualPolicy.controlMutedOpacity))
-            .frame(width: PlayerHUDVisualPolicy.skipChipWidth, height: PlayerHUDVisualPolicy.skipButtonHeight, alignment: .top)
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .frame(width: PlayerHUDVisualPolicy.skipChipWidth, height: PlayerHUDVisualPolicy.skipButtonHeight)
@@ -3375,6 +3408,10 @@ struct PlayerView: View {
     }
 
     private func handleKeyboardShortcut(_ command: PlayerShortcutCommand) {
+        if command == .exitFullScreen, formatPopoverSelection != nil {
+            formatPopoverSelection = nil
+            return
+        }
         if command == .exitFullScreen, isChapterPanelPresented {
             isChapterPanelPresented = false
             return
@@ -3408,14 +3445,6 @@ struct PlayerView: View {
         PlayerHUDCommandDispatcher.setPlaybackSpeed(speed)
     }
 
-    private func cyclePlaybackSpeed() {
-        setPlaybackSpeed(PlayerHUDInteractionPolicy.nextPlaybackSpeed(after: playerState.speed))
-    }
-
-    private func cycleVideoAspectMode() {
-        setVideoAspectMode(PlayerHUDInteractionPolicy.nextAspectMode(after: playerState.videoAspectMode))
-    }
-
     private func setVideoAspectMode(_ mode: PlayerVideoAspectMode) {
         if playerState.videoAspectMode != mode {
             playerState.videoAspectMode = mode
@@ -3425,14 +3454,22 @@ struct PlayerView: View {
 
     private func setVolume(_ volume: Float) {
         let clamped = min(1, max(0, volume))
+        guard MPVPlayerEngine.vod.setVolume(clamped) else {
+            isVolumePopoverPresented = true
+            showHUDTemporarily()
+            return
+        }
         if clamped > 0 { appState.playerState.isMuted = false }
         appState.playerState.volume = clamped
-        MPVPlayerEngine.vod.setVolume(clamped)
     }
 
-    private func toggleMute() {
-        MPVPlayerEngine.vod.toggleMute()
-        isVolumePopoverPresented = false
+    private func toggleMute(dismissPopover: Bool = true) {
+        guard MPVPlayerEngine.vod.toggleMute() else {
+            isVolumePopoverPresented = true
+            showHUDTemporarily()
+            return
+        }
+        if dismissPopover { isVolumePopoverPresented = false }
         showHUDTemporarily()
     }
 
@@ -3575,7 +3612,7 @@ struct PlayerView: View {
         if isPresented {
             hideHUDTimer?.invalidate()
             restorePlayerCursor()
-        } else if !isSubtitlePopoverPresented && !isAudioPopoverPresented && !isSpeedPopoverPresented && !isAspectPopoverPresented && !isChapterPanelPresented {
+        } else if !isSubtitlePopoverPresented && !isAudioPopoverPresented && !isSpeedPopoverPresented && !isAspectPopoverPresented && !isChapterPanelPresented && formatPopoverSelection == nil {
             resetHUDTimer()
         }
     }
@@ -3606,6 +3643,7 @@ struct PlayerView: View {
             || isSubtitlePopoverPresented
             || isOnlineSubtitlePresented
             || isAudioPopoverPresented
+            || formatPopoverSelection != nil
             || isSpeedPopoverPresented
             || isAspectPopoverPresented
             || isChapterPanelPresented
@@ -3805,8 +3843,7 @@ struct PlayerView: View {
 
     private func updateDanmakuEnabled(_ enabled: Bool) {
         danmakuEnabled = enabled
-        UserPreferences.shared.danmakuEnabled = enabled
-        appState.playerState.danmakuStatus = enabled ? L10n.text("弹幕已启用，等待手动搜索") : L10n.text("弹幕已关闭")
+        appState.setDanmakuRenderingEnabled(enabled)
     }
 }
 
@@ -4283,62 +4320,32 @@ private func radius(_ value: CGFloat, in rect: CGRect, box: CGFloat = 32) -> CGF
     min(rect.width, rect.height) * value / box
 }
 
-private struct Diamond: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
-        path.closeSubpath()
-        return path
-    }
-}
-
 struct MPVVideoView: NSViewRepresentable {
-    let engine: MPVPlayerEngine
-    let surface: MPVVideoSurface
-    var attachmentRevision: Int = 0
+    let presentation: PlayerPictureInPicture
+    @Environment(\.openWindow) private var openWindow
+
+    func makeCoordinator() -> PlayerPictureInPicture {
+        presentation
+    }
 
     func makeNSView(context: Context) -> NSView {
-        guard let view = MPVOpenGLVideoView(engine: engine, surface: surface) else {
-            Task { @MainActor in
-                engine.reportUnavailableVideoSurface(surface)
-            }
-            return NSView(frame: .zero)
-        }
-        guard let generation = view.activatePlaybackSurface() else {
-            Task { @MainActor in
-                engine.reportUnavailableVideoSurface(surface)
-            }
-            return view
-        }
-        Task { @MainActor in
-            guard view.acceptsPlaybackSurfaceAttachment(generation: generation) else { return }
-            engine.attach(to: view, surface: surface)
-        }
-        return view
+        let container = NSView(frame: .zero)
+        mount(container, presentation: context.coordinator)
+        return container
     }
 
     func updateNSView(_ view: NSView, context: Context) {
-        guard let nsView = view as? MPVOpenGLVideoView else { return }
-        guard let generation = nsView.activatePlaybackSurface() else {
-            Task { @MainActor in
-                engine.reportUnavailableVideoSurface(surface)
-            }
-            return
-        }
-        Task { @MainActor in
-            guard nsView.acceptsPlaybackSurfaceAttachment(generation: generation) else { return }
-            engine.attach(to: nsView, surface: surface)
+        mount(view, presentation: context.coordinator)
+    }
+
+    private func mount(_ view: NSView, presentation: PlayerPictureInPicture) {
+        presentation.mount(in: view) {
+            openWindow(id: presentation.surface == .vod ? AppWindowID.main : AppWindowID.livePlayer)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
-    static func dismantleNSView(_ view: NSView, coordinator: ()) {
-        guard let nsView = view as? MPVOpenGLVideoView else { return }
-        nsView.deactivatePlaybackSurface()
-        Task { @MainActor in
-            await nsView.detachFromPlayerEngineAndReleaseOpenGLResources()
-        }
+    static func dismantleNSView(_ view: NSView, coordinator: PlayerPictureInPicture) {
+        coordinator.unmount(view)
     }
 }

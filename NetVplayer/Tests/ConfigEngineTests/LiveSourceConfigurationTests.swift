@@ -230,7 +230,8 @@ struct LiveSourceConfigurationTests {
                 configResolver: ConfigResolver(httpClient: client, preferences: preferences, allowsProxyFallback: false),
                 storageManager: StorageManager(storageDirectory: directory),
                 userPreferences: preferences, providerRuntimeBootstrap: nil,
-                providerRuntimeRegistrationOverride: { false })
+                providerRuntimeRegistrationOverride: { false },
+                androidProviderRegistrationOverride: { _ in })
         }
 
         func close() {

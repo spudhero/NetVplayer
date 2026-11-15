@@ -17,6 +17,7 @@ public struct SearchResult: Identifiable, Sendable {
     public var effectiveKeyword: String
     public var pageCountIsKnown: Bool
     public var isCached: Bool = false
+    public var isCancelled: Bool = false
 
     public var id: String { siteKey }
 

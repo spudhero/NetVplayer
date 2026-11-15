@@ -49,6 +49,7 @@ struct SearchContinuationTests {
 
     @Test func resultBudgetDoesNotPretendToBeEndOfSource() {
         var state = ContentSearchCore.begin(.init(), keyword: "query")
+        state.resultBudget = SearchResultBudget(total: 3_000, perSite: 2_000)
         state = ContentSearchCore.ingest(state, generation: state.generation, result: page((0...2_000).map(String.init)))
         #expect(state.results[0].vods.count == 2_000)
         #expect(state.cursors["s"]?.status == .limited)

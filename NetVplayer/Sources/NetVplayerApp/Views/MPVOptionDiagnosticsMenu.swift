@@ -18,6 +18,8 @@ struct MPVOptionDiagnosticsMenu: View {
         case .user: L10n.text("界面偏好")
         case .session: L10n.text("当前播放")
         case .transport: L10n.text("传输约束")
+        case .colorDefault: L10n.text("色彩默认")
+        case .display: L10n.text("显示目标约束")
         }
     }
 }

@@ -55,6 +55,32 @@ struct EpisodeSeriesLayoutTests {
         }
     }
 
+    @Test(.disabled(if: ProcessInfo.processInfo.environment["NETVPLAYER_EPISODE_SERIES_LAYOUT_OUTPUT"] == nil))
+    func originalAndroidDetailUsesTheSharedGroupingView() async throws {
+        let output = try #require(ProcessInfo.processInfo.environment["NETVPLAYER_EPISODE_SERIES_LAYOUT_OUTPUT"])
+        let directory = URL(fileURLWithPath: output)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let preferences = UserPreferences(defaults: UserDefaults(suiteName: UUID().uuidString)!, credentialStore: MemoryCredentialStore())
+        let state = AppState(loadDefaultConfig: false, startProxyServer: false,
+            storageManager: StorageManager(storageDirectory: directory.appendingPathComponent("android-storage")),
+            userPreferences: preferences, providerRuntimeBootstrap: nil)
+        let vod = AndroidGroupingFixture.detail(try AndroidGroupingFixture.episodes())
+        state.detailVod = vod
+        state.applyPlaybackAvailability(for: vod)
+        #expect(state.episodeGroups.map { $0.episodes.count } == [2, 1, 1])
+        for size in [CGSize(width: 1200, height: 675), CGSize(width: 1480, height: 833)] {
+            for mode in [EpisodeDisplayMode.grid, .list] {
+                state.episodeDisplayMode = mode
+                let root = VodDetailView(vod: vod, layout: VodDetailLayoutPolicy.layout(in: size))
+                    .environmentObject(state).environment(\.appThemePalette, state.appearancePalette)
+                    .frame(width: size.width, height: size.height)
+                    .background(AppThemeRootBackground(palette: state.appearancePalette, forceOpaque: false))
+                    .preferredColorScheme(.dark)
+                try await capture(root, size: size, to: directory.appendingPathComponent("android-series-\(Int(size.width))-\(mode.rawValue).png"))
+            }
+        }
+    }
+
     private func capture<V: View>(_ view: V, size: CGSize, to url: URL) async throws {
         _ = NSApplication.shared
         let content = NSHostingView(rootView: view)

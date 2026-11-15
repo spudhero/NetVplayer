@@ -85,6 +85,7 @@ public struct ProviderProxyPayload: Codable, Equatable, Sendable {
     public var url: String?
     public var body: String?
     public var bodyBase64: String?
+    public var localStreamURL: String?
     public var headers: [String: String]
 
     public init(
@@ -93,6 +94,7 @@ public struct ProviderProxyPayload: Codable, Equatable, Sendable {
         url: String? = nil,
         body: String? = nil,
         bodyBase64: String? = nil,
+        localStreamURL: String? = nil,
         headers: [String: String] = [:]
     ) {
         self.statusCode = statusCode
@@ -100,6 +102,7 @@ public struct ProviderProxyPayload: Codable, Equatable, Sendable {
         self.url = url
         self.body = body
         self.bodyBase64 = bodyBase64
+        self.localStreamURL = localStreamURL
         self.headers = headers
     }
 
@@ -108,6 +111,7 @@ public struct ProviderProxyPayload: Codable, Equatable, Sendable {
         case contentType = "content_type"
         case url, body
         case bodyBase64 = "body_base64"
+        case localStreamURL = "local_stream_url"
         case headers
     }
 }

@@ -97,6 +97,7 @@ struct CloudAuthView: View {
     @State private var ucWebLoginPollTask: Task<Void, Never>?
     @State private var lastUCWebCookieCandidate = ""
     @State private var aliWebQRImage: NSImage?
+    @State private var aliQRCodeIsLoading = false
     @State private var lastAliWebTokenCandidate = ""
     @State private var p115QRSession: CloudAuthP115QRCodeSession?
     @State private var quarkStep = CloudAuthStepPolicy.initialStep(provider: .quark)
@@ -304,7 +305,7 @@ struct CloudAuthView: View {
                             } label: {
                                 Label(L10n.text("刷新 Token 码"), systemImage: "arrow.clockwise")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(ThemedDialogButtonStyle())
                             .disabled(isWorking)
 
                             Button {
@@ -312,7 +313,7 @@ struct CloudAuthView: View {
                             } label: {
                                 Label(L10n.text("返回扫码登录"), systemImage: "qrcode.viewfinder")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(ThemedDialogButtonStyle())
                             .disabled(isWorking)
                         } else if quarkStep == .webCookie {
                             Button {
@@ -320,7 +321,7 @@ struct CloudAuthView: View {
                             } label: {
                                 Label(L10n.text("刷新二维码"), systemImage: "arrow.clockwise")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(ThemedDialogButtonStyle())
                             .disabled(isWorking)
 
                             Button {
@@ -329,7 +330,7 @@ struct CloudAuthView: View {
                             } label: {
                                 Label(L10n.text("无法扫码？"), systemImage: "doc.on.clipboard")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(ThemedDialogButtonStyle())
                             .disabled(isWorking)
                         } else {
                             Button {
@@ -337,7 +338,7 @@ struct CloudAuthView: View {
                             } label: {
                                 Label(L10n.text("返回扫码登录"), systemImage: "qrcode.viewfinder")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(ThemedDialogButtonStyle())
                             .disabled(isWorking)
                         }
                     }
@@ -393,38 +394,12 @@ struct CloudAuthView: View {
     }
 
     private var quarkQRCodeCard: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.quaternary.opacity(0.35))
-                .frame(width: 238, height: 238)
-
-            if let image = currentQuarkQRCodeImage {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.none)
-                    .scaledToFit()
-                    .frame(width: 218, height: 218)
-                    .background(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-            } else if isWorking || quarkStep == .webCookie {
-                VStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.large)
-                    Text(quarkStep == .webCookie ? L10n.text("正在提取二维码") : L10n.text("正在获取二维码"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if quarkStep == .manualCookie {
-                Image(systemName: "doc.text.viewfinder")
-                    .font(.system(size: 62))
-                    .foregroundStyle(.secondary)
-            } else {
-                Image(systemName: "qrcode")
-                    .font(.system(size: 72))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(width: 238, height: 238)
+        CloudAuthQRCodeCard(
+            image: currentQuarkQRCodeImage,
+            isLoading: isWorking,
+            isManual: quarkStep == .manualCookie,
+            loadingTitle: quarkStep == .webCookie ? L10n.text("正在提取二维码") : L10n.text("正在获取二维码")
+        )
     }
 
     private var currentQuarkQRCodeImage: NSImage? {
@@ -463,29 +438,7 @@ struct CloudAuthView: View {
     private var qrPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 18) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(.quaternary.opacity(0.4))
-                        .frame(width: 230, height: 230)
-
-                    if let image = qrImage {
-                        Image(nsImage: image)
-                            .resizable()
-                            .interpolation(.none)
-                            .scaledToFit()
-                            .frame(width: 214, height: 214)
-                            .background(.white)
-                            .accessibilityLabel(L10n.text("登录二维码"))
-                            .accessibilityIdentifier("cloud.auth.qrcode")
-                    } else if isWorking {
-                        ProgressView()
-                            .controlSize(.large)
-                    } else {
-                        Image(systemName: "qrcode")
-                            .font(.system(size: 72))
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                CloudAuthQRCodeCard(image: qrImage, isLoading: isWorking, side: 230)
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text(L10n.text("使用{0} App 扫描二维码，并在手机上确认登录。", ["\(request.provider.localizedDisplayName)"]))
@@ -502,7 +455,7 @@ struct CloudAuthView: View {
                         } label: {
                             Label(L10n.text("刷新二维码"), systemImage: "arrow.clockwise")
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(ThemedDialogButtonStyle())
                         .disabled(isWorking)
 
                         if qrSession != nil || baiduQRSession != nil {
@@ -556,6 +509,7 @@ struct CloudAuthView: View {
                         ) { image in
                             if request.provider == .ali {
                                 aliWebQRImage = image
+                                aliQRCodeIsLoading = false
                                 statusMessage = L10n.text("请使用阿里云盘 App 扫描二维码并确认登录。")
                             } else {
                                 ucWebQRImage = image
@@ -571,6 +525,7 @@ struct CloudAuthView: View {
                             }
                         } onError: { message in
                             if currentWebQRCodeImage == nil {
+                                aliQRCodeIsLoading = false
                                 statusMessage = message
                             }
                         }
@@ -583,10 +538,7 @@ struct CloudAuthView: View {
 
                     if let currentWebQRCodeImage {
                         VStack(spacing: 12) {
-                            Image(nsImage: currentWebQRCodeImage)
-                                .resizable()
-                                .interpolation(.none)
-                                .frame(width: 250, height: 250)
+                            CloudAuthQRCodeCard(image: currentWebQRCodeImage, side: 250)
                             Text(webLoginPrompt)
                                 .font(.callout.weight(.semibold))
                             Text(webLoginConfirmationDescription)
@@ -594,19 +546,14 @@ struct CloudAuthView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(.background)
-                    } else if request.provider == .ali {
-                        VStack(spacing: 12) {
-                            ProgressView()
-                                .controlSize(.large)
-                            Text(L10n.text("正在提取登录二维码"))
-                                .font(.callout.weight(.semibold))
-                            Text(L10n.text("二维码加载完成后会自动显示。"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(.background)
+                        .background(palette.surface)
+                    } else if request.provider == .ali || request.provider == .p115 {
+                        CloudAuthQRCodeCard(image: nil,
+                            isLoading: request.provider == .ali ? aliQRCodeIsLoading : isWorking,
+                            side: 250,
+                            loadingTitle: L10n.text("正在提取登录二维码"))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(palette.surface)
                     }
                 }
             }
@@ -630,7 +577,7 @@ struct CloudAuthView: View {
                 } label: {
                     Label(L10n.text("刷新二维码"), systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(ThemedDialogButtonStyle())
                 .disabled(isWorking)
 
                 Button {
@@ -638,7 +585,7 @@ struct CloudAuthView: View {
                 } label: {
                     Label(request.provider == .ali ? L10n.text("粘贴 Token") : L10n.text("手动粘贴"), systemImage: "doc.on.clipboard")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(ThemedDialogButtonStyle())
                 .disabled(isWorking)
             }
         }
@@ -715,7 +662,7 @@ struct CloudAuthView: View {
                 } label: {
                     Label(isWorking ? L10n.text("保存中...") : manualAuthButtonTitle, systemImage: "checkmark.circle")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
                 .tint(palette.accent)
                 .disabled(manualCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isWorking)
 
@@ -724,7 +671,7 @@ struct CloudAuthView: View {
                 } label: {
                     Label(L10n.text("清空"), systemImage: "trash")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(ThemedDialogButtonStyle())
                 .disabled(manualCookie.isEmpty || isWorking)
             }
         }
@@ -735,8 +682,8 @@ struct CloudAuthView: View {
             if let statusMessage {
                 Label(statusMessage, systemImage: "info.circle")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
+                    .foregroundStyle(palette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer()
@@ -744,7 +691,8 @@ struct CloudAuthView: View {
             Button(L10n.text("关闭")) {
                 dismiss()
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(ThemedDialogButtonStyle())
+            .keyboardShortcut(.cancelAction)
         }
         .padding(16)
     }
@@ -850,6 +798,7 @@ struct CloudAuthView: View {
     private func refreshAliWebLogin() {
         guard request.provider == .ali else { return }
         aliWebQRImage = nil
+        aliQRCodeIsLoading = true
         lastAliWebTokenCandidate = ""
         webLoginReloadID = UUID()
         isWorking = false

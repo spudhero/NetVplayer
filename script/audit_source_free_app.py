@@ -14,6 +14,8 @@ import subprocess
 import sys
 
 from audit_provider_public_release import build_release_report
+from android_presentation import ARCHIVE_NAME, validate_presentation
+from android_compatibility import validate as validate_compatibility
 
 
 FORBIDDEN_BINARY_MARKERS = (
@@ -25,7 +27,7 @@ FORBIDDEN_BINARY_MARKERS = (
     b"BiliNativeProvider",
 )
 SOURCE_DATA_NAMES = {"configs.json", "history.json", "keeps.json", "lives.json", "sites.json"}
-SOURCE_PAYLOAD_SUFFIXES = {".m3u", ".m3u8", ".jar", ".dex", ".sqlite", ".sqlite3", ".db", ".zip", ".py"}
+SOURCE_PAYLOAD_SUFFIXES = {".m3u", ".m3u8", ".apk", ".class", ".jar", ".dex", ".sqlite", ".sqlite3", ".db", ".zip", ".py"}
 
 
 def audit_output_directory(output: Path) -> list[str]:
@@ -69,13 +71,17 @@ def audit_bundle(app: Path) -> list[str]:
     if not isinstance(executable, str) or not executable or Path(executable).name != executable:
         return errors + ["invalid-app-executable"]
     binary = (contents / "MacOS" / executable).read_bytes()
+    compatibility_bundle = contents / "Resources/NetVplayer_SpiderEngine.bundle"
+    if compatibility_bundle.exists():
+        resource_root = compatibility_bundle / "Contents/Resources"
+        errors.extend(validate_compatibility(resource_root if resource_root.is_dir() else compatibility_bundle))
     for marker in FORBIDDEN_BINARY_MARKERS:
         if marker in binary:
             errors.append(f"forbidden-binary-marker:{marker.decode()}")
 
     for path in contents.rglob("*"):
         relative = path.relative_to(contents)
-        if {"Providers", "private-providers", "migration-reference"}.intersection(relative.parts):
+        if {"Providers", "private-providers", "migration-reference", "AndroidProviderRuntime", "AndroidOriginalComponents"}.intersection(relative.parts):
             errors.append(f"bundled-provider-payload:{relative}")
             continue
         # Locked third-party runtime dependencies have their own provenance gate.
@@ -83,7 +89,19 @@ def audit_bundle(app: Path) -> list[str]:
             continue
         if not path.is_file():
             continue
-        if path.name in SOURCE_DATA_NAMES or path.suffix.lower() in SOURCE_PAYLOAD_SUFFIXES:
+        # SwiftPM resources may live in the main bundle or its named resource bundle.
+        # The exception is exact and validates pinned app-owned code; every other JAR stays forbidden.
+        presentation = (
+            path.name == ARCHIVE_NAME and path.parent.name == "AndroidPresentation"
+            and relative.parts[:-2] in (
+                ("Resources",),
+                ("Resources", "NetVplayer_NetVplayerApp.bundle"),
+                ("Resources", "NetVplayer_NetVplayerApp.bundle", "Contents", "Resources"),
+            )
+        )
+        if presentation:
+            errors.extend(validate_presentation(path.parent))
+        elif path.name in SOURCE_DATA_NAMES or path.suffix.lower() in SOURCE_PAYLOAD_SUFFIXES:
             errors.append(f"bundled-source-data:{relative}")
         if path.suffix.lower() == ".json":
             try:

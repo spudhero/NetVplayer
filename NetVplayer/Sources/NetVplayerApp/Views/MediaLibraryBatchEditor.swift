@@ -1,6 +1,5 @@
 import SwiftUI
 import Models
-import FileServiceEngine
 
 /// Browse once, keep selections across directories, then add all libraries to one connection.
 struct MediaLibraryBatchEditor: View {
@@ -45,7 +44,7 @@ struct MediaLibraryBatchEditor: View {
             Button(newConnection ? L10n.text("稍后添加") : L10n.text("取消")) { dismiss() }
                 .keyboardShortcut(.cancelAction).disabled(saving)
             Button(L10n.text("添加并扫描")) { save() }
-                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                .buttonStyle(ThemedDialogButtonStyle(isPrimary: true)).keyboardShortcut(.defaultAction)
                 .disabled(saving || selections.isEmpty || selections.contains { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         }
         .task(id: path) { await loadDirectory() }

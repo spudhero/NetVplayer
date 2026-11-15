@@ -241,10 +241,15 @@ public enum MPVInitialStartPolicy {
     }
 
     static func loadFileOptions(for spec: PlaySpec) -> String? {
-        guard let start = spec.initialStartPositionSeconds,
-              start.isFinite,
-              start > 0 else { return nil }
-        return "start=\(start)"
+        var options: [String] = []
+        if let start = spec.initialStartPositionSeconds, start.isFinite, start > 0 {
+            options.append("start=\(start)")
+        }
+        if let context = spec.liveCatchup {
+            let end = context.duration - context.mediaStartOffset
+            if end.isFinite, end > 0 { options.append("end=\(end)") }
+        }
+        return options.isEmpty ? nil : options.joined(separator: ",")
     }
 
     static func recoverySpec(
@@ -254,7 +259,7 @@ public enum MPVInitialStartPolicy {
         playbackStarted: Bool,
         reachedEOF: Bool
     ) -> PlaySpec? {
-        guard supportsFileLocalStart(for: spec), !playbackStarted,
+        guard spec.liveCatchup == nil, supportsFileLocalStart(for: spec), !playbackStarted,
               isCurrentFileLoaded || reachedEOF,
               let start = spec.initialStartPositionSeconds,
               start.isFinite, start > 0 else { return nil }
@@ -385,6 +390,15 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     public static let vod = MPVPlayerEngine(videoSurface: .vod)
     public static let live = MPVPlayerEngine(videoSurface: .live)
 
+    @MainActor private static var systemHDREngines: [UUID: WeakSystemHDREngine] = [:]
+    @MainActor private static var systemHDRCallbacksInstalled = false
+    @MainActor private static var systemHDRIsTerminating = false
+    @MainActor private static var systemHDRAudioTransition = false
+    private final class WeakSystemHDREngine {
+        weak var engine: MPVPlayerEngine?
+        init(_ engine: MPVPlayerEngine) { self.engine = engine }
+    }
+
     static let initializationOptions: [(name: String, value: String)] = [
         ("terminal", "no"),
         ("msg-level", "all=info"),
@@ -396,6 +410,9 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         ("input-vo-keyboard", "no"),
         ("hwdec", "videotoolbox-copy"),
         ("vo", "libmpv"),
+        // The renderer discards an ICC blob if this is still disabled when
+        // set_parameter is called, including the first render context.
+        ("icc-profile-auto", "yes"),
         // mpv 0.41 can retain a CoreAudio hotplug callback when floatp initialization fails.
         ("audio-format", "float"),
     ]
@@ -421,10 +438,32 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     public var subtitleSettingsProvider: @Sendable () -> SubtitleRenderSettings = { SubtitleRenderSettings() }
     private var pendingSubtitleMatches: [SubtitleSlot: (name: String, format: String)] = [:]
     private var pendingSubtitleSelections: [SubtitleSlot: String] = [:]
+    private var automaticallySelectsPrimarySubtitle = true
+    private var originalSubtitleSelection = OriginalSubtitleSelection()
     private var preparedSubtitleSources: [String: String] = [:]
     public var secondarySubtitleDelayProvider: @Sendable (PlaySpec) -> Double = { _ in 0 }
     private var currentSubtitleFormat: SubtitleTrackFormat = .text
     public var subtitleDelayProvider: @Sendable (PlaySpec) -> Double = { _ in 0 }
+
+    /// Read native failure evidence only for the current media load. No request
+    /// is made, and no PlaySpec/read session is retained by the observation.
+    @MainActor
+    public func playbackFailure(for spec: PlaySpec) -> MPVPlaybackFailure? {
+        withLock {
+            guard let observation = lastPlaybackFailure,
+                  observation.mediaID == seekActivity.owner.mediaID,
+                  let current = activeSpec ?? pendingSpec,
+                  current.url == spec.url, current.headers == spec.headers,
+                  current.siteKey == spec.siteKey, current.flag == spec.flag,
+                  current.drivePlaybackSessionGeneration == spec.drivePlaybackSessionGeneration,
+                  current.metadata[DrivePlaybackSessionController.attemptMetadataKey]
+                    == spec.metadata[DrivePlaybackSessionController.attemptMetadataKey],
+                  ["playback.sessionGeneration", "live.sessionID", "vod.id", "vod.episodeURL"].allSatisfy({
+                      current.metadata[$0] == spec.metadata[$0]
+                  }) else { return nil }
+            return observation.failure
+        }
+    }
 
     public private(set) var status: PlayerStatus = .idle
 
@@ -432,6 +471,31 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private let contextCreationLock = NSLock()
     private var context: OpaquePointer?
     private var eventTask: Task<Void, Never>?
+    private var eventPump: MPVEventPump?
+    private var diagnosticsTask: Task<Void, Never>?
+    @MainActor private var diagnosticsSampler = PlaybackDiagnosticsSampler()
+    @MainActor private var diagnosticLocalInputBytes: Int64?
+    @MainActor private var videoPresentationAllowed = false
+    @MainActor private var dolbyVisionProbeTask: Task<Void, Never>?
+    @MainActor private var dolbyVisionProbeAttempted = false
+    @MainActor private var localDolbyVision: LocalDolbyVisionObservation?
+    #if DEBUG
+    @MainActor var performanceDiagnosticsHandler: ((PlaybackDiagnostics, [String: Data]) -> Void)?
+    @MainActor var statisticsSamplingObserver: ((UUID, [String]) -> Void)?
+    @MainActor var cadenceRecorder: MPVCadenceRecorder?
+    private var performanceFrames = MPVPerformanceFrames()
+    private var performanceTrackingEnabled = false
+    var performanceFrameSnapshot: MPVPerformanceFrames {
+        withLock { performanceFrames.snapshot(now: ProcessInfo.processInfo.systemUptime) }
+    }
+    var nativeEventPumpSnapshot: MPVEventPump.Snapshot? {
+        withLock { eventPump }?.snapshot
+    }
+    #endif
+    @MainActor private var diagnosticAudioDevices = PlaybackAudioDeviceSnapshot()
+    @MainActor private var audioPlanningDevices = PlaybackAudioDeviceSnapshot()
+    private var hardwareDecodeFallback: PlaybackDiagnostics.HardwareFallback?
+    private var dolbyVisionBlocked = false
     private var renderRetirementTask: Task<Void, Never>?
     private var attachedViewID: Int64?
     private weak var renderView: MPVOpenGLVideoView?
@@ -439,13 +503,56 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private var activeSpec: PlaySpec?
     private var currentSpeed: Float = 1.0
     private let audioPreferences: PlaybackAudioPreferenceStore
+    private var volumeControl: PlaybackVolumeControl = .player
     private var audioPreferenceObserver: NSObjectProtocol?
+    private let audioOutputPreferences: PlaybackAudioOutputPreferenceStore
+    private var audioOutputPreferenceObserver: NSObjectProtocol?
+    private let dialoguePreferences: PlaybackDialoguePreferenceStore
+    private var dialoguePreferenceObserver: NSObjectProtocol?
+    private var dialogueGain: Double = 1
+    @MainActor private var dialogueTask: Task<Void, Never>?
+    private var dialogueGeneration: UInt64 = 0 // Protected by the engine lock, including fade ticks.
+    @MainActor private var dialogueTarget: PlaybackDialoguePlan?
+    @MainActor private var dialogueAppliedFilter = ""
+    @MainActor private var dialogueFailed = false
+    @MainActor private var dialogueRestoreFailed = false
+    private var dialogueBlocked = false
+    private var audioTrackSelectionGeneration: UInt64 = 0
+    @MainActor private var nextDialogueReplyID: UInt64 = 0xC000_0000_0000_0000
+    @MainActor private var pendingDialogueReply: (id: UInt64, result: Bool?)?
+    @MainActor private var dialogueProperties: [String: Data] = [:]
+    private var audioWorkspaceObservers: [NSObjectProtocol] = []
+    private var audioOutputPlan = PlaybackAudioOutputPlan()
+    private var compressedAudioRecovery = PlaybackCompressedAudioRecovery()
+    private var audioOutputBlocked = false
+    @MainActor private var audioSystemSleeping = false
+    @MainActor private var failedAudioDeviceUID: String?
+    @MainActor private var unavailableAudioSamples = 0
+    @MainActor private var nextAudioOutputReplyID: UInt64 = 0xB000_0000_0000_0000
+    @MainActor private var pendingAudioOutputReplies: Set<UInt64> = []
+    private let colorPreferences: PlaybackColorPreferenceStore
+    private var colorPreferenceObserver: NSObjectProtocol?
+    private var hdrPrototypeActive = false
+    private var hdrPrototypeOptionsUsed = false
+    private var hdrPresentation: PlaybackHDRPresentation?
+    private var systemDolbyVisionActive = false // Protected by lock, like hdrPresentation.
+    @MainActor private var systemDolbyVisionFailed = false
+    private let systemHDROwnerID = UUID()
+    private var systemHDRAudioSuspended = false // Protected by lock; also checked during a new load.
+    @MainActor private var hdrActivation = PlaybackHDRActivation()
+    @MainActor private var reconcilingHDR = false
+    @MainActor private var hdrSubmittedMediaID: UUID?
+    @MainActor private var systemHDRRequestedMediaID: UUID?
+    @MainActor private var submittedICCData: Data?
+    @MainActor private var iccSubmission: PlaybackICCSubmission = .unavailable
     private var currentVideoAspectMode: PlayerVideoAspectMode = .fit
+    @MainActor private var floatingCrop = PlayerFloatingCrop()
     private var lastPositionMs: Int64 = 0
     private var lastDurationMs: Int64 = 0
     private var lastLoadDiagnostic: String?
     private var lastHTTPFailureStatus: Int?
     private var playbackFailureNotified = false
+    private var lastPlaybackFailure: (mediaID: UUID, failure: MPVPlaybackFailure)?
     private var playbackStartedNotified = false
     private var currentFileLoaded = false
     private var loadEventTracker = MPVPlaybackLoadEventTracker()
@@ -454,6 +561,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private var postSeekEndGuard = PlaybackPostSeekEndGuard()
     private var seekActivity = PlaybackSeekActivity()
     private var cacheStallStart: Date?
+    private var cacheStallUptime: TimeInterval?
     private var cacheStallTimeoutInterval: TimeInterval?
     private var cacheStallTask: Task<Void, Never>?
     private var cacheStallNotified = false
@@ -463,10 +571,19 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private var liveConnectionRepairRequested = false
     private var cacheStallEligible = false
     private let backgroundBudgetSession = UUID().uuidString
+    private var playbackReadLease: PlaybackReadLease?
+    private var playbackReadSession: PlaybackReadSession? // Also covers a play awaiting MainActor/audio discovery.
+    public let qualityMetrics = PlaybackQualityMetrics()
+    /// Runtime opt-in for controlled measurements; shipping default is disabled.
+    public var vodRebufferExperimentEnabled = ProcessInfo.processInfo.environment["NETVPLAYER_VOD_REBUFFER_EXPERIMENT"] == "1"
+    private var vodRebuffer = VODRebufferExperiment()
+    private var vodRebufferApplied: Double?
+
     private var startupWatchdogTask: Task<Void, Never>?
     @MainActor private var seekTransferTask: Task<Void, Never>?
     private var renderRequestGate = MPVRenderRequestGate()
     private var pendingExternalAudioURL: String?
+    private var pendingSubtitles: [Sub] = []
     private var mediaOptionDefaults: [String: String] = [:]
     private var temporarySubtitleFiles: [URL] = []
     private var artworkTask: Task<Void, Never>?
@@ -505,6 +622,9 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
         set {
             lock.lock()
+            #if DEBUG
+            if performanceTrackingEnabled, currentSpeed != newValue { performanceFrames.speedChanges += 1 }
+            #endif
             currentSpeed = newValue
             let activeContext = context
             lock.unlock()
@@ -513,6 +633,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 nv_mpv_set_property_double(activeContext, "speed", Double(newValue))
             }
             Task { @MainActor in
+                self.refreshAudioOutput()
                 self.playerState?.speed = newValue
             }
         }
@@ -522,27 +643,86 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         videoSurface: MPVVideoSurface,
         stopResourcePolicy: MPVStopResourcePolicy = .configured(),
         displaySleepController: PlaybackDisplaySleepController = PlaybackDisplaySleepController(),
-        audioPreferences: PlaybackAudioPreferenceStore = .shared
+        audioPreferences: PlaybackAudioPreferenceStore = .shared,
+        audioOutputPreferences: PlaybackAudioOutputPreferenceStore = .shared,
+        dialoguePreferences: PlaybackDialoguePreferenceStore = .shared,
+        colorPreferences: PlaybackColorPreferenceStore = .shared
     ) {
         self.videoSurface = videoSurface
         self.stopResourcePolicy = stopResourcePolicy
         self.displaySleepController = displaySleepController
         self.audioPreferences = audioPreferences
+        self.audioOutputPreferences = audioOutputPreferences
+        self.dialoguePreferences = dialoguePreferences
+        self.colorPreferences = colorPreferences
         self.audioPreferenceObserver = NotificationCenter.default.addObserver(
             forName: PlaybackAudioPreferenceStore.didChange, object: audioPreferences, queue: nil
         ) { [weak self] _ in self?.applyAudioPreference() }
+        self.audioOutputPreferenceObserver = NotificationCenter.default.addObserver(
+            forName: PlaybackAudioOutputPreferenceStore.didChange, object: audioOutputPreferences, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.failedAudioDeviceUID = nil
+                self.withLock { self.compressedAudioRecovery = .init() }
+                self.refreshAudioOutput(force: true)
+            }
+        }
+        self.dialoguePreferenceObserver = NotificationCenter.default.addObserver(
+            forName: PlaybackDialoguePreferenceStore.didChange, object: dialoguePreferences, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.dialogueFailed = false
+                self.refreshAudioOutput()
+                if var info = self.playerState?.playbackDiagnostics,
+                   self.withLock({ self.currentFileLoaded && self.seekActivity.owner.mediaID == info.mediaID }) {
+                    self.updateDialogueDiagnostics(&info.audio, properties: self.dialogueProperties)
+                    self.playerState?.playbackDiagnostics = info
+                }
+            }
+        }
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification] {
+            audioWorkspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] notification in
+                let sleeping = notification.name == NSWorkspace.willSleepNotification
+                Task { @MainActor [weak self] in self?.audioEnvironmentDidChange(sleeping: sleeping) }
+            })
+        }
+        self.colorPreferenceObserver = NotificationCenter.default.addObserver(
+            forName: PlaybackColorPreferenceStore.didChange, object: colorPreferences, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.hdrActivation.reset()
+                self?.systemDolbyVisionFailed = false
+                self?.refreshColorSettings()
+            }
+        }
     }
 
     deinit {
+        let hdrOwner = systemHDROwnerID
+        Task { @MainActor in
+            Self.systemHDREngines.removeValue(forKey: hdrOwner)
+            SystemHDRController.shared.release(ownerID: hdrOwner)
+        }
         displaySleepController.setPlaybackActive(false)
         if let audioPreferenceObserver { NotificationCenter.default.removeObserver(audioPreferenceObserver) }
+        if let audioOutputPreferenceObserver { NotificationCenter.default.removeObserver(audioOutputPreferenceObserver) }
+        if let dialoguePreferenceObserver { NotificationCenter.default.removeObserver(dialoguePreferenceObserver) }
+        for observer in audioWorkspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        if let colorPreferenceObserver { NotificationCenter.default.removeObserver(colorPreferenceObserver) }
         eventTask?.cancel()
+        diagnosticsTask?.cancel()
         startupWatchdogTask?.cancel()
         artworkTask?.cancel()
         Self.removeTemporarySubtitleFiles(temporarySubtitleFiles)
         Self.removeTemporarySubtitleFiles(temporaryArtworkFiles)
         if let context {
-            nv_mpv_destroy(context)
+            nv_mpv_set_wakeup_callback(context, nil, nil)
+            eventPump?.cancel()
+            withExtendedLifetime(eventPump) { nv_mpv_destroy(context) }
         }
     }
 
@@ -573,6 +753,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             }
             attachedViewID = viewID
             renderView = view
+            hdrPrototypeActive = view.isHDRDevelopmentProbe
             return true
         }
         guard accepted else {
@@ -612,6 +793,18 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     @MainActor
     public func detach(from view: MPVOpenGLVideoView) {
         let viewID = Self.viewID(for: view)
+        if withLock({ attachedViewID == viewID }) {
+            view.presentationInvalidated?(.detach)
+            SystemHDRController.shared.release(ownerID: systemHDROwnerID)
+        }
+        let clearingHDR = withLock({ attachedViewID == viewID }) && !view.isHDRDevelopmentProbe
+            && (view.hdrPrototypeSurface != nil || view.dolbyVisionSurface != nil)
+        if clearingHDR {
+            hdrActivation.reset()
+            hdrSubmittedMediaID = nil
+            withLock { hdrPresentation = nil; systemDolbyVisionActive = false }
+            view.disableHDRPrototype()
+        }
         lock.lock()
         if attachedViewID == viewID {
             attachedViewID = nil
@@ -619,6 +812,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             renderRequestGate.reset()
         }
         lock.unlock()
+        if clearingHDR { refreshColorSettings() }
+        refreshVideoOutputAssessment()
     }
 
     @MainActor
@@ -651,7 +846,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     @MainActor
     public func render(in view: MPVOpenGLVideoView) {
-        guard view.window != nil, view.bounds.width > 0, view.bounds.height > 0 else { return }
+        guard view.window != nil, !view.displayIsAsleep,
+              view.bounds.width > 0, view.bounds.height > 0 else { return }
 
         let viewID = Self.viewID(for: view)
         let renderState = withLock { (context, attachedViewID) }
@@ -669,9 +865,123 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
         let width = max(1, Int((view.bounds.width * scale).rounded(.toNearestOrAwayFromZero)))
         let height = max(1, Int((view.bounds.height * scale).rounded(.toNearestOrAwayFromZero)))
-        nv_mpv_render(activeContext, 0, Int32(width), Int32(height), 1)
+        if !videoPresentationAllowed {
+            view.hdrPrototypeSurface?.isHidden = true
+            view.dolbyVisionSurface?.isHidden = true
+            _ = nv_mpv_render_suppressed(activeContext, 0)
+            view.flushOpenGLBuffer()
+            nv_mpv_report_swap(activeContext)
+            return
+        }
+        if let surface = view.dolbyVisionSurface {
+            surface.isHidden = false
+            if !surface.prepareWidth(Int32(width), height: Int32(height)) {
+                if surface.temporarilyUnavailable {
+                    Task { @MainActor [weak self, weak view] in
+                        try? await Task.sleep(for: .milliseconds(4))
+                        if let self, let view, view.isPlaybackSurfaceActive { self.requestRender() }
+                    }
+                } else { fallbackFromSystemDolbyVision(in: view) }
+                return
+            }
+            guard renderDolbyVisionFrame(context: activeContext, surface: surface, width: Int32(width), height: Int32(height)) >= 0,
+                  let observed = DolbyRendererObservation.read(activeContext), observed.frameReconstructed,
+                  surface.presentPTS(observed.pts, generation: observed.generation) else {
+                fallbackFromSystemDolbyVision(in: view)
+                return
+            }
+            nv_mpv_report_swap(activeContext)
+            hdrSubmittedMediaID = withLock { seekActivity.owner.mediaID }
+            recordQualityFrame(flags: nv_mpv_last_render_frame_flags(activeContext))
+            recordPerformanceFrame(context: activeContext, width: width, height: height)
+            return
+        }
+        if let surface = view.hdrPrototypeSurface {
+            surface.isHidden = false
+            if let hdr = withLock({ hdrPresentation }) {
+                let current = PlaybackVideoOutputPolicy.headroom(view.window?.screen.map {
+                    Double($0.maximumExtendedDynamicRangeColorComponentValue)
+                }) ?? 1
+                if !hdr.awaitingHeadroom && current <= 1.01 {
+                    fallbackFromHDRPrototype(in: view)
+                    return
+                }
+                // Headroom can fall between diagnostics batches. Bound every
+                // submission by the current compositor budget, including pause.
+                surface.maximumLinearComponent = min(hdr.maximumLinearComponent,
+                    PlaybackHDRPresentation.plan(headroom: current, awaitingHeadroom: false).maximumLinearComponent)
+            }
+            if !surface.prepareWidth(Int32(width), height: Int32(height)) {
+                if surface.temporarilyUnavailable {
+                    // Do not consume a pending mpv frame while both slots are
+                    // in use. The existing request gate coalesces this retry.
+                    Task { @MainActor [weak self, weak view] in
+                        try? await Task.sleep(for: .milliseconds(4))
+                        if let self, let view, view.isPlaybackSurfaceActive { self.requestRender() }
+                    }
+                } else {
+                    DiagnosticLog.write("[MPV_HDR_SURFACE_ERROR] facts=\(surface.facts)")
+                    fallbackFromHDRPrototype(in: view)
+                }
+                return
+            }
+            guard
+                  // Metal texture coordinates start at the top; unlike the
+                  // AppKit GL drawable, this shared FBO needs no vertical flip.
+                  nv_mpv_render_fp16(activeContext, surface.framebuffer, Int32(width), Int32(height), 0) >= 0,
+                  surface.present() else {
+                // Outside the render call, restore SDR options and ICC without
+                // replacing the media/session or losing tracks and position.
+                fallbackFromHDRPrototype(in: view)
+                return
+            }
+            nv_mpv_report_swap(activeContext)
+            recordQualityFrame(flags: nv_mpv_last_render_frame_flags(activeContext))
+            hdrSubmittedMediaID = withLock { seekActivity.owner.mediaID }
+            recordPerformanceFrame(context: activeContext, width: width, height: height)
+            return
+        }
+        let renderResult = nv_mpv_render(activeContext, 0, Int32(width), Int32(height), 1)
         view.flushOpenGLBuffer()
         nv_mpv_report_swap(activeContext)
+        if renderResult >= 0 {
+            recordQualityFrame(flags: nv_mpv_last_render_frame_flags(activeContext))
+        }
+        if renderResult >= 0 { recordPerformanceFrame(context: activeContext, width: width, height: height) }
+    }
+
+    @MainActor
+    private func recordPerformanceFrame(context: OpaquePointer, width: Int, height: Int) {
+        #if DEBUG
+        if performanceDiagnosticsHandler != nil {
+            let flags = nv_mpv_last_render_frame_flags(context)
+            let now = ProcessInfo.processInfo.systemUptime
+            cadenceRecorder?.record(flags: flags, now: now)
+            withLock {
+                if currentFileLoaded {
+                    performanceFrames.record(flags: flags, width: width, height: height,
+                                             now: now)
+                }
+            }
+        }
+        #endif
+    }
+
+    private func recordQualityFrame(flags: Int64) {
+        guard flags >= 0, flags & 1 != 0, flags & 6 == 0,
+              withLock({ currentFileLoaded && !seekActivity.isPending && !isPausedForCache }) else { return }
+        qualityMetrics.presentedFreshFrame(now: ProcessInfo.processInfo.systemUptime)
+    }
+
+    @MainActor
+    private func applyVODRebufferTarget() {
+        guard vodRebuffer.enabled, vodRebufferApplied != vodRebuffer.target,
+              withLock({ activeSpec?.metadata["playback.kind"] != "live" }),
+              let context = withLock({ context }) else { return }
+        if nv_mpv_set_property_double(context, "cache-pause-wait", vodRebuffer.target) >= 0 {
+            vodRebufferApplied = vodRebuffer.target
+            DiagnosticLog.write("[VOD_REBUFFER_EXPERIMENT] targetSeconds=\(vodRebuffer.target) baselineSeconds=\(vodRebuffer.baseline) maximumSeconds=\(vodRebuffer.maximum)")
+        }
     }
 
     public func play(spec: PlaySpec) async {
@@ -685,6 +995,26 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             DiagnosticLog.write("[MPV_PLAY_IGNORED] inactiveSurface=\(requestedSurface.rawValue)")
             return
         }
+        var prepared = spec
+        let remembered = withLock { () -> OriginalSubtitleSelection.Choice? in
+            originalSubtitleSelection.begin(spec)
+            return originalSubtitleSelection.choice
+        }
+        // Start remembered choices disabled until this file exposes an unambiguous match.
+        if remembered != nil { prepared.mpvOptions["sid"] = "no" }
+        prepared.mediaIdentity = PlaybackMediaIdentity.resolved(for: spec)
+            ?? .init(source: "runtime", account: "session", item: UUID().uuidString)
+        prepared.readSession = PlaybackReadSession()
+        let spec = prepared
+        let lease = ProxyServer.shared.readLease(for: spec,
+            session: spec.readSession!, mediaIdentity: spec.mediaIdentity!, purpose: .foreground)
+        let retired = withLock {
+            let retired = (playbackReadSession, playbackReadLease)
+            playbackReadSession = spec.readSession; playbackReadLease = lease
+            qualityMetrics.beginLoad(now: ProcessInfo.processInfo.systemUptime)
+            return retired
+        }
+        retired.0?.stop(); retired.1?.cancel()
         DiagnosticLog.write("[MPV_PLAY] url=\(Self.redactedURL(spec.url)), headers=\(Self.redactedHeaders(spec.headers)), mpvOptionNames=\(spec.mpvOptions.keys.filter { MPVOptionPolicy.accepts(name: $0, value: "") }.sorted()), title=\(spec.title)")
 
         let aspectMode = withLock { currentVideoAspectMode }
@@ -693,9 +1023,12 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 Self.acceptsVideoSurfaceAttachment(
                     activeSurface: self.videoSurface,
                     requestedSurface: requestedSurface
-                )
+                ) && self.playbackReadSession === spec.readSession
             }) else { return false }
+            self.withLock { self.renderView }?.presentationInvalidated?(.mediaReplacement)
             self.withLock { self.loadEventTracker.prepareForLoad() }
+            self.floatingCrop.reset(context: self.withLock { self.context })
+            self.resetPlaybackDiagnostics()
             playerState?.currentSpec = spec
             playerState?.endDisposition = nil
             cancelSeekTransferMetrics()
@@ -708,6 +1041,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             playerState?.isPlaying = false
             playerState?.position = 0
             playerState?.duration = 0
+            playerState?.isSeekable = nil
             playerState?.bufferedUntil = 0
             playerState?.isMediaLoading = true
             playerState?.isSeeking = false
@@ -737,20 +1071,26 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             guard Self.acceptsVideoSurfaceAttachment(
                 activeSurface: videoSurface,
                 requestedSurface: requestedSurface
-            ) else { return false }
+            ) && playbackReadSession === spec.readSession else { return false }
             activeSpec = spec
             artworkTask?.cancel()
             artworkTask = nil
             currentSubtitleFormat = .text
             pendingSubtitleSelections.removeAll()
             pendingSubtitleMatches.removeAll()
+            originalSubtitleSelection.begin(spec)
+            automaticallySelectsPrimarySubtitle = originalSubtitleSelection.choice == nil && spec.metadata["playback.kind"] != "live"
+                && (spec.mpvOptions["sid"] ?? "auto") == "auto"
             preparedSubtitleSources.removeAll()
             lastPositionMs = 0
             lastDurationMs = 0
             lastLoadDiagnostic = nil
+            hardwareDecodeFallback = nil
             lastHTTPFailureStatus = nil
+            lastPlaybackFailure = nil
             playbackFailureNotified = false
             playbackStartedNotified = false
+            compressedAudioRecovery = .init()
             currentFileLoaded = false
             pauseRequested = false
             isPausedForCache = false
@@ -763,13 +1103,16 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             }
             startupWatchdogTask?.cancel()
             startupWatchdogTask = nil
-            cacheStallStart = nil
+            cacheStallStart = nil; cacheStallUptime = nil
             cacheStallTask?.cancel()
             cacheStallTask = nil
             cacheStallNotified = false
             return true
         }
         guard didResetPlaybackState else { return }
+        let audioOwner = withLock { seekActivity.owner.mediaID }
+        let audioDevices = await PlaybackAudioDeviceProbeWorker.snapshot()
+        guard !Task.isCancelled, withLock({ playbackReadSession === spec.readSession && seekActivity.owner.mediaID == audioOwner }) else { return }
 
         do {
             let didLoad = try await MainActor.run { () throws -> Bool in
@@ -777,22 +1120,30 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                     Self.acceptsVideoSurfaceAttachment(
                         activeSurface: self.videoSurface,
                         requestedSurface: requestedSurface
-                    )
+                    ) && self.playbackReadSession === spec.readSession
                 }) else { return false }
                 guard let view = self.withLock({ self.renderView }) else {
                     self.withLock {
                         if Self.acceptsVideoSurfaceAttachment(
                             activeSurface: self.videoSurface,
                             requestedSurface: requestedSurface
-                        ) {
+                        ) && self.playbackReadSession === spec.readSession {
                             self.pendingSpec = spec
                             self.status = .loading
                         }
                     }
                     return false
                 }
+                guard self.withLock({ self.seekActivity.owner.mediaID == audioOwner }) else { return false }
+                if let audioDevices, audioDevices.enumerationSucceeded {
+                    self.diagnosticAudioDevices = audioDevices
+                    self.audioPlanningDevices = audioDevices.retainingPCMConfiguration(from: self.audioPlanningDevices)
+                }
                 view.makeOpenGLContextCurrent()
                 try self.ensureContext()
+                // Resolve runtime capabilities after creating the context, so
+                // the first file gets the same native route as later updates.
+                self.refreshAudioOutput()
                 try self.rebuildRenderContextForNewLoad()
                 do {
                     try self.load(spec: spec)
@@ -817,7 +1168,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 guard Self.acceptsVideoSurfaceAttachment(
                     activeSurface: videoSurface,
                     requestedSurface: requestedSurface
-                ) else { return false }
+                ) && self.playbackReadSession === spec.readSession else { return false }
                 status = .playing
                 return true
             }
@@ -829,7 +1180,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                     Self.acceptsVideoSurfaceAttachment(
                         activeSurface: self.videoSurface,
                         requestedSurface: requestedSurface
-                    )
+                    ) && self.playbackReadSession === spec.readSession
                 }) else { return }
                 self.playerState?.isPlaying = true
             }
@@ -838,7 +1189,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 Self.acceptsVideoSurfaceAttachment(
                     activeSurface: videoSurface,
                     requestedSurface: requestedSurface
-                )
+                ) && self.playbackReadSession === spec.readSession
             }) else {
                 DiagnosticLog.write("[MPV_PLAY_ERROR_IGNORED] inactiveSurface=\(requestedSurface.rawValue)")
                 return
@@ -848,13 +1199,17 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     }
 
     public func pause() {
+        qualityMetrics.cachePause(false, eligible: false, now: ProcessInfo.processInfo.systemUptime)
         PlaybackBackgroundBudget.shared.remove(session: backgroundBudgetSession)
         lock.lock()
+        #if DEBUG
+        if performanceTrackingEnabled { performanceFrames.pauseRequests += 1 }
+        #endif
         let activeContext = context
         pauseRequested = true
         driveStallWindow = DrivePlaybackStallWindow()
         status = .paused
-        cacheStallStart = nil
+        cacheStallStart = nil; cacheStallUptime = nil
         cacheStallTask?.cancel()
         cacheStallTask = nil
         lock.unlock()
@@ -873,6 +1228,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     public func resume() {
         lock.lock()
+        guard !dolbyVisionBlocked, !audioOutputBlocked, !dialogueBlocked else { lock.unlock(); return }
         let activeContext = context
         pauseRequested = false
         status = .playing
@@ -890,6 +1246,9 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     @MainActor
     public func seek(to position: Int64) {
+        #if DEBUG
+        withLock { if performanceTrackingEnabled { performanceFrames.seekRequests += 1 } }
+        #endif
         // Event reads and commands both run on MainActor. Retire every queued
         // native event before assigning a new seek owner; never relabel old events.
         guard drainPendingEvents(limit: 4_096) else {
@@ -912,6 +1271,10 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             DiagnosticLog.write("[MPV_SEEK_SKIP] item is not seekable, positionMs=\(position), durationSeconds=\(durationSeconds)")
             return
         }
+        spec?.readSession?.advance()
+        qualityMetrics.beginSeek(now: ProcessInfo.processInfo.systemUptime)
+        PlaybackBackgroundBudget.shared.update(session: backgroundBudgetSession, bufferedAhead: 0,
+            isLoading: true, isSeeking: true, isBuffering: false)
         withLock {
             seekActivity.begin()
             driveStallWindow = DrivePlaybackStallWindow()
@@ -929,8 +1292,18 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             cancelSeekTransferMetrics()
         }
         playerState?.isSeeking = true
+        if let view = withLock({ renderView }), let surface = view.dolbyVisionSurface {
+            view.makeOpenGLContextCurrent()
+            surface.invalidate(beforeGeneration: nv_mpv_dolby_renderer_status(activeContext).generation &+ 1)
+            hdrSubmittedMediaID = nil
+        }
         let result = nv_mpv_command3(activeContext, "seek", "\(seconds)", seekMode)
         guard result >= 0 else {
+            if let view = withLock({ renderView }) {
+                view.makeOpenGLContextCurrent()
+                view.dolbyVisionSurface?.invalidate(beforeGeneration: 0)
+                view.requestOpenGLDisplay()
+            }
             withLock {
                 postSeekEndGuard.reset()
                 seekActivity.finish(owner: seekActivity.owner)
@@ -947,17 +1320,25 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     public func stop() {
         PlaybackBackgroundBudget.shared.remove(session: backgroundBudgetSession)
         lock.lock()
+        let retiredReadSession = playbackReadSession
+        let retiredReadLease = playbackReadLease
+        playbackReadSession = nil; playbackReadLease = nil
+        qualityMetrics.stop(now: ProcessInfo.processInfo.systemUptime)
         let activeContext = context
         let retiredEventTask: Task<Void, Never>?
+        let retiredEventPump: MPVEventPump?
         let retiredRenderView: MPVOpenGLVideoView?
         if stopResourcePolicy == .fullDestroy {
             context = nil
             retiredEventTask = eventTask
             eventTask = nil
+            retiredEventPump = eventPump
+            eventPump = nil
             retiredRenderView = renderView
             renderRequestGate.reset()
         } else {
             retiredEventTask = nil
+            retiredEventPump = nil
             retiredRenderView = nil
         }
         artworkTask?.cancel()
@@ -966,6 +1347,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         temporarySubtitleFiles = []
         temporaryArtworkFiles = []
         pendingExternalAudioURL = nil
+        pendingSubtitles = []
         pendingSpec = nil
         activeSpec = nil
         status = .idle
@@ -979,23 +1361,32 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         isPausedForCache = false
         postSeekEndGuard.reset()
         seekActivity.resetMedia()
-        cacheStallStart = nil
+        cacheStallStart = nil; cacheStallUptime = nil
         cacheStallTask?.cancel()
         cacheStallTask = nil
         cacheStallNotified = false
         startupWatchdogTask?.cancel()
         startupWatchdogTask = nil
+        diagnosticsTask?.cancel()
+        diagnosticsTask = nil
+        hardwareDecodeFallback = nil
         lock.unlock()
+        retiredReadSession?.stop(); retiredReadLease?.cancel()
 
         updateDisplaySleepPrevention()
 
         if let activeContext {
+            if stopResourcePolicy == .fullDestroy {
+                nv_mpv_set_wakeup_callback(activeContext, nil, nil)
+                retiredEventPump?.cancel()
+            }
             nv_mpv_command1(activeContext, "stop")
             if stopResourcePolicy == .fullDestroy {
                 retiredEventTask?.cancel()
                 let retirementTask = retireContext(
                     activeContext,
                     eventTask: retiredEventTask,
+                    eventPump: retiredEventPump,
                     renderView: retiredRenderView
                 )
                 withLock {
@@ -1005,6 +1396,11 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
         Self.removeTemporarySubtitleFiles(subtitleFiles)
         Task { @MainActor in
+            guard self.withLock({ self.playbackReadSession == nil }) else { return }
+            self.withLock { self.renderView }?.presentationInvalidated?(.retirement)
+            SystemHDRController.shared.release(ownerID: self.systemHDROwnerID)
+            self.floatingCrop.reset(context: self.withLock { self.context })
+            self.resetPlaybackDiagnostics()
             self.cancelSeekTransferMetrics()
             self.playerState?.currentSpec = nil
             self.playerState?.endDisposition = nil
@@ -1012,6 +1408,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             self.playerState?.isPlaying = false
             self.playerState?.position = 0
             self.playerState?.duration = 0
+            self.playerState?.isSeekable = nil
             self.playerState?.bufferedUntil = 0
             self.playerState?.isMediaLoading = false
             self.playerState?.isSeeking = false
@@ -1036,28 +1433,78 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
     }
 
+    /// Await the real render/context retirement when the configured stop policy destroys it.
+    @MainActor
+    public func stopAndWaitForRetirement() async {
+        stop()
+        await withLock { renderRetirementTask }?.value
+    }
+
+    #if DEBUG
+    /// Identity-only probe; never exports URLs, headers or credentials.
+    var presentationProbeIdentity: (context: UInt, readSession: ObjectIdentifier?) {
+        withLock { (context.map { UInt(bitPattern: $0) } ?? 0,
+                    playbackReadSession.map(ObjectIdentifier.init)) }
+    }
+    #endif
+
     private func retireContext(
         _ context: OpaquePointer,
         eventTask: Task<Void, Never>?,
+        eventPump: MPVEventPump?,
         renderView: MPVOpenGLVideoView?
     ) -> Task<Void, Never> {
         let contextValue = UInt(bitPattern: context)
         return Task { @MainActor in
             guard let retiredContext = OpaquePointer(bitPattern: contextValue) else { return }
+            if self.withLock({ self.context == nil }) { renderView?.presentationInvalidated?(.retirement) }
             renderView?.makeOpenGLContextCurrent()
             _ = nv_mpv_free_render_context(retiredContext)
             await eventTask?.value
-            nv_mpv_destroy(retiredContext)
+            withExtendedLifetime(eventPump) { nv_mpv_destroy(retiredContext) }
             DiagnosticLog.write("[MPV_DESTROY] surface=\(self.videoSurface.rawValue) policy=\(self.stopResourcePolicy.rawValue)")
         }
     }
 
-    public func setVolume(_ volume: Float) {
+    @discardableResult
+    public func setVolume(_ volume: Float) -> Bool {
+        guard volume.isFinite, withLock({ volumeControl == .player }) else { return false }
         audioPreferences.setVolume(volume)
+        return true
     }
 
-    public func setMuted(_ muted: Bool) { audioPreferences.setMuted(muted) }
-    public func toggleMute() { audioPreferences.toggleMute() }
+    @discardableResult
+    public func setMuted(_ muted: Bool) -> Bool {
+        guard withLock({ volumeControl == .player }) else { return false }
+        audioPreferences.setMuted(muted)
+        return true
+    }
+
+    @discardableResult
+    public func toggleMute() -> Bool {
+        guard withLock({ volumeControl == .player }) else { return false }
+        audioPreferences.toggleMute()
+        return true
+    }
+
+    /// An explicit user action; keep every device/channel/rate and gain preference.
+    @MainActor
+    public func requestPlayerVolumeControl() {
+        var preference = audioOutputPreferences.snapshot
+        if preference.dolbyAudio == .pcm {
+            refreshAudioOutput(force: true)
+        } else {
+            preference.dolbyAudio = .pcm
+            audioOutputPreferences.set(preference)
+        }
+    }
+
+    @MainActor
+    func updateVolumeControl(audio: PlaybackDiagnostics.Audio?) {
+        let control = PlaybackVolumeControl.resolve(audio: audio, hasPlayback: audio != nil || withLock { activeSpec != nil })
+        withLock { volumeControl = control }
+        if playerState?.volumeControl != control { playerState?.volumeControl = control }
+    }
 
     private func applyAudioPreference() {
         withLock {
@@ -1066,7 +1513,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             // Render callbacks also acquire this lock. Never wait for the mpv core
             // while holding it: the core may be waiting for that render callback.
             let muteCode = nv_mpv_set_property_flag_async(context, Self.audioMuteReplyUserdata, "mute", preference.isMuted ? 1 : 0)
-            let volumeCode = nv_mpv_set_property_double_async(context, Self.audioVolumeReplyUserdata, "volume", Double(preference.volume * 100))
+            let volumeCode = nv_mpv_set_property_double_async(context, Self.audioVolumeReplyUserdata, "volume", Double(preference.volume * 100) * dialogueGain)
             if muteCode < 0 || volumeCode < 0 {
                 DiagnosticLog.write("[MPV_AUDIO_PREFERENCE_ERROR] enqueue mute=\(muteCode) volume=\(volumeCode)")
             }
@@ -1079,7 +1526,327 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             let preference = self.audioPreferences.snapshot
             self.playerState?.volume = preference.volume
             self.playerState?.isMuted = preference.isMuted
+            self.playerState?.volumeControl = self.withLock { self.volumeControl }
         }
+    }
+
+    @MainActor
+    private func resetDialogueProcessing() {
+        withLock { dialogueGeneration &+= 1 }
+        dialogueTask?.cancel()
+        dialogueTask = nil
+        dialogueTarget = nil
+        dialogueAppliedFilter = ""
+        dialogueFailed = false
+        dialogueRestoreFailed = false
+        pendingDialogueReply = nil
+        dialogueProperties = [:]
+        withLock { dialogueGain = 1; dialogueBlocked = false }
+        applyAudioPreference()
+    }
+
+    @MainActor
+    private func writeDialogueFilter(_ value: String, generation: UInt64) async -> Bool {
+        guard generation == withLock({ dialogueGeneration }),
+              let activeContext = withLock({ currentFileLoaded ? context : nil }) else { return false }
+        nextDialogueReplyID &+= 1
+        let id = nextDialogueReplyID
+        pendingDialogueReply = (id, nil)
+        // `set af` only acknowledges the option value. The af command also
+        // initializes the graph and restores the old chain on failure.
+        guard nv_mpv_command3_async(activeContext, id, "af", "set", value) >= 0 else {
+            pendingDialogueReply = nil
+            return false
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !Task.isCancelled, generation == withLock({ dialogueGeneration }),
+              pendingDialogueReply?.id == id, pendingDialogueReply?.result == nil, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        guard generation == withLock({ dialogueGeneration }), !Task.isCancelled else { return false }
+        let result = pendingDialogueReply?.result == true
+        pendingDialogueReply = nil
+        return result
+    }
+
+    @MainActor
+    private func updateDialogueDiagnostics(_ audio: inout PlaybackDiagnostics.Audio, properties: [String: Data]) {
+        dialogueProperties = properties.filter { $0.key == "af" || $0.key == "options/audio-spdif" }
+        guard !audioSystemSleeping else {
+            audio.dialogue = .init(requested: dialoguePreferences.snapshot, status: .checking, filterConfirmed: false)
+            return
+        }
+        let source = withLock { activeSpec?.mpvOptions ?? [:] }
+        let base = source["af"] ?? ""
+        let plan = PlaybackDialoguePolicy.resolve(strength: dialoguePreferences.snapshot, audio: audio,
+            passthroughRequested: PlaybackDialoguePolicy.hasPassthroughRequest(properties["options/audio-spdif"]),
+            sourceFilters: !base.isEmpty || !(source["lavfi-complex"] ?? "").isEmpty)
+        let confirmed = PlaybackDialoguePolicy.confirms(plan, property: properties["af"])
+        if dialogueTarget != plan {
+            // A superseded write may already be queued in mpv. Always enqueue
+            // the new target after it, even when our last acknowledged state
+            // appears to match (notably enable -> disable during the fade).
+            let superseding = dialogueTask != nil || pendingDialogueReply != nil || dialogueRestoreFailed
+            let generation = withLock { dialogueGeneration &+= 1; return dialogueGeneration }
+            dialogueTask?.cancel()
+            dialogueTask = nil
+            pendingDialogueReply = nil
+            dialogueTarget = plan
+            dialogueFailed = false
+            dialogueRestoreFailed = false
+            if plan.filter != dialogueAppliedFilter || superseding {
+                let media = withLock { seekActivity.owner.mediaID }
+                let initialGain = withLock { dialogueGain }
+                let playing = withLock { !pauseRequested }
+                dialogueTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer {
+                        if self.withLock({ self.dialogueGeneration == generation }) {
+                            self.withLock { self.dialogueGain = 1 }
+                            self.applyAudioPreference()
+                            self.dialogueTask = nil
+                            self.refreshAudioOutput()
+                            self.diagnosticsSampler.reset()
+                        }
+                    }
+                    do {
+                        let accepted = try await PlaybackDialogueTransition.run(initialGain: initialGain, playing: playing,
+                            setGain: { gain in
+                                self.setDialogueGain(gain, generation: generation)
+                            }, setFilter: {
+                                guard self.withLock({ self.seekActivity.owner.mediaID == media }) else { return false }
+                                let accepted = await self.writeDialogueFilter(plan.filter.isEmpty ? base : plan.filter, generation: generation)
+                                if !accepted, !Task.isCancelled {
+                                    let restored = await self.writeDialogueFilter(base, generation: generation)
+                                    guard self.withLock({ self.dialogueGeneration == generation }) else { return false }
+                                    self.dialogueRestoreFailed = !restored
+                                    self.withLock { self.dialogueBlocked = !restored }
+                                    if !restored { self.pause() }
+                                } else if accepted {
+                                    self.withLock { self.dialogueBlocked = false }
+                                }
+                                return accepted
+                            })
+                        guard self.withLock({ generation == self.dialogueGeneration }) else { return }
+                        self.dialogueFailed = !accepted
+                        self.dialogueAppliedFilter = accepted ? plan.filter : ""
+                        DiagnosticLog.write("[MPV_DIALOGUE] mode=\(plan.status.rawValue) strength=\(plan.strength.rawValue) accepted=\(accepted)")
+                    } catch { /* Superseded preference/media; the new owner restores its gain. */ }
+                }
+            } else {
+                withLock { dialogueGain = 1 }
+                applyAudioPreference()
+            }
+        }
+        let status: PlaybackDialogueStatus = dialogueTask != nil ? .applying
+            : (dialogueRestoreFailed ? .restorationFailed : (dialogueFailed ? .failed : (confirmed ? plan.status : .checking)))
+        if dialogueRestoreFailed { playerState?.audioOutputMessage = PlaybackDialogueStatus.restorationFailed.description }
+        audio.dialogue = .init(requested: plan.strength, status: status,
+                               filterConfirmed: confirmed && dialogueTask == nil && !dialogueFailed)
+    }
+
+    private func setDialogueGain(_ gain: Double, generation: UInt64) {
+        withLock {
+            guard dialogueGeneration == generation, let context else { return }
+            dialogueGain = gain
+            // No UI publication or main/render-thread pacing for each fade tick.
+            // The persisted volume and current mute preference remain untouched.
+            _ = nv_mpv_set_property_double_async(context, Self.audioVolumeReplyUserdata, "volume",
+                Double(audioPreferences.snapshot.volume * 100) * gain)
+        }
+    }
+
+    @MainActor
+    func audioEnvironmentDidChange(sleeping: Bool) {
+        if sleeping, dialogueTask != nil {
+            resetDialogueProcessing()
+            // A write already queued in mpv may have completed. Force a fresh
+            // transaction after wake instead of treating an old empty state as fact.
+            dialogueAppliedFilter = "unconfirmed-after-sleep"
+        }
+        audioSystemSleeping = sleeping
+        failedAudioDeviceUID = nil
+        withLock { compressedAudioRecovery = .init() }
+        unavailableAudioSamples = 0
+        pendingAudioOutputReplies.removeAll()
+        diagnosticsSampler.reset()
+        diagnosticAudioDevices = .init()
+        audioPlanningDevices = .init()
+        playerState?.audioOutputDevices = []
+        updateVolumeControl(audio: nil)
+        if var info = playerState?.playbackDiagnostics {
+            info.audio = .init()
+            info.audio.routeStatus = sleeping ? .suspended : .checking
+            playerState?.playbackDiagnostics = info
+        }
+        // No playback restart on wake: the next bounded device read reloads the
+        // AO, retaining pause, speed, tracks, timestamps and the media identity.
+    }
+
+    @MainActor
+    func receiveAudioDevices(_ devices: PlaybackAudioDeviceSnapshot) {
+        // A failed CoreAudio query is not a device removal. Keep the last
+        // validated route until a successful snapshot describes a real change.
+        guard devices.enumerationSucceeded else { return }
+        let old = audioPlanningDevices
+        let planning = devices.retainingPCMConfiguration(from: old)
+        let topologyChanged = old.systemDefaultUID != planning.systemDefaultUID
+            || old.outputs.map(\.id) != planning.outputs.map(\.id)
+            || old.outputs.map(\.preferredChannels) != planning.outputs.map(\.preferredChannels)
+            || (!withLock({ audioOutputPlan.followSourceSampleRate })
+                && old.outputs.map(\.nominalSampleRate) != planning.outputs.map(\.nominalSampleRate))
+        if topologyChanged {
+            failedAudioDeviceUID = nil
+            withLock { compressedAudioRecovery = .init() }
+        }
+        diagnosticAudioDevices = devices
+        audioPlanningDevices = planning
+        if playerState?.audioOutputDevices != devices.outputs { playerState?.audioOutputDevices = devices.outputs }
+        refreshAudioOutput(force: topologyChanged)
+    }
+
+    @MainActor
+    private func refreshAudioOutput(force: Bool = false) {
+        guard !audioSystemSleeping, !withLock({ systemHDRAudioSuspended }) else { return }
+        // Bitstreams cannot pass through PCM filters or a changed sample clock.
+        // Restore the native route only after the old dialogue graph is gone.
+        let requiresPCM = withLock { compressedAudioRecovery.requiresPCM || currentSpeed != 1 ||
+            !(activeSpec?.mpvOptions["af"] ?? "").isEmpty ||
+            !(activeSpec?.mpvOptions["lavfi-complex"] ?? "").isEmpty }
+            || dialoguePreferences.snapshot != .off || !dialogueAppliedFilter.isEmpty || dialogueTask != nil
+        let plan = PlaybackAudioOutputPolicy.resolve(preference: audioOutputPreferences.snapshot,
+                                                    devices: audioPlanningDevices, failedDeviceUID: failedAudioDeviceUID,
+                                                    nativeDolbyAvailable: withLock { context.map { nv_mpv_runtime_capabilities($0) & 48 == 48 } ?? false },
+                                                    nativeTrueHDMATAvailable: withLock { context.map { nv_mpv_runtime_capabilities($0) & 64 != 0 } ?? false },
+                                                    nativeDTSHDHBRAvailable: withLock { context.map { nv_mpv_runtime_capabilities($0) & 256 != 0 } ?? false },
+                                                    nativePCMSampleRateAvailable: withLock { context.map { nv_mpv_runtime_capabilities($0) & 128 != 0 } ?? false },
+                                                      trueHDObjectsAvailable: withLock { context.map { nv_mpv_runtime_capabilities($0) & 512 != 0 } ?? false },
+                                                    requiresPCM: requiresPCM)
+        let old = withLock { audioOutputPlan }
+        withLock { audioOutputPlan = plan }
+        let changed = old.options != plan.options
+        guard changed || force else { return }
+        DiagnosticLog.write("[MPV_AUDIO_ROUTE] status=\(plan.status.rawValue) channels=\(plan.channels) rate=\(plan.sampleRate ?? 0) force=\(force)")
+        unavailableAudioSamples = 0
+        diagnosticsSampler.reset()
+        // Discard old route replies and facts. IDs are never reused.
+        pendingAudioOutputReplies.removeAll()
+        updateVolumeControl(audio: nil)
+        if var info = playerState?.playbackDiagnostics {
+            info.audio = .init()
+            info.audio.requestedMode = audioOutputPreferences.snapshot.mode
+            info.audio.routeStatus = plan.status
+            playerState?.playbackDiagnostics = info
+        }
+        // All runtime writes are asynchronous; a core reload can wait for a
+        // render callback which takes this engine's lock.
+        withLock {
+            guard currentFileLoaded, let context else { return }
+            // Select a capable AO before reopening the compressed decoder.
+            // Otherwise the old PCM-only AO rejects E-AC-3 and disables
+            // passthrough for the remainder of this file.
+            let orderedNames = ["coreaudio-spdif-only", "coreaudio-truehd-mat", "coreaudio-dtshd-hbr", "coreaudio-change-physical-format", "ad-queue-max-secs", "audio-buffer", "ao", "audio-device", "audio-samplerate", "audio-channels", "audio-spdif", "netvplayer-truehd-objects"]
+            var decoderChanged = false
+            for name in orderedNames {
+                // Reopen the sink after hotplug/wake, but do not rewrite
+                // unchanged decoder options. UPDATE_AD also runs for equal
+                // values; a second rebuild can strand a midstream TrueHD
+                // decoder before it receives its stream parameters.
+                guard let value = plan.options[name],
+                      old.options[name] != value || (force && name == "audio-device") else { continue }
+                nextAudioOutputReplyID += 1
+                pendingAudioOutputReplies.insert(nextAudioOutputReplyID)
+                if nv_mpv_set_property_string_async(context, nextAudioOutputReplyID, name, value) < 0 {
+                    pendingAudioOutputReplies.remove(nextAudioOutputReplyID)
+                    DiagnosticLog.write("[MPV_AUDIO_OUTPUT_ERROR] enqueue name=\(name)")
+                } else if name == "audio-spdif" || name == "netvplayer-truehd-objects" {
+                    decoderChanged = true
+                }
+            }
+            // mpv's UPDATE_AD recreates the decoder without a refresh seek.
+            // Its demux cursor can already be far ahead of the visible frame,
+            // leaving TrueHD waiting for parameters/audio that never arrive.
+            // Queue one refresh after all option writes, at the core's current
+            // position. An existing user seek already provides this resync.
+            if decoderChanged, playerState?.isSeekable == true,
+               activeSpec?.metadata["playback.kind"] != "live", !seekActivity.isPending {
+                nextAudioOutputReplyID += 1
+                pendingAudioOutputReplies.insert(nextAudioOutputReplyID)
+                if nv_mpv_command3_async(context, nextAudioOutputReplyID, "seek", "0", "relative+exact") < 0 {
+                    pendingAudioOutputReplies.remove(nextAudioOutputReplyID)
+                    DiagnosticLog.write("[MPV_AUDIO_OUTPUT_ERROR] enqueue decoder refresh")
+                } else {
+                    DiagnosticLog.write("[MPV_AUDIO_DECODER_REFRESH] queued at current position")
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func updateAudioDiagnostics(_ audio: inout PlaybackDiagnostics.Audio) -> Bool {
+        if withLock({ systemHDRAudioSuspended }) {
+            audio.routeStatus = .checking
+            unavailableAudioSamples = 0
+            return true
+        }
+        let plan = withLock { audioOutputPlan }
+        if !audioSystemSleeping, pendingAudioOutputReplies.isEmpty,
+           withLock({ compressedAudioRecovery.shouldRecover(audio: audio,
+               nativeRequested: plan.nativeDolbyEnabled, now: ProcessInfo.processInfo.systemUptime) }) {
+            // A rejected TrueHD carrier can leave mpv's internal PCM fallback
+            // waiting forever for a new frame. Reopen the decoder and shared
+            // AO asynchronously in this session, retaining tracks and pause.
+            DiagnosticLog.write("[MPV_AUDIO_PCM_RECOVERY] rejected compressed output remained without an audio driver")
+            refreshAudioOutput(force: true)
+            return false
+        }
+        audio.requestedMode = audioOutputPreferences.snapshot.mode
+        audio.routeStatus = audioSystemSleeping ? .suspended : plan.status
+        audio.requestedChannelLayouts = plan.channels
+        audio.limitedToStereo = plan.limitedToStereo
+        audio.objectRenderingUnavailable = plan.objectRenderingUnavailable
+        audio.systemDefaultDeviceName = diagnosticAudioDevices.systemDefaultDeviceName
+        audio.processDeviceCount = diagnosticAudioDevices.processOutputUIDs?.count
+        if !audioSystemSleeping, ["coreaudio", "coreaudio_exclusive", "avfoundation"].contains(audio.outputDriver ?? ""),
+           let device = diagnosticAudioDevices.processOutputDevice {
+            audio.deviceName = device.name
+            audio.deviceTransport = device.transport
+            audio.deviceChannelCapacity = device.channelCapacity
+            audio.devicePreferredChannels = device.preferredChannels
+            audio.deviceNominalSampleRate = device.nominalSampleRate
+            audio.deviceReportedLatencySeconds = device.reportedLatencySeconds
+            audio.deviceBufferFrames = device.bufferFrames
+            audio.deviceVirtualFormats = device.virtualFormats
+            audio.devicePhysicalFormats = device.physicalFormats
+        }
+        guard !audioSystemSleeping else { return true }
+        if audio.codec != nil, audio.mode == nil {
+            // Missing AO/format facts are normal during buffering and async
+            // reconfiguration. Only an actual null/failed sink proves failure.
+            guard pendingAudioOutputReplies.isEmpty,
+                  audio.outputDriver == "null" || audio.nativeAudio?.rendererState == 2 else {
+                unavailableAudioSamples = 0
+                return true
+            }
+            unavailableAudioSamples += 1
+            guard unavailableAudioSamples >= 2 else { return true }
+            let requested = audioOutputPreferences.snapshot.deviceUID
+            if let requested, failedAudioDeviceUID != requested, plan.device != "auto" {
+                failedAudioDeviceUID = requested
+                refreshAudioOutput(force: true)
+                return false
+            } else {
+                withLock { audioOutputBlocked = true }
+                playerState?.audioOutputMessage = plan.status == .unsupportedDefault ? plan.status.description
+                    : L10n.text("音频设备不可用，已暂停。设备恢复后可继续播放。")
+                if !withLock({ pauseRequested }) { pause() }
+            }
+        } else {
+            unavailableAudioSamples = 0
+            withLock { audioOutputBlocked = false }
+            playerState?.audioOutputMessage = nil
+        }
+        return true
     }
 
     public func setVideoAspectMode(_ mode: PlayerVideoAspectMode) {
@@ -1101,17 +1868,45 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     }
 
     public func selectAudioTrack(id: String) {
-        setStringProperty("aid", value: id, label: "select audio track")
-        Task { @MainActor in
-            self.playerState?.selectedAudioTrackID = id
+        let (media, selection) = withLock {
+            audioTrackSelectionGeneration &+= 1
+            return (seekActivity.owner.mediaID, audioTrackSelectionGeneration)
         }
-        DiagnosticLog.write("[MPV_TRACK] selected audio id=\(id)")
+        Task { @MainActor in
+            guard self.withLock({ self.seekActivity.owner.mediaID == media && self.audioTrackSelectionGeneration == selection }) else { return }
+            // History can restore the same selection after decoder metadata
+            // arrives. Keep its established PCM fallback and processing graph.
+            guard self.playerState?.selectedAudioTrackID != id else { return }
+            self.withLock { self.compressedAudioRecovery = .init() }
+            let hadProcessing = !self.dialogueAppliedFilter.isEmpty || self.dialogueTask != nil || self.dialogueRestoreFailed
+            self.resetDialogueProcessing()
+            self.diagnosticsSampler.reset()
+            if hadProcessing, let context = self.withLock({ self.context }) {
+                self.nextDialogueReplyID &+= 1
+                let base = self.withLock { self.activeSpec?.mpvOptions["af"] ?? "" }
+                _ = nv_mpv_command3_async(context, self.nextDialogueReplyID, "af", "set", base)
+                // This clear is queued, not acknowledged. Reconcile even if
+                // the latest preference is off, so a rejected clear cannot
+                // leave the previous track's graph silently active.
+                self.dialogueAppliedFilter = "unconfirmed-after-track-change"
+            }
+            self.setStringProperty("aid", value: id, label: "select audio track")
+            self.playerState?.selectedAudioTrackID = id
+            DiagnosticLog.write("[MPV_TRACK] selected audio id=\(id)")
+        }
     }
 
     public func selectSubtitleTrack(id: String, slot: SubtitleSlot = .primary, matchingName: String? = nil, matchingFormat: String = "") {
         let mediaID = withLock { seekActivity.owner.mediaID }
         Task { @MainActor in
             guard self.withLock({ self.seekActivity.owner.mediaID == mediaID }) else { return }
+            if slot == .primary {
+                let track = self.playerState?.subtitleTracks.first { $0.id == id }
+                self.withLock {
+                    self.automaticallySelectsPrimarySubtitle = false
+                    if id == "no" || track != nil { self.originalSubtitleSelection.select(track) }
+                }
+            }
             if id == "no" { self.applySubtitleSelection(id: "no", slot: slot); return }
             self.withLock {
                 self.pendingSubtitleSelections[slot] = id
@@ -1135,7 +1930,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         let title = sub.name.isEmpty ? L10n.text("外挂字幕") : sub.name
         guard let source = preparedSubtitleSource(for: sub, title: title) else { return }
         if !alreadyAdded {
-            let code = nv_mpv_command4(activeContext, "sub-add", source, "auto", title)
+            let code = nv_mpv_command5_async(activeContext, Self.firstSubtitleReplyUserdata,
+                "sub-add", source, "auto", title, sub.lang)
             if code < 0 {
                 withLock { preparedSubtitleSources.removeValue(forKey: sub.id) }
                 DiagnosticLog.write("[MPV_SUBTITLE_ERROR] attachment failed")
@@ -1146,6 +1942,9 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             guard self.withLock({ self.seekActivity.owner.mediaID == mediaID }) else { return }
             if select {
                 self.withLock {
+                    if slot == .primary {
+                        self.automaticallySelectsPrimarySubtitle = false
+                    }
                     self.pendingSubtitleSelections[slot] = "external:" + sub.id
                     self.pendingSubtitleMatches.removeValue(forKey: slot)
                 }
@@ -1189,10 +1988,284 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         guard withLock({ currentFileLoaded }) else { return }
         let chapters = nativePropertyJSON("chapter-list") ?? "[]"
         let editions = nativePropertyJSON("edition-list") ?? "[]"
-        playerState?.chapters = (try? PlayerChapterPolicy.chapters(json: chapters, duration: playerState?.duration ?? 0)) ?? []
+        if let disc = withLock({ activeSpec?.disc }) {
+            playerState?.chapters = disc.title.chapters.enumerated().map {
+                PlayerChapter(id: $0.offset, title: $0.element.title, seconds: $0.element.seconds)
+            }
+        } else {
+            playerState?.chapters = (try? PlayerChapterPolicy.chapters(json: chapters, duration: playerState?.duration ?? 0)) ?? []
+            if playerState?.chapters.isEmpty == true, let server = withLock({ activeSpec?.mediaServer }) {
+                playerState?.chapters = server.chapters.enumerated().map {
+                    PlayerChapter(id: $0.offset, title: $0.element.title, seconds: $0.element.seconds)
+                }
+            }
+        }
         playerState?.containerEditions = (try? PlayerChapterPolicy.editions(json: editions)) ?? []
         playerState?.currentContainerEditionID = nativePropertyJSON("current-edition").flatMap(Int.init)
         playerState?.chapterOwnerID = withLock { seekActivity.owner.mediaID }
+    }
+
+    @MainActor
+    private func resetPlaybackDiagnostics() {
+        systemHDRRequestedMediaID = nil
+        hdrActivation.reset()
+        hdrSubmittedMediaID = nil
+        systemDolbyVisionFailed = false
+        if let view = withLock({ renderView }), !view.isHDRDevelopmentProbe {
+            withLock { hdrPresentation = nil; systemDolbyVisionActive = false }
+            if view.hdrPrototypeSurface != nil || view.dolbyVisionSurface != nil { view.disableHDRPrototype() }
+        }
+        resetDialogueProcessing()
+        dolbyVisionProbeTask?.cancel()
+        dolbyVisionProbeTask = nil
+        dolbyVisionProbeAttempted = false
+        localDolbyVision = nil
+        videoPresentationAllowed = false
+        withLock { dolbyVisionBlocked = false }
+        playerState?.videoCompatibilityMessage = nil
+        playerState?.audioOutputMessage = nil
+        playerState?.audioOutputDevices = []
+        pendingAudioOutputReplies.removeAll()
+        failedAudioDeviceUID = nil
+        unavailableAudioSamples = 0
+        withLock { audioOutputBlocked = false }
+        withLock {
+            diagnosticsTask?.cancel()
+            diagnosticsTask = nil
+        }
+        diagnosticsSampler.reset()
+        diagnosticAudioDevices = PlaybackAudioDeviceSnapshot()
+        diagnosticLocalInputBytes = nil
+        playerState?.playbackStatistics = nil
+        playerState?.playbackSummaries.end()
+        audioPlanningDevices = PlaybackAudioDeviceSnapshot()
+        playerState?.playbackDiagnostics = nil
+        playerState?.videoDisplayAspectRatio = nil
+        updateVolumeControl(audio: nil)
+    }
+
+    @MainActor
+    private func startPlaybackDiagnostics() {
+        // The load already applied the preflight device plan. Preserve that
+        // snapshot to avoid an immediate, redundant AO reload during init.
+        let preparedDevices = diagnosticAudioDevices
+        let preparedPlanningDevices = audioPlanningDevices
+        resetPlaybackDiagnostics()
+        refreshVideoGeometry()
+        diagnosticAudioDevices = preparedDevices
+        audioPlanningDevices = preparedPlanningDevices
+        playerState?.audioOutputDevices = preparedDevices.outputs
+        let mediaID = withLock { seekActivity.owner.mediaID }
+        if let spec = withLock({ activeSpec }) {
+            diagnosticLocalInputBytes = PlaybackLocalInputSizePolicy.bytes(spec: spec, nativeSize: nativePropertyJSON("file-size"))
+            playerState?.playbackSummaries.begin(identity: spec.playbackSummaryIdentity, mediaID: mediaID)
+        }
+        let task = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self,
+                      self.withLock({ self.currentFileLoaded && self.activeSpec != nil && self.seekActivity.owner.mediaID == mediaID })
+                else { return }
+                if let context = self.withLock({ self.context }) {
+                    self.floatingCrop.sample(context: context, owner: mediaID,
+                        eligible: self.videoPresentationAllowed && self.playerState?.isSeeking != true)
+                }
+                // One serial utility worker across both engines. Do not attach
+                // the result to a newer media, sleeping system or retired task.
+                if !self.audioSystemSleeping,
+                   let devices = await PlaybackAudioDeviceProbeWorker.snapshot() {
+                    guard !Task.isCancelled,
+                          self.withLock({ self.seekActivity.owner.mediaID == mediaID }) else { return }
+                    if !self.audioSystemSleeping {
+                        self.receiveAudioDevices(devices)
+                        self.samplePlaybackDiagnostics(mediaID: mediaID)
+                    }
+                }
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
+        withLock { diagnosticsTask = task }
+    }
+
+    @MainActor
+    private func samplePlaybackDiagnostics(mediaID: UUID) {
+        guard let activeContext = withLock({ currentFileLoaded ? context : nil }) else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let expired = diagnosticsSampler.expire(owner: mediaID, now: now) {
+            publishPlaybackDiagnostics(properties: expired, mediaID: mediaID)
+        }
+        var extra: [String] = []
+        let visibility = playerState?.statisticsVisibility
+        let presentationGeneration = visibility?.isVisible == true ? visibility?.generation : nil
+        if presentationGeneration != nil { extra += PlaybackDiagnosticsSampler.presentationProperties }
+        #if DEBUG
+        if performanceDiagnosticsHandler != nil {
+            extra += MPVPerformanceReading.properties + PlaybackDiagnosticsSampler.presentationProperties
+        }
+        #endif
+        let requests = diagnosticsSampler.begin(owner: mediaID, now: now, additionalProperties: extra,
+                                                presentationGeneration: presentationGeneration)
+        #if DEBUG
+        if !requests.isEmpty { statisticsSamplingObserver?(mediaID, requests.map(\.name)) }
+        #endif
+        for request in requests {
+            if nv_mpv_get_property_async(activeContext, request.id, request.name) < 0,
+               let properties = diagnosticsSampler.receive(id: request.id, name: request.name, json: nil, owner: mediaID) {
+                publishPlaybackDiagnostics(properties: properties, mediaID: mediaID)
+            }
+        }
+    }
+
+    @MainActor
+    private func publishPlaybackDiagnostics(properties: [String: Data], mediaID: UUID) {
+        guard withLock({ seekActivity.owner.mediaID == mediaID && currentFileLoaded && activeSpec != nil }),
+              let activeContext = withLock({ context }) else { return }
+        var info = PlaybackDiagnostics(
+            mediaID: mediaID, properties: properties,
+            fallback: withLock { hardwareDecodeFallback }, display: currentDiagnosticDisplay(context: activeContext)
+        )
+        let visibility = playerState?.statisticsVisibility
+        if visibility?.isVisible == true, diagnosticsSampler.presentationGeneration == visibility?.generation {
+            info.statistics = PlaybackStatistics(properties: properties)
+        }
+        info.localInputBytes = diagnosticLocalInputBytes
+        // Inspect local HEVC once, off the main/render thread, using the same
+        // bundled dependencies. Never perform a second network read or send headers.
+        let dolbyRenderer = DolbyRendererObservation.read(activeContext)
+        if info.video.codec == "hevc", dolbyRenderer?.supportsReconstruction != true, !dolbyVisionProbeAttempted {
+            dolbyVisionProbeAttempted = true
+            if let spec = withLock({ activeSpec }), let url = URL(string: spec.url), url.isFileURL {
+                let library = Self.cString(nv_mpv_loaded_library_path(activeContext))
+                dolbyVisionProbeTask = Task { @MainActor [weak self] in
+                    let observed = await LocalDolbyVisionProbeWorker.shared.read(library: library, file: url)
+                    guard let self, let observed, !Task.isCancelled,
+                          self.withLock({ self.seekActivity.owner.mediaID == mediaID && self.currentFileLoaded }) else { return }
+                    self.localDolbyVision = observed
+                    self.dolbyVisionProbeTask = nil
+                    self.diagnosticsSampler.reset()
+                    self.samplePlaybackDiagnostics(mediaID: mediaID)
+                }
+            }
+        }
+        info.video.dolbyVision = PlaybackDolbyVision.assess(video: info.video, local: localDolbyVision,
+                                                          trackIndex: info.video.streamIndex, renderer: dolbyRenderer)
+        info.video.hdrVivid = PlaybackHDRVivid.assess(renderer: dolbyRenderer)
+        if info.video.hdrVivid != nil { info.video.dynamicHDRMetadataDetected = true }
+        let blocked = info.video.dolbyVision?.route.blocksVideo == true
+        let ready = info.video.pixelFormat != nil && dolbyVisionProbeTask == nil
+        withLock { dolbyVisionBlocked = ready && blocked }
+        let presentationChanged = videoPresentationAllowed != (ready && !blocked)
+        videoPresentationAllowed = ready && !blocked
+        if ready && blocked {
+            playerState?.videoCompatibilityMessage = info.video.dolbyVision?.route.description
+            playerState?.isMediaLoading = false
+            if !withLock({ pauseRequested }) { pause() }
+        } else if ready {
+            playerState?.videoCompatibilityMessage = nil
+        }
+        // The Swift wrapper's needsDisplay does not invalidate its private GL
+        // backing view. Use the existing render gate, including while paused.
+        if presentationChanged { requestRender() }
+        reconcileHDRPresentation(video: info.video)
+        info.display = currentDiagnosticDisplay(context: activeContext)
+        info.video.dolbyVision?.systemPresentation = currentSystemDolbyVision(context: activeContext)
+        // Preserve the values parsed from the current native property batch.
+        if let hdr = withLock({ hdrPresentation }) {
+            info.display.toneMapping = "bt.2390"
+            info.display.referencePeakNits = hdr.targetPeakSignalNits
+        } else {
+            let color = PlaybackColorPolicy.options(source: withLock({ activeSpec?.mpvOptions ?? [:] }), preference: colorPreferences.snapshot)
+            info.display.toneMapping = color["tone-mapping"]?.value
+            info.display.referencePeakNits = color["target-peak"].flatMap { Int($0.value) }
+        }
+        info.display.videoOutput = PlaybackVideoOutputPolicy.assess(
+            mode: colorPreferences.snapshot.videoOutput, video: info.video, display: info.display)
+        if info.video.hdrVivid?.dynamicMappingApplied == true { info.display.toneMapping = "HDR Vivid" }
+        if withLock({ systemDolbyVisionActive }) {
+            let source = info.video.dolbyVision?.systemPresentation?.metadataOrigin == "source-rpu-unmodified"
+            info.display.toneMapping = source ? "source P8 / system submission (experimental)" : "BT.2390 → HLG / system DV 8.4"
+            info.display.referencePeakNits = source ? nil : 1000
+        }
+        guard updateAudioDiagnostics(&info.audio) else { return }
+        updateVolumeControl(audio: pendingAudioOutputReplies.isEmpty && !audioSystemSleeping
+            && !withLock({ systemHDRAudioSuspended }) ? info.audio : nil)
+        updateDialogueDiagnostics(&info.audio, properties: properties)
+        info.quality = qualityMetrics.snapshot().summary
+        info.vodRebufferExperimentTarget = vodRebuffer.enabled ? vodRebuffer.target : nil
+        #if DEBUG
+        performanceDiagnosticsHandler?(info, properties)
+        #endif
+        playerState?.playbackSummaries.receive(info)
+        if playerState?.playbackStatistics != info.statistics { playerState?.playbackStatistics = info.statistics }
+        if playerState?.playbackDiagnostics != info { playerState?.playbackDiagnostics = info }
+    }
+
+    @MainActor
+    private func currentDiagnosticDisplay(context: OpaquePointer) -> PlaybackDiagnostics.Display {
+        let view = withLock { renderView }
+        let attached = view?.isPlaybackSurfaceActive == true && view?.window != nil && view?.displayIsAsleep == false
+        let screen = attached ? view?.window?.screen : nil
+        let displayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+        let mode = displayID.flatMap { CGDisplayCopyDisplayMode($0) }
+        let target = attached ? nv_mpv_render_target_format(context) : 0
+        let hdr = withLock { hdrPresentation }
+        let submittedHDR = target == 0x881A && view?.hdrPrototypeSurface != nil
+            && hdrSubmittedMediaID == withLock({ seekActivity.owner.mediaID })
+        let systemDV = currentSystemDolbyVision(context: context)
+        let submittedDV = attached && target == 0x881A && systemDV?.currentFrameSubmitted == true
+        let sourceDV = submittedDV && systemDV?.metadataOrigin == "source-rpu-unmodified"
+        var result = PlaybackDiagnostics.Display(
+            name: screen.map { String($0.localizedName.prefix(128)) },
+            currentEDRHeadroom: screen.map { Double($0.maximumExtendedDynamicRangeColorComponentValue) },
+            potentialEDRHeadroom: screen.map { Double($0.maximumPotentialExtendedDynamicRangeColorComponentValue) },
+            renderBackend: sourceDV ? "libmpv / source copy / AVSampleBufferDisplayLayer" : (submittedDV ? "libmpv / OpenGL / IOSurface / AVSampleBufferDisplayLayer" :
+                (submittedHDR ? "libmpv / OpenGL / IOSurface / Metal" : (target == 0x8058 ? "libmpv / OpenGL" : nil))),
+            targetFormat: sourceDV ? "P010 / source RPU / P\(systemDV?.outputProfile ?? "unknown")" : (submittedDV ? "GL_RGBA16F / CVPixelBuffer / HLG" :
+                (submittedHDR ? "GL_RGBA16F / rgba16Float" : (target == 0x8058 ? "GL_RGBA8" : nil))),
+            // EDR here records a submitted, tagged surface with CURRENT >1.
+            // It does not claim calibrated luminance or a receiver HDR signal.
+            edrEnabled: submittedDV ? (systemDV?.readyForDisplay == true && (screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1) > 1.01) :
+                (submittedHDR && hdr != nil ? (hdr?.awaitingHeadroom == false && (screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1) > 1.01) : (target == 0x8058 ? false : nil)),
+            iccSubmission: target == 0x8058 ? iccSubmission : nil,
+            timing: screen.map { _ in PlaybackDisplayTiming(configuredRefreshRateHz: mode?.refreshRate) }
+        )
+        result.hdrPresentation = submittedHDR || submittedDV ? hdr : nil
+        return result
+    }
+
+    @MainActor
+    private func currentSystemDolbyVision(context: OpaquePointer) -> DolbyVisionSystemPresentation? {
+        guard let view = withLock({ renderView }), let surface = view.dolbyVisionSurface else { return nil }
+        return .read(facts: surface.facts, renderer: DolbyRendererObservation.read(context),
+            sameMedia: hdrSubmittedMediaID == withLock({ seekActivity.owner.mediaID }) &&
+                view.isPlaybackSurfaceActive && view.window != nil && !view.displayIsAsleep && videoPresentationAllowed)
+    }
+
+    /// Refresh host facts immediately on display/policy changes, without waiting
+    /// for another decoder batch or issuing synchronous mpv property requests.
+    @MainActor
+    func refreshVideoOutputAssessment() {
+        guard var info = playerState?.playbackDiagnostics,
+              let activeContext = withLock({ currentFileLoaded && activeSpec != nil && seekActivity.owner.mediaID == info.mediaID ? context : nil })
+        else { return }
+        let previouslyVivid = info.video.hdrVivid != nil
+        info.video.hdrVivid = PlaybackHDRVivid.assess(renderer: DolbyRendererObservation.read(activeContext))
+        if info.video.hdrVivid != nil { info.video.dynamicHDRMetadataDetected = true }
+        else if previouslyVivid { info.video.dynamicHDRMetadataDetected = false }
+        reconcileHDRPresentation(video: info.video)
+        info.display = currentDiagnosticDisplay(context: activeContext)
+        info.video.dolbyVision?.systemPresentation = currentSystemDolbyVision(context: activeContext)
+        let color = PlaybackColorPolicy.options(source: withLock({ activeSpec?.mpvOptions ?? [:] }), preference: colorPreferences.snapshot)
+        info.display.toneMapping = withLock({ hdrPresentation }) == nil ? color["tone-mapping"]?.value : "bt.2390"
+        if info.video.hdrVivid?.dynamicMappingApplied == true { info.display.toneMapping = "HDR Vivid" }
+        info.display.referencePeakNits = withLock({ hdrPresentation })?.targetPeakSignalNits ?? color["target-peak"].flatMap { Int($0.value) }
+        if withLock({ systemDolbyVisionActive }) {
+            let source = info.video.dolbyVision?.systemPresentation?.metadataOrigin == "source-rpu-unmodified"
+            info.display.toneMapping = source ? "source P8 / system submission (experimental)" : "BT.2390 → HLG / system DV 8.4"
+            info.display.referencePeakNits = source ? nil : 1000
+        }
+        info.display.videoOutput = PlaybackVideoOutputPolicy.assess(
+            mode: colorPreferences.snapshot.videoOutput, video: info.video, display: info.display)
+        if playerState?.playbackDiagnostics != info { playerState?.playbackDiagnostics = info }
     }
 
     @MainActor
@@ -1200,6 +2273,19 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         guard let activeContext = withLock({ context }), let value = nv_mpv_copy_property_json(activeContext, name) else { return nil }
         defer { nv_mpv_free_string(value) }
         return String(cString: value)
+    }
+
+    /// Read-only evidence from the active demuxer; callers must redact cue text.
+    @MainActor
+    public func subtitleTimingObservation() -> (text: String, start: Double?, end: Double?, selectedID: String?) {
+        func value(_ name: String) -> Any? {
+            guard let json = nativePropertyJSON(name), let data = json.data(using: .utf8) else { return nil }
+            return try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
+        }
+        let sid = value("sid")
+        let selected = (sid as? NSNumber).flatMap { $0.intValue > 0 ? $0.stringValue : nil } ?? (sid as? String).flatMap { $0 == "no" ? nil : $0 }
+        return (value("sub-text") as? String ?? "", value("sub-start") as? Double,
+                value("sub-end") as? Double, selected)
     }
 
     @MainActor
@@ -1210,7 +2296,15 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         guard let snapshot = try? MPVTrackListParser.parse(json: String(cString: json)) else { return }
         playerState?.audioTracks = snapshot.audioTracks
         playerState?.selectedAudioTrackID = snapshot.selectedAudioTrackID
-        playerState?.subtitleTracks = snapshot.subtitleTracks
+        var subtitles = snapshot.subtitleTracks
+        if let indices = withLock({ activeSpec?.mediaServer?.externalSubtitleIndices }) {
+            for (url, trackID) in snapshot.externalTrackIDs {
+                if let index = indices[url], let offset = subtitles.firstIndex(where: { $0.id == trackID }) {
+                    subtitles[offset].sourceIndex = index
+                }
+            }
+        }
+        playerState?.subtitleTracks = subtitles
         playerState?.selectedSubtitleTrackID = snapshot.selectedSubtitleTrackID
         playerState?.selectedSecondarySubtitleTrackID = snapshot.selectedSecondarySubtitleTrackID
         let sources = withLock { preparedSubtitleSources }
@@ -1224,7 +2318,27 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             if desired.hasPrefix("external:"), let source = sources[String(desired.dropFirst(9))] {
                 id = snapshot.externalTrackIDs.first { Self.subtitleSourceKey($0.key) == Self.subtitleSourceKey(source) }?.value
             }
-            if let id { applySubtitleSelection(id: id, slot: slot) }
+            if let id {
+                if slot == .primary, let track = subtitles.first(where: { $0.id == id }) {
+                    withLock { originalSubtitleSelection.select(track) }
+                }
+                applySubtitleSelection(id: id, slot: slot)
+            }
+        }
+        if let retained = withLock({ originalSubtitleSelection.matchingID(in: subtitles) }),
+           retained != (playerState?.selectedSubtitleTrackID ?? "no") {
+            applySubtitleSelection(id: retained, slot: .primary)
+        }
+        if withLock({ automaticallySelectsPrimarySubtitle }),
+           withLock({ activeSpec?.metadata["android.originalAttachments"] == "true" }),
+           let provided = withLock({ activeSpec?.subs.first { ($0.flag == 0 ? 1 : $0.flag) & 1 != 0 } }),
+           let source = sources[provided.id],
+           let id = snapshot.externalTrackIDs.first(where: { Self.subtitleSourceKey($0.key) == Self.subtitleSourceKey(source) })?.value {
+            if id != playerState?.selectedSubtitleTrackID { applySubtitleSelection(id: id, slot: .primary) }
+        } else if withLock({ automaticallySelectsPrimarySubtitle }),
+           let preferred = PlayerSubtitlePolicy.preferredInitialSubtitleTrack(
+               from: subtitles, selectedID: playerState?.selectedSubtitleTrackID) {
+            applySubtitleSelection(id: preferred.id, slot: .primary)
         }
         withLock { currentSubtitleFormat = playerState?.subtitleTracks.first { $0.id == playerState?.selectedSubtitleTrackID }?.subtitleKind ?? .text }
         reapplySubtitleStyle(stage: "tracks")
@@ -1291,6 +2405,10 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         try check(nv_mpv_observe_change(created, 11, "secondary-sid"), context: created, action: "observe secondary-sid")
         try check(nv_mpv_observe_change(created, 12, "chapter-list"), context: created, action: "observe chapter-list")
         try check(nv_mpv_observe_change(created, 13, "edition-list"), context: created, action: "observe edition-list")
+        try check(nv_mpv_observe_flag(created, 14, "seekable"), context: created, action: "observe seekable")
+        for (offset, property) in ["video-out-params/dw", "video-out-params/dh", "video-out-params/rotate"].enumerated() {
+            try check(nv_mpv_observe_change(created, UInt64(15 + offset), property), context: created, action: "observe \(property)")
+        }
 
         lock.lock()
         context = created
@@ -1313,6 +2431,251 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             context: activeContext,
             action: "create libmpv render context"
         )
+        submittedICCData = nil
+        iccSubmission = .unavailable
+        if let view = withLock({ renderView }) { view.refreshDisplayColorProfile() }
+    }
+
+    @MainActor
+    func updateDisplayColorProfile(for view: MPVOpenGLVideoView) {
+        guard let activeContext = withLock({ attachedViewID == Self.viewID(for: view) ? context : nil }),
+              view.isPlaybackSurfaceActive else { return }
+        defer { refreshVideoOutputAssessment() }
+        if view.hdrPrototypeSurface != nil || view.dolbyVisionSurface != nil {
+            view.makeOpenGLContextCurrent()
+            _ = nv_mpv_set_render_icc(activeContext, nil, 0)
+            submittedICCData = nil
+            iccSubmission = .unavailable
+            // The Metal layer owns its extended-linear tag. Do not tag it with
+            // the display ICC, which would misdescribe unconverted linear RGB.
+            return
+        }
+        if submittedICCData == view.displayICCData, iccSubmission != .unavailable {
+            view.tagSurfaceColorSpace(view.displayColorSpace)
+            return
+        }
+        view.makeOpenGLContextCurrent()
+        let code = view.displayICCData?.withUnsafeBytes {
+            nv_mpv_set_render_icc(activeContext, $0.baseAddress, $0.count)
+        } ?? -1
+        if code >= 0 {
+            submittedICCData = view.displayICCData
+            iccSubmission = view.displayICCSource
+            view.tagSurfaceColorSpace(view.displayColorSpace)
+        } else {
+            // Clear the previous monitor's LUT even when the new profile fails.
+            _ = nv_mpv_set_render_icc(activeContext, nil, 0)
+            submittedICCData = nil
+            iccSubmission = .unavailable
+            view.tagSurfaceColorSpace(.sRGB)
+        }
+        DiagnosticLog.write("[MPV_COLOR_ICC] surface=\(videoSurface.rawValue) status=\(iccSubmission.rawValue) bytes=\(submittedICCData?.count ?? 0)")
+        view.requestOpenGLDisplay()
+    }
+
+    @MainActor
+    private func refreshColorSettings() {
+        defer { refreshVideoOutputAssessment() }
+        guard let (spec, activeContext) = withLock({ activeSpec.flatMap { spec in context.map { (spec, $0) } } }) else { return }
+        if let info = playerState?.playbackDiagnostics { reconcileHDRPresentation(video: info.video) }
+        do {
+            try applyMPVOptions(PlaybackColorPolicy.options(source: spec.mpvOptions, preference: colorPreferences.snapshot),
+                                context: activeContext, stage: "color", mergeDiagnostics: true)
+            withLock { renderView }?.requestOpenGLDisplay()
+        } catch {
+            DiagnosticLog.write("[MPV_COLOR_ERROR] managed SDR options unavailable")
+        }
+    }
+
+    @MainActor
+    private func fallbackFromSystemDolbyVision(in view: MPVOpenGLVideoView) {
+        DiagnosticLog.write("[MPV_SYSTEM_DV_ERROR] same-session=true facts=\(view.dolbyVisionSurface?.facts ?? [:])")
+        systemDolbyVisionFailed = true
+        hdrSubmittedMediaID = nil
+        withLock { systemDolbyVisionActive = false }
+        view.disableHDRPrototype()
+        // Keep the ordinary HDR plan and lease, with the same media/AO/tracks.
+        if withLock({ hdrPresentation != nil }), !view.enableHDRPresentation() {
+            hdrActivation.fail()
+            withLock { hdrPresentation = nil }
+        }
+        refreshColorSettings()
+        view.refreshDisplayColorProfile()
+        view.requestOpenGLDisplay()
+    }
+
+    @MainActor
+    func fallbackFromHDRPrototype(in view: MPVOpenGLVideoView) {
+        guard withLock({ attachedViewID == Self.viewID(for: view) }), view.hdrPrototypeSurface != nil else { return }
+        hdrActivation.fail()
+        hdrSubmittedMediaID = nil
+        withLock { hdrPrototypeActive = false; hdrPresentation = nil; systemDolbyVisionActive = false }
+        view.disableHDRPrototype()
+        refreshColorSettings()
+        view.refreshDisplayColorProfile()
+        view.requestOpenGLDisplay()
+        DiagnosticLog.write("[MPV_HDR_PROTOTYPE] fallback=sdr same-session=true")
+    }
+
+    @MainActor
+    func displayConfigurationDidChange(for view: MPVOpenGLVideoView) {
+        guard withLock({ attachedViewID == Self.viewID(for: view) }), !reconcilingHDR else { return }
+        if hdrActivation.phase == .failed { hdrActivation.reset() }
+        systemDolbyVisionFailed = false
+    }
+
+    @MainActor
+    private func registerForSystemHDRChanges() {
+        Self.systemHDREngines = Self.systemHDREngines.filter { $0.value.engine != nil }
+        Self.systemHDREngines[systemHDROwnerID] = WeakSystemHDREngine(self)
+        let controller = SystemHDRController.shared
+        if !Self.systemHDRCallbacksInstalled {
+            Self.systemHDRCallbacksInstalled = true
+            controller.prepareForDisplayChange = { _ in
+                Self.systemHDRAudioTransition = true
+                let engines = Self.systemHDREngines.values.compactMap(\.engine)
+                var enqueued = true
+                for engine in engines {
+                    if !engine.suspendAudioForSystemHDR() { enqueued = false }
+                }
+                guard enqueued else { return false }
+                let deadline = ProcessInfo.processInfo.systemUptime + 3
+                while ProcessInfo.processInfo.systemUptime < deadline {
+                    let hog = nv_system_hdr_has_own_hdmi_audio_hog()
+                    if hog < 0 { return false }
+                    if hog == 0 && engines.allSatisfy({ $0.pendingAudioOutputReplies.isEmpty }) {
+                        return true
+                    }
+                    try? await Task.sleep(for: .milliseconds(40))
+                    if Task.isCancelled { return false }
+                }
+                DiagnosticLog.write("[SYSTEM_HDR_AUDIO] release timed out")
+                return false
+            }
+            controller.didFinishDisplayChange = { _, success in
+                Self.systemHDRAudioTransition = false
+                for engine in Self.systemHDREngines.values.compactMap(\.engine) {
+                    engine.withLock { engine.systemHDRAudioSuspended = false }
+                    guard !Self.systemHDRIsTerminating else { continue }
+                    engine.diagnosticsSampler.reset()
+                    engine.refreshAudioOutput(force: true)
+                    if success { engine.hdrActivation.reset() }
+                    engine.refreshVideoOutputAssessment()
+                }
+                DiagnosticLog.write("[SYSTEM_HDR_AUDIO] resumed success=\(success)")
+            }
+        }
+        // A surface can start while a different window is awaiting the mode
+        // switch. Its new load must also keep the HDMI device released.
+        if Self.systemHDRAudioTransition, !withLock({ systemHDRAudioSuspended }) {
+            _ = suspendAudioForSystemHDR()
+        }
+    }
+
+    @MainActor
+    private func suspendAudioForSystemHDR() -> Bool {
+        withLock { systemHDRAudioSuspended = true }
+        unavailableAudioSamples = 0
+        pendingAudioOutputReplies.removeAll()
+        return withLock {
+            guard currentFileLoaded, let context else { return true }
+            nextAudioOutputReplyID += 1
+            let id = nextAudioOutputReplyID
+            pendingAudioOutputReplies.insert(id)
+            let result = nv_mpv_set_property_string_async(context, id, "ao", "null")
+            if result < 0 { pendingAudioOutputReplies.remove(id) }
+            return result >= 0
+        }
+    }
+
+    @MainActor
+    public static func restoreSystemHDRForTermination() async {
+        systemHDRIsTerminating = true
+        await SystemHDRController.shared.restoreForTermination()
+    }
+
+    @MainActor
+    private func reconcileHDRPresentation(video: PlaybackDiagnostics.Video) {
+        guard !reconcilingHDR,
+              let view = withLock({ renderView }), !view.isHDRDevelopmentProbe,
+              let (spec, activeContext) = withLock({ activeSpec.flatMap { spec in context.map { (spec, $0) } } }) else { return }
+        reconcilingHDR = true
+        defer { reconcilingHDR = false }
+        let screen = view.window?.screen
+        let outputMode = colorPreferences.snapshot.videoOutput
+        let sourceEligible = PlaybackVideoOutputPolicy.allowsHDRPresentation(
+            mode: outputMode, video: video)
+            && view.isPlaybackSurfaceActive && view.window != nil && !view.displayIsAsleep && videoPresentationAllowed
+        let requestsSystemHDR = sourceEligible && PlaybackVideoOutputPolicy.requestsSystemHDR(mode: outputMode, video: video)
+        registerForSystemHDRChanges()
+        let displayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+        let mediaID = withLock { seekActivity.owner.mediaID }
+        let audioDriver = playerState?.playbackDiagnostics?.audio.outputDriver
+        let audioReady = playerState?.audioTracks.isEmpty == true || (audioDriver != nil && audioDriver != "null")
+        // Do not interrupt the initial decoder/AO negotiation. Once this media
+        // has requested HDR, temporary AO gaps during the switch retain its lease.
+        if requestsSystemHDR, systemHDRRequestedMediaID != mediaID,
+           audioReady, withLock({ playbackStartedNotified }) {
+            systemHDRRequestedMediaID = mediaID
+            DiagnosticLog.write("[SYSTEM_HDR_AUDIO] initial output ready driver=\(audioDriver ?? "video-only")")
+        }
+        SystemHDRController.shared.update(ownerID: systemHDROwnerID, displayID: displayID,
+            wantsHDR: requestsSystemHDR && systemHDRRequestedMediaID == mediaID)
+        let currentHeadroom = screen.map { Double($0.maximumExtendedDynamicRangeColorComponentValue) }
+        let eligible = sourceEligible && PlaybackVideoOutputPolicy.allowsEDRActivation(mode: outputMode,
+            currentHeadroom: currentHeadroom,
+            potentialHeadroom: screen.map { Double($0.maximumPotentialExtendedDynamicRangeColorComponentValue) },
+            isBuiltin: displayID.map { CGDisplayIsBuiltin($0) != 0 } ?? false,
+            systemHDREnabled: SystemHDRController.shared.observedHDR(forDisplayID: displayID))
+        let desired = hdrActivation.update(eligible: eligible,
+            currentHeadroom: currentHeadroom,
+            now: ProcessInfo.processInfo.systemUptime)
+        let wantsSystemDV = DolbyVisionSystemPresentationPolicy.eligible(preference: colorPreferences.snapshot,
+            reconstructed: video.dolbyVision?.dynamicMappingApplied == true, hasHDRPresentation: desired != nil,
+            systemAvailable: NVDolbyVisionSurface.available, failed: systemDolbyVisionFailed)
+        // Refresh these even when the HDR plan is unchanged (preferences or
+        // verified source configuration may have arrived since the last frame).
+        view.dolbyVisionSurface?.sourceMetadataEnabled = colorPreferences.snapshot.sourceDolbyVisionMetadata
+        view.dolbyVisionSurface?.sourceCompatibility = DolbyVisionSystemPresentationPolicy.sourceCompatibility(video.dolbyVision, options: spec.mpvOptions)
+        guard desired != withLock({ hdrPresentation }) || wantsSystemDV != withLock({ systemDolbyVisionActive }) else { return }
+        DiagnosticLog.write("[MPV_HDR_OUTPUT] peak=\(desired?.targetPeakSignalNits ?? 0) awaiting=\(desired?.awaitingHeadroom ?? false) phase=\(hdrActivation.phase)")
+        hdrSubmittedMediaID = nil
+        view.makeOpenGLContextCurrent()
+        if let desired {
+            if wantsSystemDV {
+                guard view.enableSystemDolbyVisionPresentation() else {
+                    fallbackFromSystemDolbyVision(in: view)
+                    return
+                }
+                view.dolbyVisionSurface?.sourceMetadataEnabled = colorPreferences.snapshot.sourceDolbyVisionMetadata
+                view.dolbyVisionSurface?.sourceCompatibility = DolbyVisionSystemPresentationPolicy.sourceCompatibility(video.dolbyVision, options: spec.mpvOptions)
+                if let text = nv_mpv_copy_property_string(activeContext, "container-fps") {
+                    view.dolbyVisionSurface?.framesPerSecond = Double(String(cString: text)) ?? 24
+                    nv_mpv_free_string(text)
+                }
+            } else {
+                guard view.enableHDRPresentation() else { hdrActivation.fail(); return }
+                view.hdrPrototypeSurface?.maximumLinearComponent = desired.maximumLinearComponent
+            }
+            withLock { systemDolbyVisionActive = wantsSystemDV }
+            withLock { hdrPresentation = desired }
+        } else {
+            withLock { hdrPresentation = nil; systemDolbyVisionActive = false }
+            view.disableHDRPrototype()
+        }
+        do {
+            try applyMPVOptions(PlaybackColorPolicy.options(source: spec.mpvOptions, preference: colorPreferences.snapshot),
+                                context: activeContext, stage: "video-output", mergeDiagnostics: true)
+        } catch {
+            hdrActivation.fail()
+            withLock { hdrPresentation = nil; systemDolbyVisionActive = false }
+            view.disableHDRPrototype()
+            // Restore the complete SDR contract even after a partial HDR apply.
+            try? applyMPVOptions(PlaybackColorPolicy.options(source: spec.mpvOptions, preference: colorPreferences.snapshot),
+                                 context: activeContext, stage: "video-output-fallback", mergeDiagnostics: true)
+        }
+        updateDisplayColorProfile(for: view)
+        view.requestOpenGLDisplay()
     }
 
     @MainActor
@@ -1330,6 +2693,10 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     }
 
     private func load(spec: PlaySpec) throws {
+        guard withLock({ playbackReadSession === spec.readSession }) else {
+            throw CancellationError()
+        }
+        if let session = spec.readSession, !session.isCurrent(session.generation) { throw CancellationError() }
         withLock {
             liveStallWindow = LivePlaybackStallWindow()
             driveStallWindow = DrivePlaybackStallWindow()
@@ -1337,12 +2704,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             liveConnectionRepairRequested = false
         }
         let profile = PlaybackTransferPolicy.profile(for: spec)
-        if profile.context.connection == .local {
-            PlaybackBackgroundBudget.shared.remove(session: backgroundBudgetSession)
-        } else {
-            PlaybackBackgroundBudget.shared.update(session: backgroundBudgetSession, bufferedAhead: 0,
-                isLoading: true, isSeeking: false, isBuffering: false)
-        }
+        PlaybackBackgroundBudget.shared.update(session: backgroundBudgetSession, bufferedAhead: 0,
+            isLoading: true, isSeeking: false, isBuffering: false)
         DiagnosticLog.write("[PLAYBACK_TRANSFER_LOAD] surface=\(videoSurface.rawValue) version=\(PlaybackTransferProfile.version) profile=\(profile.diagnosticName)")
         let inputDigest = SHA256.hash(data: Data(spec.url.utf8))
             .map { String(format: "%02x", $0) }.joined()
@@ -1396,6 +2759,11 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
         let audioPreference = audioPreferences.snapshot
         var userOptions = PlayerSubtitlePolicy.mpvOptions(for: subtitleSettingsProvider())
+        userOptions.merge(withLock { audioOutputPlan.options }) { _, output in output }
+        if withLock({ systemHDRAudioSuspended }) { userOptions["ao"] = "null" }
+        // Restore the new media's original chain, including empty, before any
+        // optional processing. Sources with their own chain are left intact.
+        userOptions["af"] = spec.mpvOptions["af"] ?? ""
         userOptions.merge([
             "speed": String(currentSpeed), "volume": String(audioPreference.volume * 100),
             "mute": audioPreference.isMuted ? "yes" : "no",
@@ -1403,11 +2771,15 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             "panscan": String(currentVideoAspectMode.mpvPanscan)
         ]) { _, user in user }
         let sessionOptions = [
-            "sid": "auto", "secondary-sid": "no", "secondary-sub-visibility": "no", "pause": "no",
+            "sid": spec.mpvOptions["sid"] ?? "auto", "secondary-sid": "no", "secondary-sub-visibility": "no", "pause": "no",
             "sub-delay": String(SubtitleMediaIdentity.normalizedDelay(subtitleDelayProvider(spec))),
             "secondary-sub-delay": String(SubtitleMediaIdentity.normalizedDelay(secondarySubtitleDelayProvider(spec)))
         ]
-        let plan = MPVOptionPolicy.resolve(spec: spec, user: userOptions, session: sessionOptions)
+        let plan = MPVOptionPolicy.resolve(spec: spec, user: userOptions, session: sessionOptions, color: colorPreferences.snapshot)
+        // Keep the user-owned AO list in the initial load as well as subsequent
+        // route updates. Removing it here makes audio-device's native UID alias
+        // look like an AO name before diagnostics can refresh the route. Source
+        // options were already overridden by audioOutputPlan.options above.
         try applyMPVOptions(plan, context: activeContext, stage: "load")
 
         for header in Self.headerFields(from: spec.headers) {
@@ -1421,7 +2793,30 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         try applyVideoAspectMode(currentVideoAspectMode, context: activeContext, stage: "load")
         withLock {
             pendingExternalAudioURL = spec.externalAudioURL.isEmpty ? nil : spec.externalAudioURL
+            pendingSubtitles = spec.subs
         }
+        if let applied = vodRebufferApplied, applied != vodRebuffer.baseline {
+            _ = nv_mpv_set_property_double(activeContext, "cache-pause-wait", vodRebuffer.baseline)
+        }
+        let baseWait: Double? = {
+            guard let value = nv_mpv_copy_property_json(activeContext, "options/cache-pause-wait") else { return nil }
+            defer { nv_mpv_free_string(value) }
+            return Double(String(cString: value))
+        }()
+        vodRebuffer = VODRebufferExperiment(enabled: vodRebufferExperimentEnabled && baseWait != nil
+            && spec.metadata["playback.kind"] != "live" && (baseWait ?? 0) > 0, baseline: baseWait ?? 1)
+        vodRebufferApplied = nil
+        nv_mpv_observe_render_frames(activeContext, 1)
+        #if DEBUG
+        // load() runs on the main actor. Only the explicitly requested DEBUG
+        // acceptance harness retains the frame history. Production keeps only
+        // bounded latency samples from the native fresh-frame flags.
+        let observing = MainActor.assumeIsolated { performanceDiagnosticsHandler != nil }
+        withLock {
+            performanceTrackingEnabled = observing
+            performanceFrames = MPVPerformanceFrames(loadUptime: observing ? ProcessInfo.processInfo.systemUptime : 0)
+        }
+        #endif
         if let options = MPVInitialStartPolicy.loadFileOptions(for: spec) {
             DiagnosticLog.write("[MPV_LOAD_START] options=\(options)")
             try check(
@@ -1429,7 +2824,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                     activeContext,
                     Self.loadFileReplyUserdata,
                     "loadfile",
-                    spec.url,
+                    withLock { playbackReadSession === spec.readSession ? playbackReadLease?.url ?? spec.url : spec.url },
                     "replace",
                     "-1",
                     options
@@ -1439,21 +2834,27 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             )
         } else {
             try check(
-                nv_mpv_command3_async(activeContext, Self.loadFileReplyUserdata, "loadfile", spec.url, "replace"),
+                nv_mpv_command3_async(activeContext, Self.loadFileReplyUserdata, "loadfile", withLock { playbackReadSession === spec.readSession ? playbackReadLease?.url ?? spec.url : spec.url }, "replace"),
                 context: activeContext,
                 action: "loadfile async"
             )
         }
-        for (index, sub) in spec.subs.enumerated() where !sub.url.isEmpty {
+    }
+
+    // sub-add can fail while mpv is still replacing the old file. Attach only
+    // after FILE_LOADED, as we already do for external audio tracks.
+    private func attachPendingSubtitles(_ subtitles: [Sub], context activeContext: OpaquePointer) {
+        for (index, sub) in subtitles.enumerated() where !sub.url.isEmpty {
             let title = sub.name.isEmpty ? L10n.text("外挂字幕 {0}", ["\(index + 1)"]) : sub.name
             guard let source = preparedSubtitleSource(for: sub, title: title) else { continue }
-            let code = nv_mpv_command4_async(
+            let code = nv_mpv_command5_async(
                 activeContext,
                 Self.firstSubtitleReplyUserdata + UInt64(index),
                 "sub-add",
                 source,
-                index == 0 ? "select" : "auto",
-                title
+                "auto",
+                title,
+                sub.lang
             )
             if code < 0 {
                 let errorText = Self.cString(nv_mpv_last_error(activeContext))
@@ -1466,22 +2867,42 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     }
 
     private func startEventLoop(context: OpaquePointer) {
-        eventTask?.cancel()
         let contextValue = UInt(bitPattern: context)
-        eventTask = Task { @MainActor [weak self] in
-            guard let activeContext = OpaquePointer(bitPattern: contextValue) else { return }
-            while !Task.isCancelled {
-                guard let self,
-                      self.withLock({ self.context == activeContext }) else {
-                    break
-                }
-                let drained = self.drainPendingEvents(limit: 64)
-                // Native reads never block the UI. A bounded batch yields to
-                // user input even when mpv is producing a burst of log events.
-                if drained { try? await Task.sleep(for: .milliseconds(self.withLock { self.activeSpec == nil ? 100 : 20 })) }
-                else { await Task.yield() }
-            }
+        let pump = MPVEventPump { [weak self] in
+            guard let self, let activeContext = OpaquePointer(bitPattern: contextValue),
+                  self.withLock({ self.context == activeContext }) else { return false }
+            return !self.drainPendingEvents(limit: 64)
         }
+        let native: Bool? = withLock {
+            guard self.context == context else { return nil }
+            eventTask?.cancel()
+            eventTask = nil
+            eventPump?.cancel()
+            // A native registration may synchronously invoke the callback.
+            // It only signals the pump, so holding the engine lock is safe and
+            // prevents stop() from retiring this context during registration.
+            if nv_mpv_set_wakeup_callback(context, mpvEventWakeupCallback,
+                    Unmanaged.passUnretained(pump).toOpaque()) == 0 {
+                eventPump = pump
+                return true
+            }
+            eventPump = nil
+            // Compatibility for older runtime fixtures; the bundled runtime
+            // uses native notifications and never enters this polling loop.
+            eventTask = Task { @MainActor [weak self] in
+                guard let activeContext = OpaquePointer(bitPattern: contextValue) else { return }
+                while !Task.isCancelled {
+                    guard let self, self.withLock({ self.context == activeContext }) else { break }
+                    let drained = self.drainPendingEvents(limit: 64)
+                    if drained { try? await Task.sleep(for: .milliseconds(self.withLock { self.activeSpec == nil ? 100 : 20 })) }
+                    else { await Task.yield() }
+                }
+            }
+            return false
+        }
+        if native == true { pump.signal() }
+        else { pump.cancel() }
+        if let native { DiagnosticLog.write("[MPV_EVENT_LOOP] mode=\(native ? "native-wakeup" : "polling-compatibility")") }
     }
 
     @MainActor
@@ -1501,6 +2922,27 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     @MainActor
     private func handle(event: MPVEventSnapshot) {
         guard withLock({ seekActivity.owner.mediaID == event.owner.mediaID }) else { return }
+        if (event.eventID == 4 || event.eventID == 5), PlayerFloatingCrop.ownsReply(event.replyUserdata) {
+            if event.eventID == 4 {
+                if floatingCrop.receiveApplication(id: event.replyUserdata, error: event.error, owner: event.owner.mediaID) {
+                    refreshVideoGeometry()
+                }
+            } else if let context = withLock({ context }) {
+                _ = floatingCrop.receive(id: event.replyUserdata, sample: event.blackBarSample,
+                    context: context, owner: event.owner.mediaID, geometryJSON: nativePropertyJSON("video-params"))
+            }
+            return
+        }
+        if event.eventID == 3 { // MPV_EVENT_GET_PROPERTY_REPLY; request IDs own the sample.
+            let mediaID = withLock { seekActivity.owner.mediaID }
+            if let properties = diagnosticsSampler.receive(
+                id: event.replyUserdata, name: event.propertyName,
+                json: event.propertyJSON, owner: mediaID
+            ) {
+                publishPlaybackDiagnostics(properties: properties, mediaID: mediaID)
+            }
+            return
+        }
         if event.eventID == 6 { // MPV_EVENT_START_FILE owns subsequent native events.
             withLock { loadEventTracker.markFileStarted() }
             return
@@ -1600,12 +3042,16 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 playerState?.isPlaying = false
                 updateDisplaySleepPrevention()
                 clearPlaybackActivity()
-                if disposition == .natural {
+                if disposition == .natural || (spec?.liveCatchup != nil && disposition == .premature) {
                     playbackEndedHandler?(spec)
                 }
             }
         case 2:
             guard let text = event.logText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
+            withLock { compressedAudioRecovery.observeLog(prefix: event.logPrefix, text: text) }
+            if let fallback = PlaybackDiagnostics.HardwareFallback.detected(in: text) {
+                withLock { hardwareDecodeFallback = fallback }
+            }
             if playerState?.currentSpec?.metadata["playback.kind"] == "live",
                LivePlaybackBufferPolicy.indicatesConnectionReuseFailure(text) {
                 withLock { liveReuseFailureObserved = true }
@@ -1651,13 +3097,24 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                     setError(diagnostic)
                 }
             }
+        case 17: // VIDEO_RECONFIG: re-check before presenting the new format/track.
+            videoPresentationAllowed = false
+            diagnosticsSampler.reset()
+            if withLock({ currentFileLoaded }) {
+                samplePlaybackDiagnostics(mediaID: withLock { seekActivity.owner.mediaID })
+            }
+        case 18: // AUDIO_RECONFIG: refresh the decoded input layout promptly.
+            if dialogueTask == nil, withLock({ currentFileLoaded }) {
+                // Respect the sampler's one-batch-per-second budget.
+                samplePlaybackDiagnostics(mediaID: withLock { seekActivity.owner.mediaID })
+            }
         case 8:
             // FILE_LOADED only means demuxing was accepted; the first media request can still fail.
-            let externalAudio = withLock { () -> (context: OpaquePointer?, url: String?) in
+            let externalAudio = withLock { () -> (context: OpaquePointer?, url: String?, subtitles: [Sub]) in
                 currentFileLoaded = true
                 loadEventTracker.markFileLoaded()
-                defer { pendingExternalAudioURL = nil }
-                return (context, pendingExternalAudioURL)
+                defer { pendingExternalAudioURL = nil; pendingSubtitles = [] }
+                return (context, pendingExternalAudioURL, pendingSubtitles)
             }
             if let activeContext = externalAudio.context, let audioURL = externalAudio.url {
                 let code = nv_mpv_command4_async(
@@ -1674,14 +3131,40 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                     DiagnosticLog.write("[MPV_AUDIO] attached external track: \(Self.redactedURL(audioURL))")
                 }
             }
+            if let activeContext = externalAudio.context {
+                attachPendingSubtitles(externalAudio.subtitles, context: activeContext)
+            }
             refreshSubtitleTracks()
             refreshChapters()
+            startPlaybackDiagnostics()
             attachAudioFallbackArtworkIfNeeded()
         case Self.propertyReplyEventID:
+            if pendingAudioOutputReplies.remove(event.replyUserdata) != nil {
+                if event.error < 0 {
+                    DiagnosticLog.write("[MPV_AUDIO_OUTPUT_ERROR] code=\(event.error)")
+                    failedAudioDeviceUID = audioOutputPreferences.snapshot.deviceUID
+                    refreshAudioOutput()
+                }
+                return
+            }
             guard event.error < 0,
                   event.replyUserdata == Self.audioMuteReplyUserdata || event.replyUserdata == Self.audioVolumeReplyUserdata else { return }
             DiagnosticLog.write("[MPV_AUDIO_PREFERENCE_ERROR] reply=\(event.replyUserdata) error=\(event.errorString ?? "unknown")")
         case Self.commandReplyEventID:
+            if event.replyUserdata >= 0xB000_0000_0000_0000,
+               event.replyUserdata < 0xC000_0000_0000_0000 {
+                if pendingAudioOutputReplies.remove(event.replyUserdata) != nil, event.error < 0 {
+                    DiagnosticLog.write("[MPV_AUDIO_OUTPUT_ERROR] decoder refresh code=\(event.error)")
+                }
+                return
+            }
+            if pendingDialogueReply?.id == event.replyUserdata {
+                pendingDialogueReply?.result = event.error >= 0
+                return
+            }
+            // Replies from a cancelled generation or a track-change clear are
+            // handled by the next dialogue reconciliation, not a fatal player error.
+            if event.replyUserdata >= 0xC000_0000_0000_0000 { return }
             guard event.error < 0 else { return }
             let errorText = event.errorString ?? "unknown"
             if event.replyUserdata == Self.artworkReplyUserdata {
@@ -1778,9 +3261,28 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     }
 
     @MainActor
+    public func setFloatingWindowCropping(_ enabled: Bool) {
+        guard floatingCrop.enabled != enabled else { return }
+        floatingCrop.enabled = enabled
+        if !enabled { floatingCrop.reset(context: withLock { context }); refreshVideoGeometry() }
+    }
+
+    @MainActor
+    private func refreshVideoGeometry() {
+        guard withLock({ currentFileLoaded && activeSpec != nil }) else { return }
+        let ratio = floatingCrop.displayAspectRatio
+            ?? PlayerVideoGeometry.displayAspectRatio(json: nativePropertyJSON("video-out-params"))
+        if playerState?.videoDisplayAspectRatio != ratio { playerState?.videoDisplayAspectRatio = ratio }
+    }
+
+    @MainActor
     private func handlePropertyChange(_ event: MPVEventSnapshot) {
         defer { updatePlaybackBackgroundBudget() }
         switch event.propertyName {
+        case "video-out-params/dw", "video-out-params/dh", "video-out-params/rotate":
+            refreshVideoGeometry()
+        case "seekable":
+            playerState?.isSeekable = event.hasPropertyValue ? event.flagValue != 0 : nil
         case "chapter-list", "edition-list":
             refreshChapters()
         case "track-list", "sid", "secondary-sid":
@@ -1903,7 +3405,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             postSeekEndGuard.reset()
             seekActivity.resetMedia()
             isPausedForCache = false
-            cacheStallStart = nil
+            cacheStallStart = nil; cacheStallUptime = nil
             cacheStallTask?.cancel()
             cacheStallTask = nil
             cacheStallNotified = false
@@ -1938,6 +3440,13 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     @MainActor
     private func handleCachePause(isPausedForCache: Bool) {
+        #if DEBUG
+        withLock {
+            if performanceTrackingEnabled {
+                performanceFrames.cache(paused: isPausedForCache, now: ProcessInfo.processInfo.systemUptime)
+            }
+        }
+        #endif
         let pauseRequested = withLock { () -> Bool in
             self.isPausedForCache = isPausedForCache
             return self.pauseRequested
@@ -1947,6 +3456,10 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             pauseRequested: pauseRequested
         )
         playerState?.isBuffering = isBuffering
+        let qualityEligible = !pauseRequested && playerState?.isMediaLoading == false
+            && playerState?.isSeeking == false && !withLock { seekActivity.isPending }
+        qualityMetrics.cachePause(isBuffering, eligible: qualityEligible,
+                                  now: ProcessInfo.processInfo.systemUptime)
 
         if isBuffering {
             if cacheStallStart == nil {
@@ -1956,6 +3469,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 let spec = playerState?.currentSpec
                 let stallThreshold = withLock { driveStallWindow.threshold(for: spec, at: ProcessInfo.processInfo.systemUptime) }
                 cacheStallStart = startedAt
+                cacheStallUptime = ProcessInfo.processInfo.systemUptime
                 cacheStallTimeoutInterval = stallThreshold
                 DiagnosticLog.write("[MPV_CACHE_STALL] started threshold=\(stallThreshold)s")
                 cacheStallTask?.cancel()
@@ -1975,8 +3489,12 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             let shouldNotifyRecovery = cacheStallNotified
             let recoveredSpec = playerState?.currentSpec
             if let started = cacheStallStart {
-                let duration = Date().timeIntervalSince(started)
+                let duration = cacheStallUptime.map { max(0, ProcessInfo.processInfo.systemUptime - $0) } ?? Date().timeIntervalSince(started)
                 DiagnosticLog.write("[MPV_CACHE_STALL] recovered durationSeconds=\(String(format: "%.3f", duration)) surface=\(videoSurface.rawValue) eligible=\(cacheStallEligible && !pauseRequested)")
+                if cacheStallEligible, !pauseRequested, recoveredSpec?.metadata["playback.kind"] != "live" {
+                    vodRebuffer.recovered(wait: duration, now: ProcessInfo.processInfo.systemUptime)
+                    applyVODRebufferTarget()
+                }
                 if cacheStallEligible, !pauseRequested,
                    recoveredSpec?.metadata["playback.kind"] != "live",
                    recoveredSpec?.drivePlaybackPlan != nil {
@@ -1989,7 +3507,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                     _ = requestLiveConnectionRepairIfNeeded()
                 }
             }
-            cacheStallStart = nil
+            cacheStallStart = nil; cacheStallUptime = nil
             cacheStallTimeoutInterval = nil
             cacheStallTask?.cancel()
             cacheStallTask = nil
@@ -2043,14 +3561,20 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             let active: Bool = switch status { case .idle, .error: false; default: true }
             return (activeSpec, pauseRequested, active, seekActivity.isPending)
         }
-        guard let spec = state.0, !state.1, let playerState,
-              PlaybackTransferPolicy.profile(for: spec).context.connection != .local,
-              state.2 else {
+        guard let spec = state.0, let playerState, state.2,
+              !state.1 || state.3 || playerState.isSeeking || playerState.isMediaLoading else {
             PlaybackBackgroundBudget.shared.remove(session: backgroundBudgetSession)
             return
         }
+        if !playerState.isBuffering, !playerState.isMediaLoading, !playerState.isSeeking, !state.3 {
+            vodRebuffer.tick(now: ProcessInfo.processInfo.systemUptime)
+            applyVODRebufferTarget()
+        }
         PlaybackBackgroundBudget.shared.update(session: backgroundBudgetSession,
-            bufferedAhead: playerState.bufferedUntil - playerState.position,
+            // Local files do not maintain a network cache duration. Their loading /
+            // seek flags still gate optional work; ready local playback can recover.
+            bufferedAhead: PlaybackTransferPolicy.profile(for: spec).context.connection == .local
+                ? PlaybackTransferProfile.resumeBackgroundAtSeconds : playerState.bufferedUntil - playerState.position,
             isLoading: playerState.isMediaLoading, isSeeking: playerState.isSeeking || state.3,
             isBuffering: playerState.isBuffering)
     }
@@ -2064,8 +3588,13 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         let failedMediaID = seekActivity.owner.mediaID
         let shouldNotify = !playbackFailureNotified
         playbackFailureNotified = true
-        let failure = MPVPlaybackFailure(message: message, nativeError: nativeError,
-                                         httpStatus: lastHTTPFailureStatus, playbackStarted: playbackStartedNotified)
+        let previous = lastPlaybackFailure.flatMap { $0.mediaID == failedMediaID ? $0.failure : nil }
+        let failure = MPVPlaybackFailure(message: message, nativeError: nativeError ?? previous?.nativeError,
+                                         httpStatus: lastHTTPFailureStatus ?? previous?.httpStatus,
+                                         playbackStarted: playbackStartedNotified)
+        // Native logs can follow END_FILE. Keep their status without losing the
+        // native error from that first terminal event or notifying recovery twice.
+        lastPlaybackFailure = (failedMediaID, failure)
         lock.unlock()
         updateDisplaySleepPrevention()
         DiagnosticLog.write("[MPV_ERROR] errorKind=\(Self.diagnosticErrorKind(for: message)) \(message)")
@@ -2092,6 +3621,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     @MainActor
     private func markMediaReady() {
+        qualityMetrics.mediaReady()
         cancelSeekTransferMetrics()
         playerState?.isMediaLoading = false
         playerState?.isSeeking = false
@@ -2099,6 +3629,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     @MainActor
     private func clearPlaybackActivity() {
+        SystemHDRController.shared.release(ownerID: systemHDROwnerID)
+        resetPlaybackDiagnostics()
         PlaybackBackgroundBudget.shared.remove(session: backgroundBudgetSession)
         cancelSeekTransferMetrics()
         playerState?.bufferedUntil = 0
@@ -2341,6 +3873,11 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     static func localStreamStartupTimeout(for spec: PlaySpec) -> TimeInterval {
         if isAutomaticOriginalStreamSpec(spec) {
+            // Ali header/tail Range reads can outlive the playback-stall
+            // window. Give initial demuxing the same grace as manual origin.
+            if spec.drivePlaybackPlan?.provider == .ali {
+                return defaultLocalStreamStartupTimeout
+            }
             return MPVPlaybackActivityPolicy.defaultCacheStallThreshold
         }
         let provider = spec.metadata[DrivePlaybackMetadataKey.provider]
@@ -2443,7 +3980,28 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
     }
 
-    private func applyMPVOptions(_ plan: [String: MPVEffectiveOption], context: OpaquePointer, stage: String) throws {
+    private func applyMPVOptions(_ plan: [String: MPVEffectiveOption], context: OpaquePointer, stage: String, mergeDiagnostics: Bool = false) throws {
+        var plan = plan
+        // Reset experiment-only options on fallback as well as on every load.
+        if withLock({ hdrPrototypeActive }) {
+            withLock { hdrPrototypeOptionsUsed = true }
+            for (name, value) in PlaybackColorPolicy.hdrPrototypeOptions {
+                plan[name] = .init(value: value, origin: .display)
+            }
+        } else if withLock({ systemDolbyVisionActive }) {
+            withLock { hdrPrototypeOptionsUsed = true }
+            for (name, value) in DolbyVisionSystemPresentationPolicy.options {
+                plan[name] = .init(value: value, origin: .display)
+            }
+        } else if let presentation = withLock({ hdrPresentation }) {
+            withLock { hdrPrototypeOptionsUsed = true }
+            for (name, value) in presentation.options {
+                plan[name] = .init(value: value, origin: .display)
+            }
+        } else if withLock({ hdrPrototypeOptionsUsed }) {
+            plan["dither-depth"] = .init(value: "auto", origin: .display)
+            plan["fbo-format"] = .init(value: "auto", origin: .display)
+        }
         DiagnosticLog.write("[MPV_SUBTITLE_STYLE] stage=\(stage) \(Self.subtitleStyleDiagnostic(from: plan.mapValues(\.value)))")
         var diagnostics: [MPVOptionDiagnostic] = []
         for (name, option) in plan.sorted(by: { $0.key < $1.key }) {
@@ -2467,7 +4025,13 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 if option.origin != .source { try check(code, context: context, action: "apply managed option \(name)") }
                 continue
             }
-            mediaOptionDefaults[name] = original
+            // Color keys are explicitly resolved on every load, including their
+            // defaults. Their special CLI sentinels are not all round-trippable
+            // through the runtime string property interface.
+            if name != "af", !PlaybackColorPolicy.managedNames.contains(name), !PlaybackAudioOutputPolicy.managedNames.contains(name),
+               mediaOptionDefaults[name] == nil {
+                mediaOptionDefaults[name] = original
+            }
             diagnostics.append(.init(name: name, origin: option.origin, status: .applied))
             DiagnosticLog.write("[MPV_OPTION_APPLIED] name=\(name) origin=\(option.origin.rawValue)")
         }
@@ -2475,7 +4039,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         let owner = withLock { seekActivity.owner.mediaID }
         Task { @MainActor in
             guard self.withLock({ self.seekActivity.owner.mediaID == owner }) else { return }
-            self.playerState?.mpvOptionDiagnostics = snapshot
+            let existing = mergeDiagnostics ? (self.playerState?.mpvOptionDiagnostics ?? []) : []
+            self.playerState?.mpvOptionDiagnostics = Dictionary((existing + snapshot).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new }).values.sorted { $0.name < $1.name }
         }
     }
 
@@ -2805,12 +4370,6 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         }
     }
 
-    private static func redactedMPVOptions(_ options: [String: String]) -> [String: String] {
-        options.reduce(into: [:]) { result, item in
-            result[item.key] = redactedLogText(item.value)
-        }
-    }
-
     private static func subtitleStyleDiagnostic(from options: [String: String]) -> [String: String] {
         let keys = [
             "sub-ass-override",
@@ -3028,6 +4587,7 @@ private struct MPVEventSnapshot: Sendable {
     let endFileError: Int32
     let endFileReason: Int32
     let propertyName: String
+    let propertyJSON: String?
     let errorString: String?
     let logPrefix: String?
     let logLevel: String?
@@ -3036,8 +4596,12 @@ private struct MPVEventSnapshot: Sendable {
     let flagValue: Int32
     let int64Value: Int64
     let hasPropertyValue: Bool
+    let blackBarSample: PlayerBlackBarSample?
 
     init(_ event: NVMPVEvent, owner: PlaybackEventOwner) {
+        var sample = NVMPVBlackBarSample()
+        blackBarSample = withUnsafePointer(to: event, { nv_mpv_event_black_bars($0, &sample) }) != 0
+            ? PlayerBlackBarSample(sample) : nil
         self.owner = owner
         eventID = event.event_id
         error = event.error
@@ -3045,6 +4609,14 @@ private struct MPVEventSnapshot: Sendable {
         endFileError = event.end_file_error
         endFileReason = event.end_file_reason
         propertyName = event.property_name.map { String(cString: $0) } ?? ""
+        if event.event_id == 3, let json = withUnsafePointer(to: event, {
+            nv_mpv_copy_event_property_json($0)
+        }) {
+            propertyJSON = String(cString: json)
+            nv_mpv_free_string(json)
+        } else {
+            propertyJSON = nil
+        }
         errorString = event.error_string.map { String(cString: $0) }
         logPrefix = event.log_prefix.map { String(cString: $0) }
         logLevel = event.log_level.map { String(cString: $0) }

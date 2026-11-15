@@ -9,6 +9,7 @@ struct FileServiceSettings: View {
     @State private var folderService: FileServiceConfiguration?
     @State private var libraryDraft: MediaLibraryConfiguration?
     @State private var error: String?
+    @State private var showsCloudDirectory = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -29,6 +30,7 @@ struct FileServiceSettings: View {
             if let error { SettingsInlineMessage(message: error) }
         }
         .sheet(item: $draft) { FileServiceEditor(configuration: $0) }
+          .sheet(isPresented: $showsCloudDirectory) { CloudDirectoryEditor(state: state) }
         .sheet(item: $folderService) { MediaLibraryBatchEditor(state: state, service: $0) }
         .sheet(item: $libraryDraft) { MediaLibraryEditor(library: $0) }
         .themedConfirmation(L10n.text("删除视频文件位置？"),
@@ -48,8 +50,12 @@ struct FileServiceSettings: View {
         }
     }
     private var addConnection: some View {
-        Button { draft = .init(kind: .smb) } label: { Label(L10n.text("添加连接"), systemImage: "plus") }
-            .buttonStyle(.borderedProminent).fixedSize()
+        HStack(spacing: 10) {
+            Button { showsCloudDirectory = true } label: { Label(L10n.text("添加网盘目录"), systemImage: "cloud") }
+                .buttonStyle(.bordered).fixedSize()
+            Button { draft = .init(kind: .smb) } label: { Label(L10n.text("添加连接"), systemImage: "plus") }
+                .buttonStyle(.borderedProminent).fixedSize()
+        }
     }
 
     private func serviceCard(_ service: FileServiceConfiguration) -> some View {
@@ -74,7 +80,9 @@ struct FileServiceSettings: View {
                 Button { folderService = service } label: { Label(L10n.text("添加文件夹"), systemImage: "folder.badge.plus") }
                     .buttonStyle(.bordered).fixedSize()
                 Menu {
-                    Button(L10n.text("编辑连接")) { draft = service }
+                    if service.kind != .cloudDrive {
+                        Button(L10n.text("编辑连接")) { draft = service }
+                    }
                     Divider()
                     Button(L10n.text("删除连接"), role: .destructive) { deleting = service }
                 } label: { Image(systemName: "ellipsis").frame(width: 20, height: 24) }

@@ -143,7 +143,7 @@ func playbackTransferClassificationUsesRealFileNamesBeforeDisplayTitles(_ provid
     #expect(BaiduShareExtractor.legacyFile(matching: reference, in: [wrong, wanted, duplicate])?.fileID == "wanted")
     let missingID = DriveFileReference(provider: .baidu, shareURL: reference.shareURL,
         pwdID: "", fid: "old", fidToken: "", fileName: "track.wav", size: 100)
-    #expect(BaiduShareExtractor.legacyFile(matching: missingID, in: [wrong, wanted])?.fileID == "wanted")
+    #expect(BaiduShareExtractor.legacyFile(matching: missingID, in: [wrong, wanted]) == nil)
     #expect(BaiduShareExtractor.legacyFile(matching: missingID, in: [wanted, duplicate]) == nil)
     #expect(BaiduShareExtractor.legacyFile(matching: missingID, in: [wrong]) == nil)
 }

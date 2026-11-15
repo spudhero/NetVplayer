@@ -8,6 +8,67 @@ private let posterURL = URL(string: "https://img1.wsyzy.org/upload/vod/fixture/p
 private let posterIPv6 = "2606:4700:4700::1111"
 private let secondPosterIPv6 = "2606:4700:4700::1001"
 
+@Test func sourceResourceFailureDiagnosticsExposeCurlCodeWithoutPrivateText() {
+    let curl = CurlRangeTransportError(code: 35, message: "private-url?token=sentinel Cookie: secret")
+    let bridged = curl as NSError
+    #expect(bridged.domain == "ProxyServer.CurlRangeTransportError")
+    #expect(bridged.code == 35)
+    #expect(bridged.localizedDescription == curl.errorDescription)
+    #expect(SourceResourceTransport.diagnosticFields(stage: .posterHTTP1, status: nil, error: curl)
+        == "stage=poster.http1 phase=error status=0 curlCode=35")
+    let unknown = NSError(domain: "private-domain", code: 123, userInfo: [NSLocalizedDescriptionKey: "private credentials"])
+    #expect(SourceResourceTransport.diagnosticFields(stage: .catalogHTTP1, status: 503, error: unknown)
+        == "stage=catalog.http1 phase=error status=503 errorCode=123")
+    #expect(SourceResourceTransport.diagnosticFields(stage: .posterDNS, status: nil, error: CancellationError())
+        == "stage=poster.dns phase=cancelled status=0 errorCode=1")
+}
+
+@Test func sourcePosterDiagnosticsRemainBoundedAndPreserveFinalHTTPStatus() async throws {
+    let records = SourcePosterDiagnosticRecords()
+    let response = try await SourceResourceTransport.posterResponse(
+        for: posterURL, headers: ["Cookie": "private-sentinel"], timeout: 15,
+        observe: { records.add(SourceResourceTransport.diagnosticFields(stage: $0, status: $1, error: $2)) },
+        resolve: { _ in [posterIPv6, secondPosterIPv6, "2001:4860:4860::8888"] },
+        load: { url, address, _, _ in
+            if address == posterIPv6 { throw CurlRangeTransportError(code: 7, message: "private target") }
+            if address == secondPosterIPv6 { throw CurlRangeTransportError(code: 28, message: "private target") }
+            #expect(address == nil)
+            return HTTPResponse(data: Data(), statusCode: 403, finalURL: url)
+        }
+    )
+    #expect(response.statusCode == 403)
+    #expect(records.snapshot() == [
+        "stage=poster.dns phase=complete status=0",
+        "stage=poster.ipv6 phase=error status=0 curlCode=7",
+        "stage=poster.ipv6 phase=error status=0 curlCode=28",
+        "stage=poster.http1 phase=complete status=403"
+    ])
+}
+
+@Test func sourcePosterDiagnosticsPreserveTerminalTrustFailure() async throws {
+    let records = SourcePosterDiagnosticRecords()
+    do {
+        _ = try await SourceResourceTransport.posterResponse(
+            for: posterURL, headers: [:], timeout: 15,
+            observe: { records.add(SourceResourceTransport.diagnosticFields(stage: $0, status: $1, error: $2)) },
+            resolve: { _ in [posterIPv6, secondPosterIPv6] },
+            load: { _, _, _, _ in throw CurlRangeTransportError(code: 60, message: "private TLS detail") }
+        )
+        Issue.record("The original trust failure must propagate")
+    } catch let error as CurlRangeTransportError { #expect(error.code == 60) }
+    #expect(records.snapshot() == [
+        "stage=poster.dns phase=complete status=0",
+        "stage=poster.ipv6 phase=error status=0 curlCode=60"
+    ])
+}
+
+private final class SourcePosterDiagnosticRecords: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+    func add(_ value: String) { lock.withLock { values.append(value) } }
+    func snapshot() -> [String] { lock.withLock { values } }
+}
+
 @Test func posterIPv6PreservesURLAndHeadersAndRecoversSecondAddress() async throws {
     let headers = ["Referer": "https://img1.wsyzy.org", "User-Agent": "Fixture", "Cookie": "fixture=1"]
     let result = try await SourceResourceTransport.posterResponse(

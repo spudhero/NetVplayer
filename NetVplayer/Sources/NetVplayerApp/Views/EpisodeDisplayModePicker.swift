@@ -61,19 +61,18 @@ struct EpisodeDisplayModePicker: View {
     @Binding var selection: EpisodeDisplayMode
 
     var body: some View {
-        Picker(L10n.text("剧集显示模式"), selection: $selection) {
+        ThemedSegmentedControl {
             ForEach(EpisodeDisplayMode.allCases) { mode in
-                Label(mode.title, systemImage: mode.systemImage)
-                    .tag(mode)
-                    .help(mode.title)
+                ThemedSegmentButton(title: mode.title, systemImage: mode.systemImage, isSelected: selection == mode) {
+                    selection = mode
+                }
+                .accessibilityIdentifier("episode-display-" + mode.rawValue)
+                .help(mode.title)
             }
         }
-        .labelsHidden()
-        .labelStyle(.iconOnly)
-        .pickerStyle(.segmented)
-        .controlSize(.small)
-        .frame(width: 76)
+        .frame(width: 160)
         .help(L10n.text("切换剧集的宫格或列表显示"))
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(L10n.text("剧集显示模式"))
     }
 }
@@ -85,13 +84,11 @@ struct EpisodeSortOrderButton: View {
         Button {
             selection = selection.next
         } label: {
-            Image(systemName: selection.systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .frame(width: 28, height: 24)
-                .contentShape(Rectangle())
+            Label(selection.title, systemImage: selection.systemImage)
+                .fixedSize()
         }
-        .buttonStyle(.borderless)
-        .controlSize(.small)
+        .buttonStyle(ThemedDialogButtonStyle())
+        .accessibilityIdentifier("episode-sort-order")
         .help(L10n.text("当前{0}，点击切换为{1}", ["\(selection.title)", "\(selection.next.title)"]))
         .accessibilityLabel(L10n.text("剧集排序"))
         .accessibilityValue(selection.title)

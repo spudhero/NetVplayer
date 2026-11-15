@@ -12,6 +12,7 @@ final class EPGGuideModel: ObservableObject {
     private var visible: [String: Channel] = [:]
     private var queue: [String] = []
     private var forced = Set<String>()
+    private var cancelled = Set<String>()
     private var tasks: [String: Task<Void, Never>] = [:]
     private var loader: Loader?
     static let maximumRows = 32
@@ -28,7 +29,7 @@ final class EPGGuideModel: ObservableObject {
         generation = UUID()
         tasks.values.forEach { $0.cancel() }
         tasks.removeAll(); queue.removeAll(); visible.removeAll(); forced.removeAll()
-        rows.removeAll(); loading.removeAll()
+        rows.removeAll(); loading.removeAll(); cancelled.removeAll()
     }
 
     func appear(id: String, channel: Channel, generation: UUID) {
@@ -40,7 +41,7 @@ final class EPGGuideModel: ObservableObject {
 
     func disappear(id: String, generation: UUID) {
         guard generation == self.generation else { return }
-        visible[id] = nil; rows[id] = nil
+        visible[id] = nil; rows[id] = nil; cancelled.remove(id)
         queue.removeAll { $0 == id }; forced.remove(id)
         // A cancelled loader can still be finishing a shared import. Keep its slot until completion.
         tasks[id]?.cancel()
@@ -49,9 +50,20 @@ final class EPGGuideModel: ObservableObject {
 
     func retry(id: String) {
         guard visible[id] != nil, tasks[id] == nil else { return }
+        cancelled.remove(id)
         forced.insert(id)
         if !queue.contains(id) { queue.append(id) }
         pump()
+    }
+
+    func cancel(id: String) {
+        guard let channel = visible[id] else { return }
+        cancelled.insert(id)
+        queue.removeAll { $0 == id }; forced.remove(id)
+        tasks[id]?.cancel()
+        let data = rows[id]?.data ?? EpgData(channelName: channel.name)
+        rows[id] = EpgLoadResult(data: data, availability: data.items.isEmpty ? .unavailable : .stale,
+            message: L10n.text("已取消节目单加载。"))
     }
 
     private func pump() {
@@ -67,13 +79,16 @@ final class EPGGuideModel: ObservableObject {
                 self.tasks[id] = nil
                 self.loading.remove(id)
                 if self.visible[id] != nil {
-                    if Task.isCancelled {
+                    if self.cancelled.contains(id) {
+                        // Explicit cancellation remains stopped until Retry or a new scope.
+                    } else if Task.isCancelled {
                         self.queue.append(id)
                     } else {
                         var bounded = result
-                        if result.availability == .unavailable, let old = self.rows[id], !old.data.items.isEmpty {
+                        if !result.discardsPreviousData, result.availability == .unavailable, let old = self.rows[id], !old.data.items.isEmpty {
                             bounded.data = old.data
                             bounded.availability = .stale
+                            bounded.coverage = old.coverage
                         }
                         let otherCost = self.rows.filter { $0.key != id }.values.reduce(0) { $0 + Self.cost($1.data.items) }
                         var remaining = max(0, Self.maximumBytes - otherCost)
@@ -92,6 +107,6 @@ final class EPGGuideModel: ObservableObject {
     }
 
     private static func cost(_ items: [EpgItem]) -> Int {
-        items.reduce(0) { $0 + $1.title.utf8.count + 128 }
+        items.reduce(0) { $0 + $1.title.utf8.count + ($1.xtreamArchive == nil ? 128 : 512) }
     }
 }

@@ -25,6 +25,7 @@ struct PlayerHUDVisualPolicyTests {
             .speed,
             .volume,
             .settings,
+            .floatingWindow,
             .fullscreen,
         ])
     }
@@ -58,7 +59,7 @@ struct PlayerHUDVisualPolicyTests {
     @Test
     func testCompactPlayerThresholdAndMinimumSizeContract() {
         #expect(CompactPlayerLayoutPolicy.regularThreshold == CGSize(width: 960, height: 640))
-        #expect(CompactPlayerLayoutPolicy.minimumContentSize == CGSize(width: 427, height: 240))
+        #expect(CompactPlayerLayoutPolicy.minimumContentSize == CGSize(width: 320, height: 120))
         #expect(!CompactPlayerLayoutPolicy.isCompact(contentSize: CGSize(width: 960, height: 640)))
         #expect(CompactPlayerLayoutPolicy.isCompact(contentSize: CGSize(width: 959, height: 640)))
         #expect(CompactPlayerLayoutPolicy.isCompact(contentSize: CGSize(width: 960, height: 639)))
@@ -233,7 +234,7 @@ struct PlayerHUDVisualPolicyTests {
         #expect(PlayerHUDVisualPolicy.skipIconSize == 27)
         #expect(PlayerHUDVisualPolicy.skipIconStrokeWidth == 1.5)
         #expect(PlayerHUDVisualPolicy.skipIconTextSize == 12)
-        #expect(PlayerHUDVisualPolicy.skipButtonHeight == 62)
+        #expect(PlayerHUDVisualPolicy.skipButtonHeight == PlayerHUDVisualPolicy.menuControlHeight)
         #expect(PlayerHUDVisualPolicy.timelineSkipMarkerDotSize == 10)
         #expect(PlayerHUDVisualPolicy.timelineSkipMarkerTickWidth == 2)
         #expect(PlayerHUDVisualPolicy.timelineSkipMarkerTickHeight == 19)
@@ -380,6 +381,7 @@ struct PlayerHUDVisualPolicyTests {
             .speed,
             .volume,
             .settings,
+            .floatingWindow,
             .fullscreen,
         ])
         #expect(PlayerHUDVisualPolicy.menuControlWidth == 70)
@@ -492,16 +494,33 @@ struct PlayerHUDVisualPolicyTests {
             + PlayerHUDVisualPolicy.controlGridDividerWidth * 3
             + PlayerHUDVisualPolicy.controlGridGap * 6
         let minimumColumns = PlayerHUDVisualPolicy.controlGridColumns(availableWidth: minimumWidth)
-        #expect(minimumColumns.episode == 210)
-        #expect(minimumColumns.jump == 136)
-        #expect(minimumColumns.skip == 144)
-        #expect(minimumColumns.feature == 520)
+        #expect(minimumColumns.episode == 224)
+        #expect(minimumColumns.jump == 145)
+        #expect(minimumColumns.skip == 145)
+        #expect(minimumColumns.feature == 602)
 
         let expandedColumns = PlayerHUDVisualPolicy.controlGridColumns(availableWidth: minimumWidth + 214)
-        #expect(abs(expandedColumns.episode - 258) < 0.0001)
-        #expect(abs(expandedColumns.jump - 168) < 0.0001)
-        #expect(abs(expandedColumns.skip - 178) < 0.0001)
-        #expect(abs(expandedColumns.feature - 620) < 0.0001)
+        #expect(abs(expandedColumns.episode - 272) < 0.0001)
+        #expect(abs(expandedColumns.jump - 177) < 0.0001)
+        #expect(abs(expandedColumns.skip - 179) < 0.0001)
+        #expect(abs(expandedColumns.feature - 702) < 0.0001)
+    }
+
+    @Test(arguments: [false, true])
+    func testRegularHUDReservesEveryVisibleControlWithoutOverlap(includesChapters: Bool) {
+        let available = PlayerHUDLayoutPolicy.referenceSize.width
+            - PlayerHUDVisualPolicy.bottomHorizontalInset * 2
+            - PlayerHUDVisualPolicy.bottomHorizontalPadding * 2
+        let columns = PlayerHUDVisualPolicy.controlGridColumns(availableWidth: available, includesChapters: includesChapters)
+        let features = PlayerHUDVisualPolicy.unifiedFeatureControlSlots.count + (includesChapters ? 1 : 0)
+        #expect(columns.episode >= PlayerHUDVisualPolicy.iconControlWidth * 3 + PlayerHUDVisualPolicy.controlClusterGap * 2)
+        #expect(columns.jump >= PlayerHUDVisualPolicy.iconControlWidth * 2 + PlayerHUDVisualPolicy.controlClusterGap)
+        #expect(columns.skip >= PlayerHUDVisualPolicy.skipChipWidth * 2 + PlayerHUDVisualPolicy.skipClusterGap)
+        #expect(columns.feature >= CGFloat(features) * PlayerHUDVisualPolicy.menuControlWidth
+            + CGFloat(features - 1) * PlayerHUDVisualPolicy.featureClusterGap)
+        let total = columns.episode + columns.jump + columns.skip + columns.feature
+            + PlayerHUDVisualPolicy.controlGridDividerWidth * 3 + PlayerHUDVisualPolicy.controlGridGap * 6
+        #expect(abs(total - available) < 0.001)
     }
 
     @Test
@@ -527,7 +546,7 @@ struct PlayerHUDVisualPolicyTests {
 
     @Test
     func testSkipSlotKeepsIntroAndOutroControlsStable() {
-        #expect(PlayerHUDVisualPolicy.skipAnchorWidth == 144)
+        #expect(PlayerHUDVisualPolicy.skipAnchorWidth == 145)
         #expect(PlayerHUDVisualPolicy.skipChipWidth == 66)
         #expect(PlayerHUDVisualPolicy.skipAnchorWidth >= PlayerHUDVisualPolicy.skipChipWidth * 2)
     }

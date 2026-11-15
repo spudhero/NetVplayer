@@ -134,6 +134,20 @@ static int nvp_curl_progress(
     return cancel_flag != NULL && atomic_load(cancel_flag) != 0;
 }
 
+struct nvp_curl_retry_header { char *value; size_t capacity; };
+
+static size_t nvp_curl_retry_after_header(void *contents, size_t size, size_t count, void *context) {
+    if (size != 0 && count > SIZE_MAX / size) { return 0; }
+    size_t incoming = size * count;
+    struct nvp_curl_retry_header *header = context;
+    if (incoming >= 5 && strncasecmp(contents, "HTTP/", 5) == 0) {
+        nvp_curl_copy_value(header->value, header->capacity, "", 0);
+    } else {
+        nvp_curl_capture_header(contents, incoming, "Retry-After", header->value, header->capacity);
+    }
+    return incoming;
+}
+
 static int nvp_curl_append_header(struct curl_slist **headers, const char *name, const char *value) {
     if (value == NULL || value[0] == '\0') {
         return 1;
@@ -175,9 +189,12 @@ int32_t nvp_curl_baidu_root_get(
     const char *user_agent,
     const char *cookie,
     long timeout_milliseconds,
+    const int32_t *cancel_flag,
     uint8_t **out_bytes,
     size_t *out_length,
     long *out_status_code,
+    char *out_retry_after,
+    size_t retry_after_capacity,
     char *out_error,
     size_t error_capacity
 ) {
@@ -190,6 +207,7 @@ int32_t nvp_curl_baidu_root_get(
     *out_length = 0;
     *out_status_code = 0;
     out_error[0] = '\0';
+    nvp_curl_copy_value(out_retry_after, retry_after_capacity, "", 0);
     pthread_once(&nvp_curl_once, nvp_curl_initialize);
 
     CURL *handle = curl_easy_init();
@@ -199,6 +217,7 @@ int32_t nvp_curl_baidu_root_get(
     }
 
     struct nvp_curl_buffer buffer = {0};
+    struct nvp_curl_retry_header retry_header = {out_retry_after, retry_after_capacity};
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Connection: Keep-Alive");
     headers = curl_slist_append(headers, "Host: pan.baidu.com");
@@ -222,6 +241,11 @@ int32_t nvp_curl_baidu_root_get(
     curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, timeout_milliseconds);
+    curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(handle, CURLOPT_XFERINFOFUNCTION, nvp_curl_progress);
+    curl_easy_setopt(handle, CURLOPT_XFERINFODATA, cancel_flag);
+    curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, nvp_curl_retry_after_header);
+    curl_easy_setopt(handle, CURLOPT_HEADERDATA, &retry_header);
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, nvp_curl_write);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &buffer);
     curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, out_error);

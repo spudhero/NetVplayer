@@ -26,12 +26,6 @@ actor BaiduShareSessionStore {
         try persist()
     }
 
-    func removeAll() throws {
-        guard !keys.isEmpty else { return }
-        keys.removeAll()
-        try persist()
-    }
-
     private func persist() throws {
         guard let fileURL else { return }
         let fileManager = FileManager.default

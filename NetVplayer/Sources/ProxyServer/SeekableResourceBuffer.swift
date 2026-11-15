@@ -23,47 +23,73 @@ actor SeekableResourceBuffer {
         try Task.checkCancellation()
         guard !closed.contains(id), range.lowerBound >= 0, range.upperBound <= resource.size else { throw CancellationError() }
         if range.isEmpty { return Data() }
-        clock &+= 1
-        if let key = cached.keys.first(where: { $0.id == id && $0.range.lowerBound <= range.lowerBound && $0.range.upperBound >= range.upperBound }),
-           var item = cached[key] {
-            item.accessed = clock; cached[key] = item
-            let data = item.data.subdata(in: Int(range.lowerBound - key.range.lowerBound)..<Int(range.upperBound - key.range.lowerBound))
-            if phase != .preload { delivered[id, default: 0] += Int64(data.count) }
-            return data
-        }
-        let key = Key(id: id, range: range)
-        let entry: Pending
-        if let existing = pending[key], !existing.read.isCancelled { entry = existing }
-        else {
-            entry = Pending(identity: UUID(), read: PlaybackSharedRead(task: Task { try await resource.read(range) }))
-            pending[key] = entry
-        }
-        do {
-            let data = try await entry.read.value(phase: phase)
+        var result = Data()
+        var offset = range.lowerBound
+        while offset < range.upperBound {
             try Task.checkCancellation()
+            try PlaybackReadScope.owner?.check()
             guard !closed.contains(id) else { throw CancellationError() }
-            guard Int64(data.count) == range.upperBound - range.lowerBound else {
-                throw ProxyServerError.emptyUpstreamResponse("bytes=\(range.lowerBound)-\(range.upperBound - 1)")
+            clock &+= 1
+            if let key = cached.keys.first(where: { $0.id == id && $0.range.contains(offset) }),
+               var item = cached[key] {
+                item.accessed = clock; cached[key] = item
+                let end = min(key.range.upperBound, range.upperBound)
+                result.append(item.data.subdata(in: Int(offset - key.range.lowerBound)..<Int(end - key.range.lowerBound)))
+                offset = end
+                continue
             }
-            if pending[key]?.identity == entry.identity {
-                pending.removeValue(forKey: key)
-                received[id, default: 0] += Int64(data.count)
-                if Int64(data.count) <= maximumBytes {
-                    cached[key] = Cached(key: key, data: data, accessed: clock)
-                    while totalCachedBytes > maximumBytes,
-                          let oldest = cached.values.min(by: { $0.accessed < $1.accessed }) {
-                        cached.removeValue(forKey: oldest.key)
+            let key: Key
+            let entry: Pending
+            if let existing = pending.first(where: { $0.key.id == id && $0.key.range.contains(offset) && !$0.value.read.isCancelled }) {
+                key = existing.key; entry = existing.value
+            } else {
+                // Only fetch gaps. Overlapping owners join existing work and then
+                // fetch the uncovered suffix, including interleaved pending ranges.
+                let next = (cached.keys.map { $0 } + pending.keys.map { $0 }).filter {
+                    $0.id == id && $0.range.lowerBound > offset
+                }.map { $0.range.lowerBound }.min() ?? range.upperBound
+                key = Key(id: id, range: offset..<min(range.upperBound, next))
+                // A shared transfer belongs to all its consumers. Nested VFS
+                // reads must not inherit just the first consumer's cancellation.
+                let priority = PlaybackReadScope.priority ?? PlaybackReadPriority(purpose: PlaybackReadScope.owner?.purpose)
+                entry = Pending(identity: UUID(), read: PlaybackSharedRead(task: Task {
+                    try await PlaybackReadScope.$owner.withValue(nil) {
+                        try await PlaybackReadScope.$priority.withValue(priority) { try await resource.read(key.range) }
+                    }
+                }, priority: priority))
+                pending[key] = entry
+            }
+            do {
+                let data = try await entry.read.value(phase: phase)
+                try Task.checkCancellation()
+                try PlaybackReadScope.owner?.check()
+                guard !closed.contains(id) else { throw CancellationError() }
+                guard Int64(data.count) == key.range.upperBound - key.range.lowerBound else {
+                    throw ProxyServerError.emptyUpstreamResponse("bytes=\(key.range.lowerBound)-\(key.range.upperBound - 1)")
+                }
+                if pending[key]?.identity == entry.identity {
+                    pending.removeValue(forKey: key)
+                    received[id, default: 0] += Int64(data.count)
+                    if Int64(data.count) <= maximumBytes {
+                        cached[key] = Cached(key: key, data: data, accessed: clock)
+                        while totalCachedBytes > maximumBytes,
+                              let oldest = cached.values.min(by: { $0.accessed < $1.accessed }) {
+                            cached.removeValue(forKey: oldest.key)
+                        }
                     }
                 }
+                let end = min(range.upperBound, key.range.upperBound)
+                result.append(data.subdata(in: Int(offset - key.range.lowerBound)..<Int(end - key.range.lowerBound)))
+                offset = end
+            } catch {
+                if pending[key]?.identity == entry.identity, !entry.read.hasReaders {
+                    pending.removeValue(forKey: key)
+                }
+                throw error
             }
-            if phase != .preload { delivered[id, default: 0] += Int64(data.count) }
-            return data
-        } catch {
-            if pending[key]?.identity == entry.identity, !entry.read.hasForegroundReaders {
-                pending.removeValue(forKey: key)
-            }
-            throw error
         }
+        if phase != .preload && phase != .preview { delivered[id, default: 0] += Int64(result.count) }
+        return result
     }
 
     var totalCachedBytes: Int64 { cached.values.reduce(0) { $0 + Int64($1.data.count) } }

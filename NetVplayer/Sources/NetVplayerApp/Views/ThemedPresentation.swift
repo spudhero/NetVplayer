@@ -1,6 +1,33 @@
 import SwiftUI
 import Models
 
+/// App-owned actions use theme colors even when macOS highlights a default button.
+struct ThemedDialogButtonStyle: ButtonStyle {
+    @Environment(\.appThemePalette) private var palette
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+    var isPrimary = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: isPrimary ? .semibold : .regular))
+            .foregroundStyle(isPrimary ? palette.color(for: .onAccent)
+                : configuration.role == .destructive ? palette.color(for: .danger) : palette.foreground)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 32)
+            .background(isPrimary ? palette.accent
+                : palette.foreground.opacity(configuration.isPressed ? 0.14 : hovering ? 0.10 : 0.06),
+                in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isPrimary ? palette.accent : palette.foreground.opacity(0.16), lineWidth: 1)
+            }
+            .opacity(isEnabled ? (configuration.isPressed && isPrimary ? 0.8 : 1) : 0.45)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .onHover { hovering = $0 }
+    }
+}
+
 /// Shared surface for app-owned sheets and popovers, including light themes.
 private struct ThemedPresentationSurface: ViewModifier {
     @Environment(\.appThemePalette) private var palette
@@ -9,6 +36,7 @@ private struct ThemedPresentationSurface: ViewModifier {
         content
             .foregroundStyle(palette.foreground)
             .tint(palette.accent)
+            .buttonStyle(ThemedDialogButtonStyle())
             .preferredColorScheme(palette.preferredColorScheme)
             .background {
                 AppThemeBackdropLayer(palette: palette)
@@ -48,7 +76,7 @@ extension View {
                     action()
                     isPresented.wrappedValue = false
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
                 .keyboardShortcut(.defaultAction)
             }
         }
@@ -82,7 +110,7 @@ struct AppDialogView: View {
             Button(request.confirmTitle, role: request.isDestructive ? .destructive : nil) {
                 complete(selection)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
             .keyboardShortcut(.defaultAction)
         }
     }

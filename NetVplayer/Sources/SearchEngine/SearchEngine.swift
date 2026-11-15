@@ -5,6 +5,7 @@ import Foundation
 import Models
 import ApplicationCore
 import SpiderEngine
+import Storage
 
 struct SearchQueryPlan: Equatable, Sendable {
     let original: String
@@ -32,6 +33,7 @@ private actor SearchOperationLimiter {
             guard ContinuousClock.now < deadline else { return false }
             try await Task.sleep(for: .milliseconds(10))
         }
+        try Task.checkCancellation()
         guard ContinuousClock.now < deadline else { return false }
         active += 1
         return true
@@ -216,15 +218,16 @@ public enum SearchSitePlanner {
         activeSiteKey: String?,
         selectedKeys: [String],
         replacementSiteKeys: Set<String> = [],
-        healthSummaries: [String: SiteHealthSummary] = [:],
-        healthSortingEnabled: Bool = false
+        performanceSummaries: [String: SearchPerformanceSummary] = [:],
+        healthSortingEnabled: Bool = false,
+        allowsSelectionFallback: Bool = true
     ) -> [Site] {
         let searchable = sites.filter { site in
             site.isSearchable && (!site.isAndroidCrawlerSource || replacementSiteKeys.contains(site.key))
         }
         let selected = Set(selectedKeys)
-        let scoped = selected.isEmpty ? searchable : searchable.filter { selected.contains($0.key) }
-        let candidates = scoped.isEmpty ? searchable : scoped
+        let scoped = searchable.filter { selected.contains($0.key) }
+        let candidates = allowsSelectionFallback && scoped.isEmpty ? searchable : scoped
         let indexed = candidates.enumerated().map { (index: $0.offset, site: $0.element) }
 
         return indexed
@@ -233,14 +236,10 @@ public enum SearchSitePlanner {
                 let rhsRank = rank(site: rhs.site, activeSiteKey: activeSiteKey, replacementSiteKeys: replacementSiteKeys)
                 if lhsRank != rhsRank { return lhsRank < rhsRank }
                 if healthSortingEnabled {
-                    let lhsScore = healthSummaries[lhs.site.key]?.score ?? 0.5
-                    let rhsScore = healthSummaries[rhs.site.key]?.score ?? 0.5
-                    if lhsScore != rhsScore { return lhsScore > rhsScore }
-                    let lhsRecordedDuration = healthSummaries[lhs.site.key]?.averageDurationMs ?? 0
-                    let rhsRecordedDuration = healthSummaries[rhs.site.key]?.averageDurationMs ?? 0
-                    let lhsDuration = lhsRecordedDuration > 0 ? lhsRecordedDuration : Int.max
-                    let rhsDuration = rhsRecordedDuration > 0 ? rhsRecordedDuration : Int.max
-                    if lhsDuration != rhsDuration { return lhsDuration < rhsDuration }
+                    // Bucket tiny timing/age differences so equivalent evidence keeps configuration order.
+                    let lhsCost = ((performanceSummaries[lhs.site.key]?.schedulingCostMs ?? 4_000) / 10).rounded()
+                    let rhsCost = ((performanceSummaries[rhs.site.key]?.schedulingCostMs ?? 4_000) / 10).rounded()
+                    if lhsCost != rhsCost { return lhsCost < rhsCost }
                 }
                 return lhs.index < rhs.index
             }
@@ -269,10 +268,13 @@ public final class SearchEngine: @unchecked Sendable {
     private let searchContent: @Sendable (Site, String, Bool, String) async throws -> Result
     private let operationLimiter: SearchOperationLimiter
     private let responseCache = SearchResponseCache()
+    private let performanceStore: SearchPerformanceStore?
 
-    public init(siteApi: SiteApi = .shared, maxConcurrentSites: Int = 6) {
+    public init(siteApi: SiteApi = .shared, maxConcurrentSites: Int = 6,
+                performanceStore: SearchPerformanceStore? = .shared) {
         self.maxConcurrentSites = max(1, maxConcurrentSites)
         self.operationLimiter = SearchOperationLimiter(limit: self.maxConcurrentSites)
+        self.performanceStore = performanceStore
         self.searchContent = { site, keyword, quick, page in
             try await siteApi.searchContent(site: site, keyword: keyword, quick: quick, page: page)
         }
@@ -280,16 +282,20 @@ public final class SearchEngine: @unchecked Sendable {
 
     init(
         maxConcurrentSites: Int = 6,
+        performanceStore: SearchPerformanceStore? = nil,
         searchContent: @escaping @Sendable (Site, String, Bool, String) async throws -> Result
     ) {
         self.maxConcurrentSites = max(1, maxConcurrentSites)
         self.operationLimiter = SearchOperationLimiter(limit: self.maxConcurrentSites)
+        self.performanceStore = performanceStore
         self.searchContent = searchContent
     }
 
     /// 多站点并发搜索，返回 AsyncStream 渐进式渲染
     public func search(keyword: String, sites: [Site], page: String = "1", quick: Bool = false,
-                       cacheScope: String? = nil, bypassCache: Bool = false) -> AsyncStream<SearchResult> {
+                         cacheScope: String? = nil, bypassCache: Bool = false,
+                         allowsQueryFallback: Bool = true,
+                         performanceConfiguration: String = "", performanceRuntime: String = "") -> AsyncStream<SearchResult> {
         AsyncStream { continuation in
             let producer = Task {
                 let searchableSites = sites.filter { $0.isSearchable && (!quick || $0.isQuickSearch) }
@@ -305,7 +311,9 @@ public final class SearchEngine: @unchecked Sendable {
                                 page: page,
                                 quick: quick,
                                 cacheScope: cacheScope,
-                                bypassCache: bypassCache
+                                bypassCache: bypassCache,
+                                allowsQueryFallback: allowsQueryFallback,
+                                performanceConfiguration: performanceConfiguration, performanceRuntime: performanceRuntime
                             )
                         }
                         nextSiteIndex += 1
@@ -327,7 +335,9 @@ public final class SearchEngine: @unchecked Sendable {
                                     page: page,
                                     quick: quick,
                                     cacheScope: cacheScope,
-                                    bypassCache: bypassCache
+                                    bypassCache: bypassCache,
+                                    allowsQueryFallback: allowsQueryFallback,
+                                    performanceConfiguration: performanceConfiguration, performanceRuntime: performanceRuntime
                                 )
                             }
                         }
@@ -344,11 +354,23 @@ public final class SearchEngine: @unchecked Sendable {
 
     public func invalidateSearchCache() async { await responseCache.clear() }
 
+    public func performanceSummaries(sites: [Site], configuration: String, runtime: String = "") -> [String: SearchPerformanceSummary] {
+        let summaries = performanceStore?.summaries() ?? [:]
+        return sites.reduce(into: [:]) { result, site in
+            result[site.key] = summaries[SearchPerformanceIdentity.fingerprint(site: site, configuration: configuration, runtime: runtime)]
+        }
+    }
+
+    public func clearPerformanceRecords() { performanceStore?.clear() }
+    public func flushPerformanceRecords() { performanceStore?.flushPendingWrites() }
+
     private func searchSiteWithCache(
         _ site: Site, keyword: String, page: String, quick: Bool,
-        cacheScope: String?, bypassCache: Bool
+        cacheScope: String?, bypassCache: Bool, allowsQueryFallback: Bool,
+        performanceConfiguration: String, performanceRuntime: String
     ) async -> SearchResult {
-        let key = cacheScope.map { SearchResponseCacheKey(scope: $0, site: site,
+        let scope = cacheScope.map { allowsQueryFallback ? $0 : $0 + "\u{0}literal-query" }
+        let key = scope.map { SearchResponseCacheKey(scope: $0, site: site,
             keyword: keyword, page: page, quick: quick) }
         var revision: UInt64 = 0
         var writer = UUID()
@@ -358,8 +380,15 @@ public final class SearchEngine: @unchecked Sendable {
             writer = lookup.writer
             if let result = lookup.result, !Task.isCancelled { return result }
         }
+        // Continuation pages have a different workload; they must not train homepage priority.
+        let measurement = SearchPerformanceMeasurement(
+            store: (Int(page) ?? 1) == 1 ? performanceStore : nil,
+            identity: SearchPerformanceIdentity.fingerprint(site: site, configuration: performanceConfiguration,
+                runtime: performanceRuntime, quick: quick))
         let result = await Self.searchSite(site, keyword: keyword, page: page, quick: quick,
-            operationLimiter: operationLimiter, searchContent: searchContent)
+            allowsQueryFallback: allowsQueryFallback,
+            operationLimiter: operationLimiter, measurement: measurement, searchContent: searchContent)
+        if !Task.isCancelled, !result.isCancelled { measurement.finish(success: result.error == nil) }
         if let key, !Task.isCancelled {
             await responseCache.insert(result, for: key, revision: revision, writer: writer)
         }
@@ -371,7 +400,9 @@ public final class SearchEngine: @unchecked Sendable {
         keyword: String,
         page: String,
         quick: Bool,
+        allowsQueryFallback: Bool,
         operationLimiter: SearchOperationLimiter,
+        measurement: SearchPerformanceMeasurement,
         searchContent: @escaping @Sendable (Site, String, Bool, String) async throws -> Result
     ) async -> SearchResult {
         let startedAt = ContinuousClock.now
@@ -395,11 +426,12 @@ public final class SearchEngine: @unchecked Sendable {
                 quick: quick,
                 timeout: timeout,
                 operationLimiter: operationLimiter,
+                measurement: measurement,
                 searchContent: searchContent
             )
             var result = original
             var effectiveKeyword = plan.original
-            if requestedPage == 1,
+            if allowsQueryFallback, requestedPage == 1,
                let fallback = plan.fallback,
                !SearchTitleNormalizer.hasMeaningfulMatch(original.list, keyword: plan.original) {
                 let remaining = timeout - elapsedSeconds()
@@ -412,6 +444,7 @@ public final class SearchEngine: @unchecked Sendable {
                             quick: quick,
                             timeout: remaining,
                             operationLimiter: operationLimiter,
+                            measurement: measurement,
                             searchContent: searchContent
                         )
                         if !fallbackResult.list.isEmpty {
@@ -424,6 +457,7 @@ public final class SearchEngine: @unchecked Sendable {
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
+                        if isCancellation(error) { throw CancellationError() }
                         DiagnosticLog.write(
                             "[SEARCH_SITE_FALLBACK_FAILED] site=\(site.name) key=\(site.key) error=\(error.localizedDescription)"
                         )
@@ -431,6 +465,7 @@ public final class SearchEngine: @unchecked Sendable {
                 }
             }
             let resultPage = result.pageIsKnown ? result.page : requestedPage
+            try Task.checkCancellation()
             let searchResult = SearchResult(
                 siteName: site.name,
                 siteKey: site.key,
@@ -444,7 +479,7 @@ public final class SearchEngine: @unchecked Sendable {
             DiagnosticLog.write("[SEARCH_SITE_RESULT] site=\(site.name) key=\(site.key) list=\(result.list.count) page=\(resultPage)")
             return searchResult
         } catch {
-            let searchResult = SearchResult(
+            var searchResult = SearchResult(
                 siteName: site.name,
                 siteKey: site.key,
                 error: error.localizedDescription,
@@ -453,6 +488,7 @@ public final class SearchEngine: @unchecked Sendable {
                 durationMs: durationMs(),
                 effectiveKeyword: keyword
             )
+            searchResult.isCancelled = Self.isCancellation(error) || Task.isCancelled
             DiagnosticLog.write("[SEARCH_SITE_RESULT] site=\(site.name) key=\(site.key) list=0 error=\(error.localizedDescription)")
             return searchResult
         }
@@ -465,12 +501,14 @@ public final class SearchEngine: @unchecked Sendable {
         quick: Bool,
         timeout: TimeInterval,
         operationLimiter: SearchOperationLimiter,
+        measurement: SearchPerformanceMeasurement,
         searchContent: @escaping @Sendable (Site, String, Bool, String) async throws -> Result
     ) async throws -> Result {
         let deadline = ContinuousClock.now.advanced(by: .seconds(max(0.001, timeout)))
         guard try await operationLimiter.acquire(before: deadline) else {
             throw SearchEngineError.timeout(site.name)
         }
+        measurement.begin()
 
         let race = SearchResultRace()
         let operationTask = Task {
@@ -519,6 +557,11 @@ public final class SearchEngine: @unchecked Sendable {
         result.pageCountIsKnown = fallback.pageCountIsKnown
         result.total = max(result.list.count, max(original.total, fallback.total))
         return result
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return error is CancellationError || (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled)
     }
 
     private static func category(for error: Error) -> AppFailureCategory {

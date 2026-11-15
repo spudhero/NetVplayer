@@ -72,12 +72,25 @@ public enum PlaybackLinkage {
 
     public static func preferredEpisode(from history: History?, episodes: [Episode]) -> Episode? {
         guard let history else { return nil }
+        if let originalIdentity = history.originalEpisodeIdentitySHA256 {
+            // Duplicate SDK rows can have the same full stable identity. Never
+            // fall back to a matching title or another file for original mode.
+            return episodes.first { OriginalAndroidPlaybackIdentity.episodeSHA256(for: $0.url) == originalIdentity }
+        }
+        let driveIdentity = DriveHistoryIdentity.from(history)
+        let candidates = episodes.filter { episode in
+            guard let driveIdentity, let candidate = DriveHistoryIdentity(locator: episode.url) else { return true }
+            return candidate == driveIdentity
+        }
         if !history.episodeUrl.isEmpty,
-          let exact = unique(episodes.filter { $0.url == history.episodeUrl }) {
+           let exact = unique(candidates.filter { $0.url == history.episodeUrl }) {
             return exact
         }
+        if let reference = MediaServerReference(locator: history.episodeUrl) {
+            return unique(episodes.filter { reference.matchesItem($0.url) })
+        }
         if !history.episodeKey.isEmpty {
-            if let keyed = unique(episodes.filter { episode in
+            if let keyed = unique(candidates.filter { episode in
                 HistoryPersistencePolicy.episodeKey(
                     siteKey: history.siteKey,
                     vodId: history.vodId,
@@ -88,11 +101,18 @@ public enum PlaybackLinkage {
                 return keyed
             }
         }
+        if let driveIdentity {
+            return unique(candidates.filter { DriveHistoryIdentity(locator: $0.url) == driveIdentity })
+        }
         let episodeName = history.episodeName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !episodeName.isEmpty else { return nil }
         return unique(episodes.filter {
             $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == episodeName
         })
+    }
+
+    public static func hasStableDriveIdentity(_ history: History) -> Bool {
+        DriveHistoryIdentity.from(history) != nil
     }
 
     private static func unique(_ episodes: [Episode]) -> Episode? {

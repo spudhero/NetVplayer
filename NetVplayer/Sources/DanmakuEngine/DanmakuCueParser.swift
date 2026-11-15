@@ -8,6 +8,7 @@ import FoundationXML
 
 public enum DanmakuCueMode: String, Codable, Sendable, Equatable {
     case scroll
+    case reverseScroll
     case top
     case bottom
 }
@@ -166,6 +167,22 @@ public enum DanmakuPayloadParser {
     private static func cueObjects(in root: Any) -> [Any] {
         if let array = root as? [Any] { return array }
         guard let object = root as? [String: Any] else { return [] }
+        // FongMi's QQ/Youku/MGTV parsers use milliseconds, including MGTV's
+        // field named `time`. Keep that distinct from generic second-based JSON.
+        let nested = object["data"] as? [String: Any]
+        let platform: (rows: [[String: Any]], time: String)?
+        if let rows = object["barrage_list"] as? [[String: Any]] { platform = (rows, "time_offset") }
+        else if let rows = nested?["result"] as? [[String: Any]] { platform = (rows, "playat") }
+        else if let rows = nested?["items"] as? [[String: Any]] { platform = (rows, "time") }
+        else { platform = nil }
+        if let platform {
+            return platform.rows.compactMap { row -> [String: Any]? in
+                guard let time = doubleValue(row[platform.time]), time.isFinite, time >= 0, time <= 86_400_000 else { return nil }
+                var cue = row
+                cue["timeMs"] = Int(time)
+                return cue
+            }
+        }
         for key in ["comments", "data", "items", "danmaku", "list"] {
             if let array = object[key] as? [Any] { return array }
         }
@@ -174,6 +191,9 @@ public enum DanmakuPayloadParser {
 
     private static func cueFromJSONObject(_ item: Any) -> DanmakuCue? {
         guard let object = item as? [String: Any] else { return nil }
+        if let parameter = object["p"] as? String {
+            return cueFromBilibili(attributes: ["p": parameter], text: stringValue(object["d"]) ?? stringValue(object["m"]) ?? "")
+        }
         let text = stringValue(object["text"])
             ?? stringValue(object["content"])
             ?? stringValue(object["m"])
@@ -183,10 +203,9 @@ public enum DanmakuPayloadParser {
         let seconds = doubleValue(object["time"])
             ?? doubleValue(object["timeSec"])
             ?? doubleValue(object["at"])
-        let millis = intValue(object["timeMs"])
-            ?? intValue(object["progress"])
-            ?? seconds.map { milliseconds($0) }
-            ?? 0
+        guard let rawTime = doubleValue(object["timeMs"]) ?? doubleValue(object["progress"]) ?? seconds.map({ $0 * 1000 }),
+              rawTime.isFinite, rawTime >= 0, rawTime <= 86_400_000 else { return nil }
+        let millis = Int(rawTime)
         let mode = modeValue(object["mode"])
         let color = colorValue(object["color"])
         return DanmakuCue(timeMs: millis, text: text, mode: mode, color: color)
@@ -210,12 +229,14 @@ public enum DanmakuPayloadParser {
     }
 
     fileprivate static func cueFromBilibili(attributes: [String: String], text: String) -> DanmakuCue? {
-        let values = (attributes["p"] ?? "").split(separator: ",").map(String.init)
-        let timeMs = values.first.flatMap { Double($0) }.map { milliseconds($0) } ?? 0
-        let mode = values.count > 1 ? modeValue(values[1]) : .scroll
-        let color = values.count > 3 ? colorValue(values[3]) : "#FFFFFF"
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return DanmakuCue(timeMs: timeMs, text: text, mode: mode, color: color)
+        let values = (attributes["p"] ?? "").split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard values.count >= 4, let seconds = Double(values[0]), seconds.isFinite, seconds >= 0, seconds <= 86_400,
+              let rawMode = Int(values[1]), (1...6).contains(rawMode), Int(values[2]) != nil,
+              let rgb = Int64(values[3]), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        // Mode 7 requires the separate advanced-position renderer; never turn its
+        // JSON coordinates into ordinary scrolling text.
+        return DanmakuCue(timeMs: Int(seconds * 1000), text: text, mode: modeValue(values[1]),
+                          color: String(format: "#%06X", rgb & 0xFFFFFF))
     }
 
     fileprivate static func parseTimeMillis(_ value: String) -> Int {
@@ -268,6 +289,8 @@ public enum DanmakuPayloadParser {
             return .top
         case "4", "bottom":
             return .bottom
+        case "6", "reverse":
+            return .reverseScroll
         default:
             return .scroll
         }

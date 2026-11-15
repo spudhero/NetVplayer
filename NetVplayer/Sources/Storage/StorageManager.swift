@@ -2,6 +2,7 @@
 // 持久化管理器
 
 import Foundation
+import Darwin
 import Models
 
 /// 持久化管理器 — 使用 JSON 文件存储
@@ -12,6 +13,7 @@ public final class StorageManager: @unchecked Sendable {
 
     private let fileManager = FileManager.default
     private let storageDirectory: URL
+    var connectionObservationNamespace: String { storageDirectory.standardizedFileURL.path }
 
     public init(storageDirectory: URL? = nil) {
         if let storageDirectory {
@@ -24,6 +26,18 @@ public final class StorageManager: @unchecked Sendable {
     }
 
     // MARK: - 通用存取
+
+    /// A stable sidecar lock survives atomic replacement of the data file and
+    /// serializes journal read/compare/write across reopened instances/processes.
+    func withJournalLock<T>(_ filename: String, operation: () throws -> T) throws -> T {
+        let path = storageDirectory.appendingPathComponent(filename + ".lock").path
+        let descriptor = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteNoPermission) }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        return try operation()
+    }
 
     public func save<T: Encodable>(_ object: T, to filename: String) throws {
         let url = storageDirectory.appendingPathComponent(filename)
@@ -45,6 +59,24 @@ public final class StorageManager: @unchecked Sendable {
         let data = try file.read(upToCount: max(0, maximumBytes) + 1) ?? Data()
         guard data.count <= maximumBytes else { throw CocoaError(.fileReadTooLarge) }
         return try JSONDecoder().decode(type, from: data)
+    }
+
+    /// Metadata-only change detection for local configuration snapshots. Atomic saves/restore
+    /// change the inode; in-place edits also change nanosecond mtime/ctime. Errors fail closed.
+    struct FileVersion: Equatable, Sendable {
+        var device: Int32, inode: UInt64, size: Int64, mode: UInt16
+        var modifiedSeconds: Int, modifiedNanos: Int, changedSeconds: Int, changedNanos: Int
+    }
+    func fileVersion(_ filename: String) throws -> FileVersion? {
+        var info = stat()
+        if fstatat(AT_FDCWD, storageDirectory.appendingPathComponent(filename).path, &info, 0) != 0 {
+            let code = errno
+            if code == ENOENT { return nil }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        return .init(device: info.st_dev, inode: info.st_ino, size: info.st_size, mode: info.st_mode,
+            modifiedSeconds: info.st_mtimespec.tv_sec, modifiedNanos: info.st_mtimespec.tv_nsec,
+            changedSeconds: info.st_ctimespec.tv_sec, changedNanos: info.st_ctimespec.tv_nsec)
     }
 
     public func delete(_ filename: String) throws {
@@ -103,13 +135,14 @@ public final class StorageManager: @unchecked Sendable {
             tracks: loadTracks(),
             preferences: includePreferences ? UserPreferenceSnapshot() : nil,
             fileServices: FileServiceStore(storage: self).load(),
+            mediaServers: MediaServerStore(storage: self).load(),
             mediaCorrections: FileServiceStore(storage: self).loadCorrections()
         )
     }
 
     public func restoreBackup(_ backup: StorageBackup, restorePreferences: Bool = true) throws {
         let backup = try StorageBackupCodec.validatedPayload(backup, allowHistoryMigration: true)
-        let filenames = ["configs.json", "history.json", "keeps.json", "tracks.json", "file-services.json", "media-corrections.json"]
+        let filenames = ["configs.json", "history.json", "keeps.json", "tracks.json", "file-services.json", "media-corrections.json", "media-servers.json"]
         var snapshots: [String: Data?] = [:]
         for filename in filenames {
             let url = storageDirectory.appendingPathComponent(filename)
@@ -126,6 +159,11 @@ public final class StorageManager: @unchecked Sendable {
             try saveKeeps(backup.keeps)
             try saveTracks(backup.tracks)
             if let catalog = backup.fileServices { try save(catalog, to: "file-services.json") }
+            if let accounts = backup.mediaServers {
+                var existing = MediaServerStore(storage: self).load()
+                for account in accounts where !existing.contains(where: { $0.id == account.id }) { existing.append(account) }
+                try save(existing, to: "media-servers.json")
+            }
             if let corrections = backup.mediaCorrections { try save(corrections, to: "media-corrections.json") }
         } catch {
             for filename in filenames {

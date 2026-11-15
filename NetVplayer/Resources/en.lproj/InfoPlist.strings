@@ -1,1 +1,3 @@
 "NSLocalNetworkUsageDescription" = "NetVplayer connects to your NAS and media servers on the local network to browse and play videos and music.";
+
+"NSMotionUsageDescription" = "NetVplayer uses headphone motion only when you enable head tracking, to keep spatial audio aligned with the screen.";

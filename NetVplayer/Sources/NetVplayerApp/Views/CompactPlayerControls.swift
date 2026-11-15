@@ -8,9 +8,17 @@ enum CompactPlayerKind: Equatable {
 }
 
 enum CompactPlayerLayoutPolicy {
+    static let floatingContentSize = CGSize(width: 480, height: 270)
     static let regularThreshold = CGSize(width: 960, height: 640)
-    static let minimumContentSize = CGSize(width: 427, height: 240)
+    static let minimumContentSize = CGSize(width: 320, height: 120)
     static let controlsFadeDuration = 0.14
+
+    static func floatingContentSize(aspectRatio: Double?, availableSize: CGSize) -> CGSize {
+        let ratio = aspectRatio.flatMap { $0.isFinite && (0.1...10).contains($0) ? $0 : nil } ?? 16.0 / 9
+        let width = min(floatingContentSize.width, max(minimumContentSize.width, 360 * ratio))
+        let scale = min(1, availableSize.width / width, availableSize.height / (width / ratio))
+        return CGSize(width: width * scale, height: width / ratio * scale)
+    }
 
     static func isCompact(contentSize: CGSize) -> Bool {
         contentSize.width < regularThreshold.width
@@ -93,11 +101,13 @@ struct CompactPlayerControls: View {
                     isActive: isAlwaysOnTop,
                     action: onToggleAlwaysOnTop
                 )
+                  .accessibilityIdentifier("player.floating-window.pin")
                 compactButton(
-                    systemImage: "macwindow",
+                    systemImage: "pip.exit",
                     help: L10n.text("恢复普通窗口"),
                     action: onRestoreWindow
                 )
+                  .accessibilityIdentifier("player.floating-window.restore")
                 compactButton(
                     systemImage: "xmark",
                     help: L10n.text("关闭播放器"),

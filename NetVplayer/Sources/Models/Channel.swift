@@ -18,6 +18,7 @@ public struct Channel: Codable, Identifiable, Sendable {
     public var referer: String
     public var header: [String: String]
     public var catchup: Catchup?
+    public var xtreamArchive: XtreamArchiveChannel?
     public var drm: Drm?
     public var parseFlag: Int
     public var clickScript: String
@@ -40,6 +41,7 @@ public struct Channel: Codable, Identifiable, Sendable {
         referer: String = "",
         header: [String: String] = [:],
         catchup: Catchup? = nil,
+        xtreamArchive: XtreamArchiveChannel? = nil,
         drm: Drm? = nil,
         parseFlag: Int = 0,
         clickScript: String = "",
@@ -59,6 +61,7 @@ public struct Channel: Codable, Identifiable, Sendable {
         self.referer = referer
         self.header = header
         self.catchup = catchup
+        self.xtreamArchive = xtreamArchive
         self.drm = drm
         self.parseFlag = parseFlag
         self.clickScript = clickScript
@@ -152,10 +155,14 @@ public struct Channel: Codable, Identifiable, Sendable {
         let id = channel.tvgId.isEmpty ? (channel.tvgName.isEmpty ? channel.name : channel.tvgName) : channel.tvgId
         let epgName = channel.tvgName.isEmpty ? channel.name : channel.tvgName
         if live.epg.contains("{"), !channel.epg.hasPrefix("http") {
+            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+            func encode(_ value: String) -> String { value.addingPercentEncoding(withAllowedCharacters: allowed) ?? "" }
             channel.epg = live.epg
-                .replacingOccurrences(of: "{id}", with: id)
-                .replacingOccurrences(of: "{name}", with: epgName)
-                .replacingOccurrences(of: "{epg}", with: channel.epg)
+                .replacingOccurrences(of: "{id}", with: encode(id))
+                .replacingOccurrences(of: "{name}", with: encode(epgName))
+                .replacingOccurrences(of: "{epg}", with: encode(channel.epg))
+        } else if channel.epg.isEmpty {
+            channel.epg = live.epg
         }
         if live.logo.contains("{"), !channel.logo.hasPrefix("http") {
             channel.logo = live.logo

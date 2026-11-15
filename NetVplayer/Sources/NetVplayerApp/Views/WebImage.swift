@@ -9,6 +9,7 @@ import Models
 import Networking
 import Storage
 import ProxyServer
+import MediaServerEngine
 
 /// 自定义网络图片视图
 public struct WebImage: View {
@@ -21,7 +22,9 @@ public struct WebImage: View {
     let fallbackIconFont: Font
     let maxPixelSize: CGFloat
 
-    @StateObject private var loader = ImageLoader()
+    @StateObject private var loader: ImageLoader
+    @State private var loadingIndicatorVisible = false
+    @State private var demandObservationEnabled = false
 
     public init(
         urlString: String,
@@ -41,6 +44,9 @@ public struct WebImage: View {
         self.fallbackSystemImage = fallbackSystemImage
         self.fallbackIconFont = fallbackIconFont
         self.maxPixelSize = max(64, maxPixelSize)
+        _loader = StateObject(wrappedValue: ImageLoader(
+            from: urlString, headers: siteHeader, maxPixelSize: max(64, maxPixelSize), demand: .nearby
+        ))
     }
 
     public var body: some View {
@@ -48,7 +54,7 @@ public struct WebImage: View {
             if let image = loader.image {
                 Image(nsImage: image)
                     .resizable()
-            } else if loader.isLoading && showsLoadingIndicator {
+            } else if loader.isLoading && showsLoadingIndicator && loadingIndicatorVisible {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.gray.opacity(0.1))
                     .overlay(
@@ -59,11 +65,30 @@ public struct WebImage: View {
                 fallbackContent
             }
         }
+        .background(PosterDemandVisibility(enabled: demandObservationEnabled) { demand in
+            loader.setDemand(demand)
+            loader.load(from: urlString, headers: siteHeader, timeout: timeout, maxPixelSize: maxPixelSize)
+        })
         .onAppear {
+            demandObservationEnabled = true
             loader.load(from: urlString, headers: siteHeader, timeout: timeout, maxPixelSize: maxPixelSize)
         }
         .onDisappear {
+            demandObservationEnabled = false
+            loader.setDemand(.inactive)
             loader.cancel()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .posterWorkCapacityDidChange).receive(on: RunLoop.main)) { _ in
+            guard loader.isDeferred else { return }
+            loader.load(from: urlString, headers: siteHeader, timeout: timeout, maxPixelSize: maxPixelSize)
+        }
+        .task(id: loader.isLoading) {
+            loadingIndicatorVisible = false
+            guard loader.isLoading && showsLoadingIndicator else { return }
+            do { try await Task.sleep(for: .milliseconds(150)) }
+            catch { return }
+            guard !Task.isCancelled, loader.isLoading else { return }
+            loadingIndicatorVisible = true
         }
         .onChange(of: urlString) { _, newValue in
             loader.load(from: newValue, headers: siteHeader, timeout: timeout, maxPixelSize: maxPixelSize)
@@ -100,6 +125,25 @@ public struct WebImage: View {
                         .foregroundColor(.gray.opacity(0.3))
                 )
         }
+    }
+}
+
+/// Keep speculative work close to the visible rows and independent of cell reuse.
+struct PosterImagePrefetchRequest: Equatable, Sendable {
+    let urls: [String]
+    let headers: [String: String]?
+    let maxPixelSize: CGFloat
+
+    init(urls: [String], headers: [String: String]? = nil, maxPixelSize: CGFloat) {
+        var seen = Set<String>()
+        var unique: [String] = []
+        for url in urls where !url.isEmpty && seen.insert(url).inserted {
+            unique.append(url)
+            if unique.count == 64 { break }
+        }
+        self.urls = unique
+        self.headers = headers
+        self.maxPixelSize = ImageLoader.thumbnailPixelSize(maxPixelSize)
     }
 }
 
@@ -167,6 +211,11 @@ struct EmbeddedImageSource: Equatable {
         }
 
         guard let url = URLHelper.formatUrl(rawURL) else { return nil }
+        if url.scheme == MediaServerArtworkReference.scheme {
+            guard let reference = MediaServerArtworkReference(locator: rawURL), headers.isEmpty,
+                  let canonicalURL = URL(string: reference.locator) else { return nil }
+            return EmbeddedImageSource(url: canonicalURL, headers: [:])
+        }
         return EmbeddedImageSource(url: url, headers: headers)
     }
 
@@ -199,31 +248,13 @@ struct DecodedPosterImage: @unchecked Sendable {
     }
 }
 
-private actor PosterDownloadLimiter {
-    private let limit: Int
-    private var active = 0
-
-    init(limit: Int) {
-        self.limit = max(1, limit)
-    }
-
-    func acquire() async throws {
-        try Task.checkCancellation()
-        while active >= limit {
-            try Task.checkCancellation()
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        try Task.checkCancellation()
-        active += 1
-    }
-
-    func release() {
-        active = max(0, active - 1)
-    }
-}
-
 actor PosterImagePipeline {
     static let shared = PosterImagePipeline()
+
+    private struct Waiter: Sendable {
+        let continuation: CheckedContinuation<DecodedPosterImage, Error>
+        let token: PosterDemandToken
+    }
 
     private struct ImageInFlight: Sendable {
         let id: UUID
@@ -231,23 +262,37 @@ actor PosterImagePipeline {
         let dataKey: String
         let dataID: UUID
         let task: Task<Void, Never>
-        var waiters: [UUID: CheckedContinuation<DecodedPosterImage, Error>]
+        var waiters: [UUID: Waiter]
+        var demand: PosterDemand { waiters.values.map { $0.token.value }.min() ?? .inactive }
     }
 
     private struct DataInFlight: Sendable {
         let id: UUID
         let generation: UInt64
-        let task: Task<Data, Error>
+        let task: Task<Void, Never>
         var consumers: Int
+        var result: Swift.Result<Data, Error>?
+        var waiters: [UUID: CheckedContinuation<Data, Error>] = [:]
     }
 
     private let session: URLSession
+    private let mediaServerRuntime: MediaServerRuntime
     private let cacheDirectory: URL
     private let fileManager: FileManager
     private let maximumDiskBytes: Int64
     private let ttl: TimeInterval
     private let now: @Sendable () -> Date
-    private let limiter: PosterDownloadLimiter
+    private enum WorkStage: Sendable { case download, decode }
+    private let backgroundBudget: PlaybackBackgroundBudget
+    private var budgetObservation: Task<Void, Never>?
+    private let downloads: PosterWorkQueue
+    private let decodes: PosterWorkQueue
+    private let maximumOutstandingImages: Int
+    private let decoder: @Sendable (Data, CGFloat) throws -> DecodedPosterImage
+    private var peakOutstandingImages = 0
+    private var deferredCount = 0
+    private var imageTaskCount = 0
+    private var capacityNotificationScheduled = false
     private var inFlight: [String: ImageInFlight] = [:]
     private var dataInFlight: [String: DataInFlight] = [:]
     private var generation: UInt64 = 0
@@ -259,7 +304,12 @@ actor PosterImagePipeline {
         maximumDiskBytes: Int64 = 256 * 1024 * 1024,
         ttl: TimeInterval = 7 * 24 * 60 * 60,
         maximumConcurrentDownloads: Int = 8,
-        now: @escaping @Sendable () -> Date = Date.init
+        maximumConcurrentDecodes: Int = 2,
+        maximumOutstandingImages: Int = 96,
+        backgroundBudget: PlaybackBackgroundBudget = .shared,
+        decoder: (@Sendable (Data, CGFloat) throws -> DecodedPosterImage)? = nil,
+        now: @escaping @Sendable () -> Date = Date.init,
+        mediaServerRuntime: MediaServerRuntime = .shared
     ) {
         if let session {
             self.session = session
@@ -273,17 +323,46 @@ actor PosterImagePipeline {
         self.fileManager = fileManager
         self.maximumDiskBytes = max(1, maximumDiskBytes)
         self.ttl = max(0, ttl)
-        self.limiter = PosterDownloadLimiter(limit: maximumConcurrentDownloads)
+        self.maximumOutstandingImages = max(1, maximumOutstandingImages)
+        self.backgroundBudget = backgroundBudget
+        let permits: (PosterDemand) -> Bool = { demand in
+            demand.isSpeculative ? backgroundBudget.permitsOptionalWork : backgroundBudget.permitsVisibleWork
+        }
+        self.downloads = PosterWorkQueue(limit: maximumConcurrentDownloads, speculativeLimit: 2,
+            maximumWaiting: max(1, maximumOutstandingImages), permits: permits)
+        self.decodes = PosterWorkQueue(limit: maximumConcurrentDecodes, speculativeLimit: 1,
+            maximumWaiting: max(1, maximumOutstandingImages), permits: permits)
+        self.decoder = decoder ?? Self.decode
         self.now = now
+        self.mediaServerRuntime = mediaServerRuntime
         try? fileManager.createDirectory(at: self.cacheDirectory, withIntermediateDirectories: true)
+    }
+
+    deinit { budgetObservation?.cancel() }
+
+    private func observeBudgetIfNeeded() {
+        guard budgetObservation == nil else { return }
+        let changes = backgroundBudget.permissionChanges()
+        budgetObservation = Task { [weak self] in
+            for await _ in changes {
+                guard !Task.isCancelled else { break }
+                await self?.refreshDemand()
+            }
+        }
+    }
+
+    func waitForPrefetchPermission() async throws {
+        try await backgroundBudget.waitForOptionalPermission()
     }
 
     func image(
         request: URLRequest,
         key: String,
-        maxPixelSize: CGFloat
+        maxPixelSize: CGFloat,
+        demand token: PosterDemandToken = PosterDemandToken()
     ) async throws -> DecodedPosterImage {
         try Task.checkCancellation()
+        observeBudgetIfNeeded()
         let sizedKey = "\(key)-\(Int(maxPixelSize.rounded()))"
         let requestGeneration = generation
         let waiterID = UUID()
@@ -295,7 +374,7 @@ actor PosterImagePipeline {
                 }
                 addWaiter(
                     continuation, id: waiterID, sizedKey: sizedKey,
-                    request: request, key: key, maxPixelSize: maxPixelSize
+                    request: request, key: key, maxPixelSize: maxPixelSize, token: token
                 )
             }
             try Task.checkCancellation()
@@ -312,38 +391,58 @@ actor PosterImagePipeline {
         sizedKey: String,
         request: URLRequest,
         key: String,
-        maxPixelSize: CGFloat
+        maxPixelSize: CGFloat,
+        token: PosterDemandToken
     ) {
         let requestGeneration = generation
         if var existing = inFlight[sizedKey], existing.generation == requestGeneration {
-            existing.waiters[waiterID] = continuation
+            existing.waiters[waiterID] = Waiter(continuation: continuation, token: token)
             inFlight[sizedKey] = existing
+            refreshDemand()
             return
         }
 
+        guard token.value.tier != .inactive else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        if inFlight.count >= maximumOutstandingImages {
+            guard let victim = inFlight.max(by: { $0.value.demand < $1.value.demand }),
+                  token.value < victim.value.demand else {
+                deferredCount += 1
+                continuation.resume(throwing: PosterWorkDeferred())
+                return
+            }
+            evictRequest(sizedKey: victim.key)
+        }
+
         let dataID: UUID
-        let dataTask: Task<Data, Error>
         if var existing = dataInFlight[key], existing.generation == requestGeneration {
             existing.consumers += 1
             dataInFlight[key] = existing
             dataID = existing.id
-            dataTask = existing.task
         } else {
             dataID = UUID()
-            dataTask = Task { try await data(request: request, key: key, generation: requestGeneration) }
+            let downloadID = dataID
+            let dataTask = Task {
+                do {
+                    let bytes = try await data(request: request, key: key, id: downloadID, generation: requestGeneration)
+                    finishData(key: key, id: downloadID, result: .success(bytes))
+                } catch { finishData(key: key, id: downloadID, result: .failure(error)) }
+            }
             dataInFlight[key] = DataInFlight(
                 id: dataID, generation: requestGeneration, task: dataTask, consumers: 1
             )
         }
         let requestID = UUID()
+        imageTaskCount += 1
         let decodeTask = Task {
+            defer { imageTaskCount -= 1 }
             do {
-                let data = try await dataTask.value
+                let data = try await awaitData(key: key, id: dataID, consumerID: requestID)
                 try Task.checkCancellation()
                 guard requestGeneration == generation else { throw CancellationError() }
-                let image = try await Task.detached(priority: .utility) {
-                    try Self.decode(data: data, maxPixelSize: maxPixelSize)
-                }.value
+                let image = try await decodeImage(data, maxPixelSize: maxPixelSize, id: requestID, sizedKey: sizedKey)
                 try Task.checkCancellation()
                 guard requestGeneration == generation else { throw CancellationError() }
                 // A full/read-only disk must not discard a successfully decoded poster.
@@ -363,21 +462,27 @@ actor PosterImagePipeline {
         }
         inFlight[sizedKey] = ImageInFlight(
             id: requestID, generation: requestGeneration, dataKey: key, dataID: dataID,
-            task: decodeTask, waiters: [waiterID: continuation]
+            task: decodeTask, waiters: [waiterID: Waiter(continuation: continuation, token: token)]
         )
+        peakOutstandingImages = max(peakOutstandingImages, inFlight.count)
+        refreshDemand()
     }
 
     private func cancelWaiter(id: UUID, sizedKey: String) {
         guard var request = inFlight[sizedKey],
-              let continuation = request.waiters.removeValue(forKey: id) else { return }
+              let waiter = request.waiters.removeValue(forKey: id) else { return }
         if request.waiters.isEmpty {
             inFlight[sizedKey] = nil
+            decodes.cancel(id: request.id)
+            cancelDataWaiter(key: request.dataKey, id: request.dataID, consumerID: request.id)
             request.task.cancel()
             releaseDataConsumer(key: request.dataKey, id: request.dataID)
         } else {
             inFlight[sizedKey] = request
         }
-        continuation.resume(throwing: CancellationError())
+        waiter.continuation.resume(throwing: CancellationError())
+        refreshDemand()
+        notifyCapacityChange()
     }
 
     private func finishRequest(
@@ -388,7 +493,9 @@ actor PosterImagePipeline {
         guard let request = inFlight[sizedKey], request.id == id else { return }
         inFlight[sizedKey] = nil
         releaseDataConsumer(key: request.dataKey, id: request.dataID)
-        for continuation in request.waiters.values { continuation.resume(with: result) }
+        for waiter in request.waiters.values { waiter.continuation.resume(with: result) }
+        refreshDemand()
+        notifyCapacityChange()
     }
 
     private func releaseDataConsumer(key: String, id: UUID) {
@@ -397,9 +504,120 @@ actor PosterImagePipeline {
         request.consumers -= 1
         if request.consumers == 0 {
             dataInFlight[key] = nil
+            downloads.cancel(id: request.id)
             request.task.cancel()
+            for waiter in request.waiters.values { waiter.resume(throwing: CancellationError()) }
         } else {
             dataInFlight[key] = request
+        }
+    }
+
+    private func awaitData(key: String, id: UUID, consumerID: UUID) async throws -> Data {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled, var data = dataInFlight[key], data.id == id else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                if let result = data.result { continuation.resume(with: result) }
+                else {
+                    data.waiters[consumerID] = continuation
+                    dataInFlight[key] = data
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelDataWaiter(key: key, id: id, consumerID: consumerID) }
+        }
+    }
+
+    private func finishData(key: String, id: UUID, result: Swift.Result<Data, Error>) {
+        guard var data = dataInFlight[key], data.id == id else { return }
+        let waiters = data.waiters.values
+        data.result = result
+        data.waiters.removeAll()
+        dataInFlight[key] = data
+        for waiter in waiters { waiter.resume(with: result) }
+    }
+
+    private func cancelDataWaiter(key: String, id: UUID, consumerID: UUID) {
+        guard dataInFlight[key]?.id == id else { return }
+        dataInFlight[key]?.waiters.removeValue(forKey: consumerID)?.resume(throwing: CancellationError())
+    }
+
+    func updateDemand(_ token: PosterDemandToken) {
+        // Tokens belonging to old requests cannot alter a replacement's demand.
+        guard inFlight.values.contains(where: { $0.waiters.values.contains { $0.token === token } }) else { return }
+        refreshDemand()
+    }
+
+    private func refreshDemand() {
+        var dataDemands: [UUID: PosterDemand] = [:]
+        for request in inFlight.values {
+            let demand = request.demand
+            decodes.update(id: request.id, demand: demand)
+            dataDemands[request.dataID] = min(dataDemands[request.dataID] ?? .inactive, demand)
+        }
+        for data in dataInFlight.values {
+            downloads.update(id: data.id, demand: dataDemands[data.id] ?? .inactive)
+        }
+        downloads.drain()
+        decodes.drain()
+    }
+
+    private func evictRequest(sizedKey: String) {
+        guard let request = inFlight.removeValue(forKey: sizedKey) else { return }
+        deferredCount += 1
+        decodes.cancel(id: request.id)
+        cancelDataWaiter(key: request.dataKey, id: request.dataID, consumerID: request.id)
+        request.task.cancel()
+        releaseDataConsumer(key: request.dataKey, id: request.dataID)
+        for waiter in request.waiters.values { waiter.continuation.resume(throwing: PosterWorkDeferred()) }
+    }
+
+    private func workQueue(_ stage: WorkStage) -> PosterWorkQueue {
+        switch stage { case .download: downloads; case .decode: decodes }
+    }
+
+    private func acquireWork(id: UUID, demand: PosterDemand, stage: WorkStage) async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                workQueue(stage).enqueue(id: id, demand: demand, continuation: continuation)
+            }
+        } onCancel: {
+            Task { await self.cancelWork(id: id, stage: stage) }
+        }
+    }
+
+    private func cancelWork(id: UUID, stage: WorkStage) { workQueue(stage).cancel(id: id) }
+    private func releaseWork(id: UUID, stage: WorkStage) { workQueue(stage).release(id: id) }
+
+    private func decodeImage(_ data: Data, maxPixelSize: CGFloat, id: UUID, sizedKey: String) async throws -> DecodedPosterImage {
+        try Task.checkCancellation()
+        try await acquireWork(id: id, demand: inFlight[sizedKey]?.demand ?? .inactive, stage: .decode)
+        defer { releaseWork(id: id, stage: .decode) }
+        try Task.checkCancellation()
+        let decoder = self.decoder
+        let worker = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            return try decoder(data, maxPixelSize)
+        }
+        // Cancelling a waiter cannot release a slot while ImageIO is still running.
+        return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+    }
+
+    func schedulingMetrics() -> (downloads: PosterWorkMetrics, decodes: PosterWorkMetrics, outstanding: Int, peakOutstanding: Int, deferred: Int, imageTasks: Int, dataWaiters: Int) {
+        (downloads.metrics, decodes.metrics, inFlight.count, peakOutstandingImages, deferredCount,
+            imageTaskCount, dataInFlight.values.reduce(0) { $0 + $1.waiters.count })
+    }
+
+    private func notifyCapacityChange() {
+        guard !capacityNotificationScheduled else { return }
+        capacityNotificationScheduled = true
+        Task {
+            await Task.yield()
+            capacityNotificationScheduled = false
+            NotificationCenter.default.post(name: .posterWorkCapacityDidChange, object: nil)
         }
     }
 
@@ -422,12 +640,17 @@ actor PosterImagePipeline {
     func clearDiskCache() throws {
         generation &+= 1
         for request in inFlight.values {
+            decodes.cancel(id: request.id)
             request.task.cancel()
-            for continuation in request.waiters.values {
-                continuation.resume(throwing: CancellationError())
+            for waiter in request.waiters.values {
+                waiter.continuation.resume(throwing: CancellationError())
             }
         }
-        for request in dataInFlight.values { request.task.cancel() }
+        for request in dataInFlight.values {
+            downloads.cancel(id: request.id)
+            request.task.cancel()
+            for waiter in request.waiters.values { waiter.resume(throwing: CancellationError()) }
+        }
         inFlight.removeAll()
         dataInFlight.removeAll()
         if fileManager.fileExists(atPath: cacheDirectory.path) {
@@ -437,7 +660,7 @@ actor PosterImagePipeline {
         NotificationCenter.default.post(name: .netVplayerCacheDidChange, object: nil)
     }
 
-    private func data(request: URLRequest, key: String, generation requestGeneration: UInt64) async throws -> Data {
+    private func data(request: URLRequest, key: String, id: UUID, generation requestGeneration: UInt64) async throws -> Data {
         try Task.checkCancellation()
         guard requestGeneration == generation else { throw CancellationError() }
         if let url = request.url, url.isFileURL {
@@ -458,7 +681,8 @@ actor PosterImagePipeline {
         }
         try? fileManager.removeItem(at: fileURL)
 
-        try await limiter.acquire()
+        let demand = inFlight.values.filter { $0.dataID == id }.map(\.demand).min() ?? .inactive
+        try await acquireWork(id: id, demand: demand, stage: .download)
         let responseData: Data
         let response: URLResponse
         do {
@@ -466,7 +690,13 @@ actor PosterImagePipeline {
             guard requestGeneration == generation else { throw CancellationError() }
             var uncachedRequest = request
             uncachedRequest.cachePolicy = .reloadIgnoringLocalCacheData
-            if let url = uncachedRequest.url, SourceResourceTransport.supportsPoster(url) {
+            if let url = uncachedRequest.url, url.scheme == MediaServerArtworkReference.scheme {
+                guard let reference = MediaServerArtworkReference(locator: url.absoluteString),
+                      let imageResponse = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+                else { throw PosterImageError.invalidData(0) }
+                responseData = try await mediaServerRuntime.artwork(reference)
+                response = imageResponse
+            } else if let url = uncachedRequest.url, SourceResourceTransport.supportsPoster(url) {
                 let resource = try await SourceResourceTransport.response(
                     for: url, headers: uncachedRequest.allHTTPHeaderFields ?? [:],
                     timeout: uncachedRequest.timeoutInterval
@@ -478,9 +708,9 @@ actor PosterImagePipeline {
             } else {
                 (responseData, response) = try await session.data(for: uncachedRequest)
             }
-            await limiter.release()
+            releaseWork(id: id, stage: .download)
         } catch {
-            await limiter.release()
+            releaseWork(id: id, stage: .download)
             throw error
         }
         try Task.checkCancellation()
@@ -533,7 +763,7 @@ actor PosterImagePipeline {
         }
     }
 
-    nonisolated private static func decode(data: Data, maxPixelSize: CGFloat) throws -> DecodedPosterImage {
+    nonisolated static func decode(data: Data, maxPixelSize: CGFloat) throws -> DecodedPosterImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw PosterImageError.invalidData(data.count)
         }
@@ -561,6 +791,10 @@ actor PosterImagePipeline {
 final class ImageLoader: ObservableObject {
     @Published var image: NSImage? = nil
     @Published var isLoading: Bool = false
+    private(set) var isDeferred = false
+    #if DEBUG
+    private(set) var diagnosticFailure: (domain: String, code: Int)?
+    #endif
 
     typealias ImageLoadError = PosterImageError
 
@@ -577,21 +811,55 @@ final class ImageLoader: ObservableObject {
     private var currentTask: Task<Void, Never>? = nil
     private var currentKey: String = ""
     private var currentRequestID = UUID()
+    private var currentGeneration: UInt64
     private let pipeline: PosterImagePipeline
+    private var demand: PosterDemand
+    private var demandToken = PosterDemandToken()
 
-    init(pipeline: PosterImagePipeline = .shared) {
+    init(
+        from urlString: String? = nil,
+        headers: [String: String]? = nil,
+        maxPixelSize: CGFloat = 1_200,
+        pipeline: PosterImagePipeline = .shared,
+        demand: PosterDemand = .visible
+    ) {
         self.pipeline = pipeline
+        self.demand = demand
+        currentGeneration = Self.memoryGeneration
+        // A rebuilt SwiftUI cell should have its cached image on the first frame,
+        // before onAppear. Initialization performs no I/O or speculative download.
+        if let urlString, let source = EmbeddedImageSource.parse(urlString) {
+            let effectiveHeaders = Self.mergedHeaders(siteHeaders: headers, embeddedHeaders: source.headers)
+            let key = Self.cacheKey(url: source.url, headers: effectiveHeaders)
+            let imageKey = "\(key)-\(Int(Self.thumbnailPixelSize(maxPixelSize)))"
+            if let cached = Self.imageCache.object(forKey: imageKey as NSString) {
+                image = cached
+                currentKey = imageKey
+            }
+        }
     }
 
     deinit {
         currentTask?.cancel()
     }
 
+    func setDemand(_ demand: PosterDemand) {
+        guard self.demand != demand else { return }
+        self.demand = demand
+        demandToken.update(demand)
+        if demand.tier == .inactive { cancel(); return }
+        let token = demandToken
+        let pipeline = pipeline
+        Task { await pipeline.updateDemand(token) }
+    }
+
     func cancel() {
+        isDeferred = false
         currentRequestID = UUID()
         currentTask?.cancel()
         currentTask = nil
-        currentKey = ""
+        // Keep a completed image associated with its source while offscreen.
+        // Explicit cache clearing is handled by currentGeneration in load().
         isLoading = false
     }
 
@@ -601,6 +869,7 @@ final class ImageLoader: ObservableObject {
         timeout: TimeInterval = 15,
         maxPixelSize: CGFloat = 1_200
     ) {
+        guard demand.tier != .inactive else { return }
         guard let source = EmbeddedImageSource.parse(urlString) else {
             cancel()
             self.image = nil
@@ -610,12 +879,19 @@ final class ImageLoader: ObservableObject {
         let url = source.url
         let effectiveHeaders = Self.mergedHeaders(siteHeaders: headers, embeddedHeaders: source.headers)
         let requestKey = Self.cacheKey(url: url, headers: effectiveHeaders)
-        let imageKey = "\(requestKey)-\(Int(maxPixelSize.rounded()))"
-        if currentKey == imageKey, image != nil || isLoading {
+        let pixelSize = Self.thumbnailPixelSize(maxPixelSize)
+        let imageKey = "\(requestKey)-\(Int(pixelSize))"
+        if currentGeneration == Self.memoryGeneration,
+           currentKey == imageKey, image != nil || isLoading {
             return
         }
         currentTask?.cancel()
+        currentTask = nil
+        isDeferred = false
+        demandToken = PosterDemandToken(demand)
+        let token = demandToken
         currentKey = imageKey
+        currentGeneration = Self.memoryGeneration
         let requestID = UUID()
         currentRequestID = requestID
 
@@ -633,6 +909,9 @@ final class ImageLoader: ObservableObject {
 
         self.image = nil
         self.isLoading = true
+        #if DEBUG
+        diagnosticFailure = nil
+        #endif
 
         let request = Self.makeRequest(
             url: url,
@@ -647,7 +926,7 @@ final class ImageLoader: ObservableObject {
                 let decoded = try await pipeline.image(
                     request: request,
                     key: requestKey,
-                    maxPixelSize: maxPixelSize
+                    maxPixelSize: pixelSize, demand: token
                 )
                 try Task.checkCancellation()
                 guard requestGeneration == Self.memoryGeneration else { throw CancellationError() }
@@ -663,13 +942,19 @@ final class ImageLoader: ObservableObject {
                 guard let self, self.currentRequestID == requestID else { return }
                 self.isLoading = false
             } catch {
+                if error is PosterWorkDeferred {
+                    guard let self, self.currentRequestID == requestID else { return }
+                    self.isDeferred = !Task.isCancelled && requestGeneration == Self.memoryGeneration
+                    self.isLoading = false
+                    return
+                }
                 guard !Task.isCancelled, requestGeneration == Self.memoryGeneration else {
                     if let self, self.currentRequestID == requestID { self.isLoading = false }
                     return
                 }
                 if let fallbackURL = Self.fallbackURL(for: url, headers: effectiveHeaders, error: error) {
                     let fallbackRequestKey = Self.cacheKey(url: fallbackURL, headers: effectiveHeaders)
-                    let fallbackImageKey = "\(fallbackRequestKey)-\(Int(maxPixelSize.rounded()))"
+                    let fallbackImageKey = "\(fallbackRequestKey)-\(Int(pixelSize))"
                     if !Self.isRecentlyFailed(fallbackRequestKey) {
                         do {
                             let fallbackRequest = Self.makeRequest(
@@ -681,7 +966,7 @@ final class ImageLoader: ObservableObject {
                             let decoded = try await pipeline.image(
                                 request: fallbackRequest,
                                 key: fallbackRequestKey,
-                                maxPixelSize: maxPixelSize
+                                maxPixelSize: pixelSize, demand: token
                             )
                             try Task.checkCancellation()
                             guard requestGeneration == Self.memoryGeneration else { throw CancellationError() }
@@ -697,6 +982,12 @@ final class ImageLoader: ObservableObject {
                             self.isLoading = false
                             return
                         } catch {
+                            if error is PosterWorkDeferred {
+                                guard let self, self.currentRequestID == requestID else { return }
+                                self.isDeferred = !Task.isCancelled && requestGeneration == Self.memoryGeneration
+                                self.isLoading = false
+                                return
+                            }
                             guard !Task.isCancelled, requestGeneration == Self.memoryGeneration,
                                   !(error is CancellationError) else {
                                 if let self, self.currentRequestID == requestID { self.isLoading = false }
@@ -710,9 +1001,58 @@ final class ImageLoader: ObservableObject {
                 Self.markFailed(requestKey)
                 Self.logFailure(error, url: url, timeout: timeout)
                 guard let self, self.currentRequestID == requestID else { return }
+                #if DEBUG
+                let failure = error as NSError
+                self.diagnosticFailure = (failure.domain, failure.code)
+                #endif
                 self.image = nil
                 self.isLoading = false
             }
+        }
+    }
+
+    /// Nearby layout sizes share one decoded thumbnail instead of flashing on resize.
+    nonisolated static func thumbnailPixelSize(_ requested: CGFloat) -> CGFloat {
+        max(64, ceil(requested / 32) * 32)
+    }
+
+    static func prefetch(_ request: PosterImagePrefetchRequest, pipeline: PosterImagePipeline = .shared) async {
+        guard !request.urls.isEmpty, !Task.isCancelled else { return }
+        let requestGeneration = memoryGeneration
+        await withTaskGroup(of: Void.self) { group in
+            let initialCount = min(2, request.urls.count)
+            for url in request.urls.prefix(initialCount) {
+                group.addTask(priority: .utility) {
+                    await prefetchImage(url, request: request, generation: requestGeneration, pipeline: pipeline)
+                }
+            }
+            var next = initialCount
+            for await _ in group {
+                guard !Task.isCancelled, requestGeneration == memoryGeneration else { group.cancelAll(); break }
+                if next < request.urls.count {
+                    let url = request.urls[next]
+                    next += 1
+                    group.addTask(priority: .utility) {
+                        await prefetchImage(url, request: request, generation: requestGeneration, pipeline: pipeline)
+                    }
+                }
+            }
+        }
+    }
+
+    private static func prefetchImage(
+        _ url: String, request: PosterImagePrefetchRequest, generation: UInt64, pipeline: PosterImagePipeline
+    ) async {
+        do { try await pipeline.waitForPrefetchPermission() } catch { return }
+        guard !Task.isCancelled, generation == memoryGeneration else { return }
+        let loader = ImageLoader(from: url, headers: request.headers, maxPixelSize: request.maxPixelSize, pipeline: pipeline, demand: .prefetch)
+        defer { loader.cancel() }
+        loader.load(from: url, headers: request.headers, maxPixelSize: request.maxPixelSize)
+        let work = loader.currentTask
+        await withTaskCancellationHandler {
+            await work?.value
+        } onCancel: {
+            work?.cancel()
         }
     }
 
@@ -723,6 +1063,8 @@ final class ImageLoader: ObservableObject {
         timeout: TimeInterval
     ) -> URLRequest {
         var request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: timeout)
+        // Native artwork resolves the account and attaches credentials only inside MediaServerRuntime.
+        if url.scheme == MediaServerArtworkReference.scheme { return request }
 
         // 1. 注入通用的 User-Agent，避免某些 CDN 拒绝命令爬取
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
@@ -854,6 +1196,11 @@ final class ImageLoader: ObservableObject {
             DiagnosticLog.write("[WEB_IMAGE_HTTP_ERROR] status=\(statusCode) url=\(redactedURL(url))")
         } else if case ImageLoadError.invalidData(let bytes) = error {
             DiagnosticLog.write("[WEB_IMAGE_INVALID_DATA] url=\(redactedURL(url)) bytes=\(bytes)")
+        } else {
+            #if DEBUG
+            let failure = error as NSError
+            DiagnosticLog.write("[WEB_IMAGE_NETWORK_ERROR] domain=\(failure.domain) code=\(failure.code) url=\(redactedURL(url))")
+            #endif
         }
     }
 

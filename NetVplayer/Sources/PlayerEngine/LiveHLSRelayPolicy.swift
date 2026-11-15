@@ -15,8 +15,6 @@ public enum LiveHLSRelayPolicy {
     public static let directMediaTransport = "direct-live-media"
     public static let localRelayTransport = "local-hls-relay"
     public static let localStreamRelayTransport = "local-stream-relay"
-    public static let quarkParallelPlaybackConcurrency = 60
-    public static let quarkParallelPlaybackSegmentSize: Int64 = 400 * 1024
     public static let ucParallelPlaybackConcurrency = 140
     public static let ucParallelPlaybackSegmentSize: Int64 = 97_280
     public static let ucParallelHTTP2ConnectionLimit = ProxyServer.multiplexedRangeConnectionLimit
@@ -24,7 +22,6 @@ public enum LiveHLSRelayPolicy {
     public static let ucMediaPreloadPlaybackConcurrency = 116
     public static let baiduParallelPlaybackConcurrency = 5
     public static let baiduParallelPlaybackSegmentSize: Int64 = 512 * 1024
-    private static let driveSizeMetadataKey = "drive.size"
 
     public static func shouldRetryWithLocalRelay(spec: PlaySpec, failureMessage: String) -> Bool {
         guard spec.metadata[transportMetadataKey] == directTransport,

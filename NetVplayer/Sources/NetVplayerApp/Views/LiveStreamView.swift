@@ -10,12 +10,15 @@ struct LiveStreamView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var playerState: PlayerState
     @ObservedObject var windowContext: PlayerWindowContext
+    @ObservedObject var pictureInPicture = PlayerPictureInPicture.live
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     let onExit: () -> Void
 
     @State private var isGuideVisible = false
     @State private var isEPGGuideVisible = false
+    @State private var isPlaybackInformationVisible = false
+    @State private var isReceiverVolumePresented = false
     @State private var isHUDVisible = true
     @State private var isPointerInsidePlayer = false
     @State private var guideFocusedChannel: Channel?
@@ -41,8 +44,15 @@ struct LiveStreamView: View {
             ZStack {
                 videoLayer
 
+                PlaybackVideoCompatibilityView(message: playerState.videoCompatibilityMessage ?? playerState.audioOutputMessage)
+                    .zIndex(1.1)
+
                 videoInteractionLayer
+                    .allowsHitTesting(!pictureInPicture.isPresented)
                     .zIndex(1)
+
+                PictureInPicturePlaceholder(presentation: pictureInPicture, compact: usesCompactControls)
+                    .zIndex(1.2)
 
                 if usesCompactControls {
                     CompactPlayerStatusOverlay(
@@ -56,7 +66,7 @@ struct LiveStreamView: View {
                         isPlaying: playerState.isPlaying,
                         isPlaybackEnabled: appState.selectedChannel != nil,
                         position: playerState.position,
-                        duration: playerState.duration,
+                        duration: appState.liveCatchupContext == nil ? playerState.duration : 0,
                         isAlwaysOnTop: windowContext.isAlwaysOnTop,
                         isVisible: isPointerInsidePlayer,
                         mediaID: playerState.currentSpec?.url ?? "",
@@ -92,13 +102,13 @@ struct LiveStreamView: View {
                             .zIndex(9)
                     }
 
-                    if isHUDVisible || isGuideVisible || appState.selectedChannel == nil {
+                    if isHUDVisible || isGuideVisible || isPlaybackInformationVisible || appState.selectedChannel == nil {
                         topChrome
                             .transition(.opacity)
                             .zIndex(6)
                     }
 
-                    if isHUDVisible, !isGuideVisible, appState.selectedChannel != nil {
+                    if isHUDVisible, !isGuideVisible, appState.selectedChannel != nil, appState.liveCatchupContext == nil {
                         channelIdentitySummary
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                             .zIndex(3)
@@ -122,6 +132,27 @@ struct LiveStreamView: View {
                             .zIndex(7)
                     }
                 }
+                if let context = appState.liveCatchupContext,
+                   !isGuideVisible, isHUDVisible || usesCompactControls || appState.liveCatchupPhase != .playing {
+                    LiveCatchupControls(context: context, phase: appState.liveCatchupPhase,
+                        position: appState.liveCatchupPosition, canSeek: appState.liveCatchupCanSeek,
+                        message: appState.liveError ?? appState.liveCatchupNotice ?? appState.liveCatchupSeekMessage,
+                        compact: usesCompactControls,
+                        onSeek: { target in Task { await appState.seekLiveCatchup(to: target) } },
+                        onRetry: { Task { await appState.retryLiveCatchup() } },
+                        onReplay: { Task { await appState.retryLiveCatchup(fromBeginning: true) } },
+                        onReturnToLive: { Task { await appState.returnToLiveFromCatchup() } })
+                        .frame(maxWidth: usesCompactControls ? 560 : 780)
+                        .padding(.horizontal, usesCompactControls ? 8 : 22)
+                        .padding(.bottom, usesCompactControls ? 62 : 132)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .zIndex(10)
+                } else if let notice = appState.liveCatchupNotice {
+                    Text(notice).font(.caption).padding(10)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 70).allowsHitTesting(false).zIndex(10)
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .background(Color.black)
@@ -143,6 +174,12 @@ struct LiveStreamView: View {
             }
         }
         .ignoresSafeArea()
+        .onChange(of: playerState.videoDisplayAspectRatio, initial: true) { _, ratio in
+            windowContext.updateVideoAspectRatio(ratio)
+        }
+        .onChange(of: windowContext.isFloatingWindow, initial: true) { _, enabled in
+            pictureInPicture.engine.setFloatingWindowCropping(enabled)
+        }
         .sheet(isPresented: $isEPGGuideVisible) {
             EPGGuideView().environmentObject(appState)
         }
@@ -180,6 +217,12 @@ struct LiveStreamView: View {
         }
         .onChange(of: appState.selectedChannel.map(channelIdentity) ?? "") { _, _ in
             focusGuideChannel(appState.selectedChannel)
+            showHUDTemporarily()
+        }
+        .onChange(of: isPlaybackInformationVisible) { _, _ in
+            showHUDTemporarily()
+        }
+        .onChange(of: isReceiverVolumePresented) { _, _ in
             showHUDTemporarily()
         }
         .onChange(of: appState.activeLive.map { "\($0.name)|\($0.url)" } ?? "") { _, _ in
@@ -243,7 +286,7 @@ struct LiveStreamView: View {
                     unlockHiddenGroup()
                     isHiddenGroupUnlockPresented = false
                 }
-                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                .buttonStyle(ThemedDialogButtonStyle(isPrimary: true)).keyboardShortcut(.defaultAction)
                 .disabled(hiddenGroupPassword.isEmpty)
             }
         }
@@ -254,11 +297,7 @@ struct LiveStreamView: View {
             Color.black
 
             if appState.selectedChannel != nil {
-                MPVVideoView(
-                    engine: MPVPlayerEngine.live,
-                    surface: .live,
-                    attachmentRevision: appState.livePlayerOpenRequestSerial
-                )
+                MPVVideoView(presentation: .live)
                 .id(appState.livePlayerOpenRequestSerial)
             } else {
                 emptyLiveState
@@ -382,6 +421,17 @@ struct LiveStreamView: View {
                         exitLive()
                     }
                     Spacer()
+                    chromeIconButton(systemImage: "info.circle", help: L10n.text("播放信息")) {
+                        isPlaybackInformationVisible.toggle()
+                    }
+                    .popover(isPresented: $isPlaybackInformationVisible) {
+                        ScrollView {
+                                PlaybackInformationView(playerState: playerState).padding(18)
+                                    .environment(\.appThemePalette, AppThemeCatalog.palette(for: .legacyDeepSpace))
+                        }
+                        .frame(width: 360, height: 580)
+                            .preferredColorScheme(.dark)
+                    }
                     if !appState.lives.isEmpty {
                         LiveSourcePicker()
                             .labelsHidden()
@@ -450,18 +500,31 @@ struct LiveStreamView: View {
                             toggleMute()
                             showHUDTemporarily()
                         } label: {
-                            Image(systemName: (!playerState.isMuted && playerState.volume > 0) ? "speaker.wave.2" : "speaker.slash")
+                            Image(systemName: playerState.volumeControl == .receiver || (!playerState.isMuted && playerState.volume > 0) ? "speaker.wave.2" : "speaker.slash")
                                 .font(.system(size: 15))
                                 .foregroundStyle(LiveUIPalette.foreground)
                                 .frame(width: 30, height: 30)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help((!playerState.isMuted && playerState.volume > 0) ? L10n.text("静音") : L10n.text("恢复音量"))
+                        .help(playerState.volumeControl == .receiver ? L10n.text("音箱调音")
+                              : ((!playerState.isMuted && playerState.volume > 0) ? L10n.text("静音") : L10n.text("恢复音量")))
+                        .popover(isPresented: $isReceiverVolumePresented, arrowEdge: .bottom) {
+                            PlaybackVolumePopover(playerState: playerState, setVolume: setVolume,
+                                toggleMute: toggleMute,
+                                usePlayerVolume: { MPVPlayerEngine.live.requestPlayerVolumeControl() })
+                                .environment(\.appThemePalette, AppThemeCatalog.palette(for: .legacyDeepSpace))
+                        }
 
-                        Slider(value: volumeBinding, in: 0...1)
-                            .frame(width: 88)
-                            .tint(LiveUIPalette.lavender)
+                        if playerState.volumeControl != .player {
+                            Button(L10n.text(playerState.volumeControl == .receiver ? "音箱调音" : "确认中")) { isReceiverVolumePresented = true }
+                                .buttonStyle(.plain).font(.caption)
+                                .foregroundStyle(LiveUIPalette.muted)
+                        } else {
+                            Slider(value: volumeBinding, in: 0...1)
+                                .frame(width: 88)
+                                .tint(LiveUIPalette.lavender)
+                        }
 
                         if let channel = appState.selectedChannel, channel.urls.count > 1 {
                             Picker(L10n.text("线路"), selection: Binding(
@@ -482,6 +545,9 @@ struct LiveStreamView: View {
                             .tint(LiveUIPalette.lavender)
                             .frame(width: 108, height: 44)
                         }
+
+                        PlayerFloatingWindowButton(windowContext: windowContext, usesHUDLabel: false,
+                            onInteraction: showHUDTemporarily)
 
                         chromeIconButton(systemImage: "stop.fill", help: L10n.text("停止直播")) {
                             stopLive()
@@ -560,17 +626,22 @@ struct LiveStreamView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(LiveUIPalette.muted)
                     .lineLimit(1)
-                TimelineView(.periodic(from: .now, by: 60)) { context in
-                    let items = appState.liveEpgData?.items ?? []
-                    let current = items.first { $0.start <= context.date && $0.end > context.date }
-                    let next = items.first { $0.start > context.date }
-                    if let current {
-                        Text(L10n.text("正在播出：{0}", [current.title])).lineLimit(1)
-                    }
-                    if let next {
-                        Text(L10n.text("接下来：{0}", [next.title])).lineLimit(1)
-                    }
-                }.font(.caption).foregroundStyle(LiveUIPalette.muted)
+                if let context = appState.liveCatchupContext {
+                    Text(L10n.text("回放：{0}", [context.programme.title]))
+                        .font(.caption).foregroundStyle(LiveUIPalette.muted).lineLimit(1)
+                } else {
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        let items = appState.liveEpgData?.items ?? []
+                        let current = items.first { $0.start <= context.date && $0.end > context.date }
+                        let next = items.first { $0.start > context.date }
+                        if let current {
+                            Text(L10n.text("正在播出：{0}", [current.title])).lineLimit(1)
+                        }
+                        if let next {
+                            Text(L10n.text("接下来：{0}", [next.title])).lineLimit(1)
+                        }
+                    }.font(.caption).foregroundStyle(LiveUIPalette.muted)
+                }
             }
         }
         .frame(minWidth: 180, alignment: .leading)
@@ -743,6 +814,7 @@ struct LiveStreamView: View {
         ) {
             VStack(spacing: 10) {
                 searchField
+                LivePreviewRefreshControls(store: appState.livePreviews, refresh: appState.refreshLivePreviews)
 
                 ThemedScrollView(theme: LiveGuideLayoutPolicy.scrollbarTheme) {
                     LazyVStack(alignment: .leading, spacing: 7) {
@@ -839,8 +911,8 @@ struct LiveStreamView: View {
                 selectChannel(channel, group: sourceGroup ?? group)
             } label: {
                 HStack(spacing: 11) {
-                    channelLogo(channel)
-                        .frame(width: 38, height: 28)
+                    LiveChannelPreviewView(store: appState.livePreviews, channel: channel)
+                        .id(appState.livePreviewIdentity + channelIdentity(channel))
 
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
@@ -880,7 +952,7 @@ struct LiveStreamView: View {
             .help(isKept ? L10n.text("取消直播收藏") : L10n.text("收藏直播频道"))
         }
         .padding(.horizontal, 11)
-        .frame(minHeight: 46)
+        .frame(minHeight: 72)
         .background(rowBackground(selected), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -1280,6 +1352,9 @@ struct LiveStreamView: View {
 
     private func togglePlayPause() {
         guard appState.selectedChannel != nil else { return }
+        if appState.liveCatchupContext != nil {
+            guard appState.liveCatchupPhase == .playing else { return }
+        }
         let shouldPlay = PlayerKeyboardShortcutPolicy.toggledPlaybackState(
             from: playerState.isPlaying
         )
@@ -1292,6 +1367,10 @@ struct LiveStreamView: View {
     }
 
     private func seekLivePlayback(by offset: Double) {
+        if appState.liveCatchupContext != nil {
+            Task { await appState.seekLiveCatchup(to: appState.liveCatchupPosition + offset) }
+            return
+        }
         let duration = playerState.duration
         guard LivePlayerInteractionPolicy.canSeek(duration: duration) else { return }
         let position = min(max(0, playerState.position + offset), duration)
@@ -1300,13 +1379,17 @@ struct LiveStreamView: View {
 
     private func setVolume(_ volume: Float) {
         let clamped = min(1, max(0, volume))
+        guard MPVPlayerEngine.live.setVolume(clamped) else {
+            isReceiverVolumePresented = true
+            showHUDTemporarily()
+            return
+        }
         if clamped > 0 { playerState.isMuted = false }
         playerState.volume = clamped
-        MPVPlayerEngine.live.setVolume(clamped)
     }
 
     private func toggleMute() {
-        MPVPlayerEngine.live.toggleMute()
+        if !MPVPlayerEngine.live.toggleMute() { isReceiverVolumePresented = true }
     }
 
     private func ensureGuideFocus() {
@@ -1361,6 +1444,10 @@ struct LiveStreamView: View {
     }
 
     private func retryCurrentChannel() {
+        if appState.liveCatchupContext != nil {
+            Task { await appState.retryLiveCatchup() }
+            return
+        }
         guard let channel = appState.selectedChannel else {
             appState.liveError = nil
             reloadLiveContent()
@@ -1473,6 +1560,8 @@ struct LiveStreamView: View {
 
     private var hasBlockingPlayerUI: Bool {
         isGuideVisible
+            || isPlaybackInformationVisible
+            || isReceiverVolumePresented
             || isChannelNumberEntryVisible
             || appState.isLoadingLive
             || appState.liveError != nil

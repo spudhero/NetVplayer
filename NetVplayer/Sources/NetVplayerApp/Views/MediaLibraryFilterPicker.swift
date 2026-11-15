@@ -39,7 +39,7 @@ struct MediaLibraryFilterPicker: View {
                 }.frame(height: 280)
                 Text(L10n.text("仅显示此媒体库中已有的影片")).font(.caption).foregroundStyle(palette.muted)
             }.padding(18).frame(width: 320).foregroundStyle(palette.foreground).tint(palette.accent)
-                .background { AppThemeBackdropLayer(palette: palette) }
+                .themedPresentation()
         }
     }
     private func option(id: String?, name: String, count: Int?) -> some View {

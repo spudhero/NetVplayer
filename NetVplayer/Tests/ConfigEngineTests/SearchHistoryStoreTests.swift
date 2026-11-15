@@ -37,6 +37,6 @@ struct SearchHistoryStoreTests {
     private func makeStore() -> (SearchHistoryStore, UserDefaults, String) {
         let suiteName = "SearchHistoryStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        return (SearchHistoryStore(defaults: defaults), defaults, suiteName)
+        return (SearchHistoryStore(defaults: defaults, storageKey: suiteName + ".history"), defaults, suiteName)
     }
 }

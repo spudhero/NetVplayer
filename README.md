@@ -21,10 +21,13 @@
 
 ![NetVplayer running on macOS](website/assets/home-aurora.webp)
 
+主干开发版本 / Main development version: **NetVplayer 2.0.0 (build 49)**，尚未发布 / unreleased. 功能变化与已知限制见 [2.0.0 开发版说明](docs/releases/2.0.0.md)。
+
 发布基线 / Release baseline: **NetVplayer 1.1.4 (build 18)**.
 
 | Component | Version |
 | --- | --- |
+| Development application | 2.0.0 (unreleased) |
 | Stable application | 1.1.4 |
 
 ## 中文
@@ -40,6 +43,12 @@ FongMi/TV、OK影视、影视仓、TVBox 等工具主要服务 Android 生态。
 项目将内容浏览、搜索、选集和播放组织成原生 Mac 桌面体验。感谢 [FongMi/TV](https://github.com/FongMi/TV) 等开源实践提供的兼容性参考；NetVplayer 使用独立的 Swift/macOS 实现，与这些项目没有隶属或官方合作关系。
 
 ### 主要功能
+
+开发分支支持直接添加夸克、UC、阿里、百度、115 的个人网盘目录，复用海报、详情和原片播放。真实账号验收待完成，见[使用与验证](docs/releases/2.0.0.md)。
+
+开发分支已新增 Plex、FTP／SFTP，并补齐 WebDAV、Alist、OpenList 的应用内实测；这些改动尚未发布，范围与限制见[开发版说明](docs/releases/2.0.0.md)。
+
+极影视／飞牛影视接入也已实现，并完成独立模拟 HTTP 与原生播放验证；真实 NAS 和完整播放窗口截图仍待验。见[开发版说明与限制](docs/releases/2.0.0.md)。
 
 - **浏览与搜索**：影片详情、多线路选集、跨已连接来源搜索。
 - **点播与直播**：字幕、音轨、倍速、画面比例、章节预览、频道分组与节目单。
@@ -74,6 +83,8 @@ TMDB 由正式应用提供项目凭据，普通用户无需填写令牌。配置
 
 兼容的签名 Provider 由应用自动下载、验证和更新，异常时在“设置 → 扩展支持”选择“重新检查”。包版本与兼容说明见 [Provider Releases](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases)。主程序和 SDK 公开，Provider 实现源码保持私有。
 
+Android Provider 的 Java／JNI 实现源码也归入私有库；公开加载接口及经审核的项目原创生成物。外部 Provider JAR、宿主 APK 和包含这些输入的完整本地运行时不随公开应用发布，由使用者提供。公开播放器中的兼容规则资源是私有规则的固定摘要生成物。
+
 使用 Xcode 和 Homebrew libmpv 依赖从源码构建：
 
 ```bash
@@ -100,6 +111,12 @@ FongMi/TV, OK影视, 影视仓, and TVBox primarily serve Android. I could not f
 The project brings browsing, search, episode selection, and playback into a native Mac experience. Thanks to [FongMi/TV](https://github.com/FongMi/TV) and other open-source projects for compatibility references. NetVplayer uses an independent Swift/macOS implementation and has no affiliation or official partnership with those projects.
 
 ### Features
+
+The development branch adds personal folders from Quark, UC, Aliyun, Baidu, and 115 to the existing poster library, details, and original-file playback. Real-account acceptance is pending; see the [usage and validation notes](docs/releases/2.0.0.md).
+
+The development branch adds Plex, FTP, and SFTP, with native-app acceptance evidence for WebDAV, Alist, and OpenList. These changes are not yet released; see the [development notes](docs/releases/2.0.0.md) for scope and limitations.
+
+Zspace Media and FnOS Media integration is implemented and verified with independent synthetic HTTP services and native playback. Real NAS acceptance and complete playback-window screenshots remain pending; see the [development notes and limitations](docs/releases/2.0.0.md).
 
 - **Browse and search:** details, multiple playback routes, episode selection, and search across connected sources.
 - **Video and live TV:** subtitles, audio tracks, playback speed, aspect ratio, chapter previews, channel groups, and programme guides.
@@ -129,6 +146,8 @@ Official builds supply the TMDB application credential; ordinary users do not ne
 ### Extensions and development
 
 The app automatically downloads, verifies, and updates compatible signed Providers. Use Settings → Verified Extensions → Check Again if preparation fails. See [Provider Releases](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) for versions and compatibility. The main application and SDK are public; Provider implementation sources remain private.
+
+Android Provider Java/JNI implementation sources also remain private. Public loading interfaces and reviewed project-owned generated artifacts are available. External Provider JARs, host APKs, and complete local runtime packages containing those inputs are user supplied and are excluded from the public application. The player's compatibility resource is a pinned artifact generated from private rules.
 
 Build from source with Xcode and the Homebrew libmpv dependencies using the commands above. Further documentation: [Architecture](ARCHITECTURE.md) · [Provider SDK](provider-sdk/README.md) · [Runners](provider-runners/README.md) · [Packaging credentials](TMDB_SETUP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md).
 

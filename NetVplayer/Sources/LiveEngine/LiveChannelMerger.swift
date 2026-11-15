@@ -90,7 +90,13 @@ enum LiveChannelMerger {
             && lhs.parseFlag == rhs.parseFlag
             && lhs.clickScript == rhs.clickScript
             && catchupMatches(lhs.catchup, rhs.catchup)
+              && lhs.xtreamArchive == rhs.xtreamArchive
+              && xtreamResources(lhs) == xtreamResources(rhs)
             && drmMatches(lhs.drm, rhs.drm)
+    }
+
+    private static func xtreamResources(_ channel: Channel) -> Set<String> {
+        Set(channel.urls.compactMap { try? XtreamResource($0) }.map { "\($0.accountID)|\($0.kind)|\($0.streamID)" })
     }
 
     private static func catchupMatches(_ lhs: Catchup?, _ rhs: Catchup?) -> Bool {

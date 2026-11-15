@@ -1,0 +1,13 @@
+# A unified diff's blank context lines consist of one significant space.
+script/runtime/mpv/integration.patch whitespace=-blank-at-eol
+NetVplayer/Docs/evidence/codebase-memory-fix-20261104/memory-budget-fix.patch whitespace=-blank-at-eol
+
+# Keep captured tool output byte-for-byte so its evidence hashes stay valid.
+NetVplayer/Docs/evidence/hdmi-atmos-implementation-20261018/clouddrive113-decompiled-*.c -whitespace
+NetVplayer/Docs/evidence/hdmi-atmos-implementation-20261018/clouddrive113-*-assembly.txt -whitespace
+docs/data/player-output-ui-20261018/*.log -whitespace
+
+# OV91-10 raw validation logs retain compiler output verbatim.
+docs/data/okvideomac-v091-live-preview-20261102/**/*.log -whitespace
+# Unified diff context keeps its single-space prefix on blank lines.
+script/patches/*.patch whitespace=-blank-at-eol

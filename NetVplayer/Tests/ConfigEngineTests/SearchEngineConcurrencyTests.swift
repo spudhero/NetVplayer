@@ -101,6 +101,31 @@ private struct ExpectedSearchFailure: Error {}
     #expect(results.first?.vods.map(\.vodId) == ["fallback"])
 }
 
+@Test func searchEngineLiteralQueryDoesNotReuseFallbackCache() async {
+    let probe = SearchKeywordProbe()
+    let engine = SearchEngine(maxConcurrentSites: 1) { _, keyword, _, _ in
+        await probe.record(keyword)
+        return Result(list: [keyword == "庆余年·第二季"
+            ? Vod(vodId: "original", vodName: "Unrelated original result")
+            : Vod(vodId: "fallback", vodName: "庆余年第二季")])
+    }
+    let site = Site(key: "literal-cache", type: 1, api: "https://fixture.invalid", timeout: 2, searchable: 1)
+    let scope = "literal-query-" + UUID().uuidString
+    let keyword = "庆余年·第二季"
+    for await _ in engine.search(keyword: keyword, sites: [site], cacheScope: scope) {}
+    #expect(await probe.recordedKeywords() == [keyword, "庆余年第二季"])
+    for await result in engine.search(keyword: keyword, sites: [site], cacheScope: scope, allowsQueryFallback: false) {
+        #expect(!result.isCached)
+        #expect(result.vods.map(\.vodId) == ["original"])
+    }
+    #expect(await probe.recordedKeywords() == [keyword, "庆余年第二季", keyword])
+    for await result in engine.search(keyword: keyword, sites: [site], cacheScope: scope, allowsQueryFallback: false) {
+        #expect(result.isCached)
+        #expect(result.vods.map(\.vodId) == ["original"])
+    }
+    #expect(await probe.recordedKeywords() == [keyword, "庆余年第二季", keyword])
+}
+
 @Test func searchEngineKeepsMeaningfulOriginalAndSkipsFallback() async {
     let probe = SearchKeywordProbe()
     let engine = SearchEngine(maxConcurrentSites: 1) { _, keyword, _, _ in

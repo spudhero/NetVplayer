@@ -1,4 +1,3 @@
-import Combine
 import ConfigEngine
 import DriveEngine
 import Foundation
@@ -14,6 +13,12 @@ import WebHomeEngine
 @MainActor
 @Suite(.serialized)
 struct SearchResultNavigationTests {
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !condition(), .now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+        try #require(condition())
+    }
+
     @Test(arguments: [false, true])
     func detailRoundTripPreservesResultsAndPagination(switchesSource: Bool) async throws {
         let fixture = try await SearchNavigationFixture()
@@ -44,9 +49,7 @@ struct SearchResultNavigationTests {
         #expect(state.contentSearchState.cursors[destination.key]?.nextPage == 2)
 
         state.loadMoreSearchResults(siteKey: destination.key)
-        for await snapshot in state.$contentSearchState.values {
-            if snapshot.cursors[destination.key]?.status != .loading { break }
-        }
+        try await waitUntil { state.contentSearchState.cursors[destination.key]?.status != .loading }
         #expect(state.searchResults.first { $0.siteKey == destination.key }?.vods.map(\.vodId)
             == [destination.key + "-1", destination.key + "-2"])
         #expect(state.contentSearchState.cursors[destination.key]?.nextPage == 3)
@@ -66,9 +69,7 @@ struct SearchResultNavigationTests {
         }
         let waiter = Task { await state.search(keyword: "影片") }
         await gate.waitUntilStarted()
-        for await snapshot in state.$contentSearchState.values {
-            if snapshot.results.contains(where: { !$0.vods.isEmpty }) { break }
-        }
+        try await waitUntil { state.contentSearchState.results.contains(where: { !$0.vods.isEmpty }) }
         let generation = state.contentSearchState.generation
         let vod = try #require(state.searchResults.first { $0.siteKey == fixture.destination.key }?.vods.first)
 
@@ -120,7 +121,6 @@ struct SearchResultNavigationTests {
         #expect(state.contentSearchState.generation == generation)
 
         state.beginPlayerDismissalReturningToDetail()
-        state.completePlayerDismissalPresentation()
         #expect(!state.isPlayerPresented)
         #expect(state.isDetailPresented)
         state.isDetailPresented = false
@@ -142,7 +142,8 @@ struct SearchResultNavigationTests {
         state.savedConfigs = [current, destination]
         state.libraryConfigurationURL = current.url
         let configuration = switchesConfiguration ? destination : current
-        let fingerprint = LibrarySourceIdentity.fingerprint(configurationURL: configuration.url, site: fixture.destination)
+        let fingerprint = LibrarySourceIdentity.fingerprint(configurationURL: configuration.url,
+            site: fixture.destination, executionPreference: state.activeProviderExecutionPreference)
         let key = PlaybackLinkage.vodKey(siteKey: fixture.destination.key, vodId: "saved-film", sourceFingerprint: fingerprint)
         let history = History(
             key: key, siteKey: fixture.destination.key, vodId: "saved-film", vodName: "影片",
@@ -175,7 +176,6 @@ struct SearchResultNavigationTests {
         #expect(state.libraryConfigurationURL == configuration.url)
         if origin == .history { #expect(specs.first?.initialStartPositionSeconds == 42) }
         state.beginPlayerDismissalReturningToDetail()
-        state.completePlayerDismissalPresentation()
         #expect(state.isDetailPresented)
         #expect(!state.isPlayerPresented)
         state.isDetailPresented = false
@@ -224,7 +224,6 @@ struct SearchResultNavigationTests {
         #expect(specs.count == 1)
         #expect(state.isPlayerPresented)
         state.beginPlayerDismissalReturningToDetail()
-        state.completePlayerDismissalPresentation()
         #expect(!state.isPlayerPresented)
         #expect(!state.isDetailPresented)
         #expect(state.selectedTab == .webHome)
@@ -281,6 +280,9 @@ private struct SearchNavigationFixture {
         suite = "search-navigation-" + id
         defaults = try #require(UserDefaults(suiteName: suite))
         let preferences = UserPreferences(defaults: defaults, credentialStore: MemoryCredentialStore())
+        preferences.providerExecutionPreference = .automatic
+        preferences.currentVodConfigUrl = ""
+        preferences.currentLiveConfigUrl = ""
         home = Site(key: "search-home-" + id, name: "首页来源", type: 3, api: "csp_SearchNavigationFixture", searchable: 1)
         destination = Site(key: "search-destination-" + id, name: "另一来源", type: 3, api: "csp_SearchNavigationFixture", searchable: 1)
         for site in [home, destination] {
@@ -303,7 +305,8 @@ private struct SearchNavigationFixture {
             storageManager: StorageManager(storageDirectory: directory),
             userPreferences: preferences,
             providerRuntimeBootstrap: nil,
-            providerRuntimeRegistrationOverride: { true }
+            providerRuntimeRegistrationOverride: { true },
+            androidProviderRegistrationOverride: { _ in }
         )
         state.sites = [home, destination]
         state.activeSite = home

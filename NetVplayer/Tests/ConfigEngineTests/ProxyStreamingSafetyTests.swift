@@ -55,3 +55,19 @@ import Testing
     ])
     #expect(ProxyHTTPHandler.remoteDiagnosticMeasurements(for: error) == ["errorKind": 0, "errorCode": 310])
 }
+
+@Test func proxyFailureLogOmitsPrivateErrorMessagesAndUsesActualCurlCode() {
+    let error = CurlRangeTransportError(code: 35, message: "private URL?token=secret; Cookie=secret")
+    #expect(ProxyHTTPHandler.requestFailureDiagnosticMessage(
+        for: error, taskIsCancelled: false, channelIsActive: true
+    ) == "[PROXY_SERVER_ERROR] stage=request code=35 errorKind=5")
+    #expect(ProxyHTTPHandler.requestFailureDiagnosticMessage(
+        for: ProxyServerError.upstreamHTTPStatus(403), taskIsCancelled: false, channelIsActive: true
+    ) == "[PROXY_SERVER_ERROR] stage=request errorKind=1 status=403")
+    #expect(ProxyHTTPHandler.requestFailureDiagnosticMessage(
+        for: error, taskIsCancelled: true, channelIsActive: true
+    ) == nil)
+    #expect(ProxyHTTPHandler.requestFailureDiagnosticMessage(
+        for: error, taskIsCancelled: false, channelIsActive: false
+    ) == nil)
+}

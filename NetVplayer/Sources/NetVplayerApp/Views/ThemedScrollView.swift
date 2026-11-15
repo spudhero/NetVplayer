@@ -149,7 +149,7 @@ struct ThemedScrollView<Content: View>: View {
     var body: some View {
         if axes == .vertical {
             if #available(macOS 15.0, *) {
-                GeometryTrackedScrollView(theme: theme, scrollbarPlacement: scrollbarPlacement, content: content, onScrollPositionChange: onScrollPositionChange)
+                NativeTrackedScrollView(theme: theme, scrollbarPlacement: scrollbarPlacement, content: content, onScrollPositionChange: onScrollPositionChange)
             } else {
                 LegacyTrackedScrollView(theme: theme, scrollbarPlacement: scrollbarPlacement, content: content, onScrollPositionChange: onScrollPositionChange)
             }
@@ -161,15 +161,13 @@ struct ThemedScrollView<Content: View>: View {
     }
 }
 
-@available(macOS 15.0, *)
-private struct GeometryTrackedScrollView<Content: View>: View {
+private struct NativeTrackedScrollView<Content: View>: View {
     let theme: AppScrollbarTheme
     let scrollbarPlacement: AppScrollbarPlacement
     let content: Content
     var onScrollPositionChange: ((CGFloat, CGFloat) -> Void)?
 
-    @State private var scrollPosition = ScrollPosition()
-    @State private var metrics = AppScrollMetrics.zero
+    @StateObject private var proxy = NativeScrollProxy(axis: .vertical)
 
     var body: some View {
         GeometryReader { _ in
@@ -177,7 +175,10 @@ private struct GeometryTrackedScrollView<Content: View>: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     content
                         .background(alignment: .topLeading) {
-                            NativeScrollerHidingProbe()
+                            NativeScrollerHidingProbe { scrollView in
+                                proxy.onScrollPositionChange = onScrollPositionChange
+                                proxy.attach(to: scrollView)
+                            }
                                 .frame(width: 1, height: 1)
                         }
                 }
@@ -185,17 +186,10 @@ private struct GeometryTrackedScrollView<Content: View>: View {
                 .background {
                     NativeScrollerHidingProbe()
                 }
-                .scrollPosition($scrollPosition)
-                .onScrollGeometryChange(for: AppScrollMetrics.self) { geometry in
-                    AppScrollMetrics(geometry: geometry)
-                } action: { _, newMetrics in
-                    metrics = newMetrics
-                    onScrollPositionChange?(newMetrics.offsetY, max(0, newMetrics.maximumOffset - newMetrics.offsetY))
-                }
                 .padding(.trailing, scrollbarPlacement == .gutter ? theme.gutterWidth : 0)
 
-                ThemedScrollbar(theme: theme, metrics: metrics) { targetOffset in
-                    scrollPosition.scrollTo(y: targetOffset)
+                ThemedScrollbar(theme: theme, metrics: proxy.metrics) { targetOffset in
+                    proxy.scroll(to: targetOffset)
                 }
                 .frame(width: theme.gutterWidth)
             }
@@ -265,7 +259,7 @@ private struct LegacyTrackedScrollView<Content: View>: View {
 struct ThemedHorizontalScrollView<Content: View>: View {
     let theme: AppScrollbarTheme
     private let content: Content
-    @StateObject private var proxy = HorizontalScrollProxy()
+    @StateObject private var proxy = NativeScrollProxy()
 
     init(theme: AppScrollbarTheme = .subtle, @ViewBuilder content: () -> Content) {
         self.theme = theme
@@ -294,12 +288,18 @@ struct ThemedHorizontalScrollView<Content: View>: View {
 }
 
 @MainActor
-final class HorizontalScrollProxy: ObservableObject {
+final class NativeScrollProxy: ObservableObject {
     @Published private(set) var metrics = AppScrollMetrics.zero
+    var onScrollPositionChange: ((CGFloat, CGFloat) -> Void)?
+    private let axis: Axis
     private weak var scrollView: NSScrollView?
     private weak var observedDocument: NSView?
     private let observations = ScrollNotificationObservations()
     private var updateScheduled = false
+
+    init(axis: Axis = .horizontal) {
+        self.axis = axis
+    }
 
     func attach(to scrollView: NSScrollView) {
         if self.scrollView !== scrollView || observedDocument !== scrollView.documentView {
@@ -333,17 +333,24 @@ final class HorizontalScrollProxy: ObservableObject {
             self.updateScheduled = false
             guard let scrollView = self.scrollView, let document = scrollView.documentView else { return }
             let clip = scrollView.contentView
-            let value = AppScrollMetrics(offsetY: max(0, clip.bounds.origin.x),
-                contentHeight: document.bounds.width, containerHeight: clip.bounds.width)
-            if self.metrics != value { self.metrics = value }
+            let horizontal = self.axis == .horizontal
+            let value = AppScrollMetrics(offsetY: max(0, horizontal ? clip.bounds.minX : clip.bounds.minY),
+                contentHeight: horizontal ? document.bounds.width : document.bounds.height,
+                containerHeight: horizontal ? clip.bounds.width : clip.bounds.height)
+            guard self.metrics != value else { return }
+            self.metrics = value
+            self.onScrollPositionChange?(value.offsetY, max(0, value.maximumOffset - value.offsetY))
         }
     }
 
     func scroll(to offset: CGFloat) {
         guard offset.isFinite, let scrollView, let document = scrollView.documentView else { return }
         let clip = scrollView.contentView
-        let maximum = max(0, document.bounds.width - clip.bounds.width)
-        clip.scroll(to: NSPoint(x: min(max(offset, 0), maximum), y: clip.bounds.origin.y))
+        let horizontal = axis == .horizontal
+        let maximum = max(0, horizontal ? document.bounds.width - clip.bounds.width : document.bounds.height - clip.bounds.height)
+        let target = min(max(offset, 0), maximum)
+        clip.scroll(to: NSPoint(x: horizontal ? target : clip.bounds.origin.x,
+            y: horizontal ? clip.bounds.origin.y : target))
         scrollView.reflectScrolledClipView(clip)
         scheduleMeasurement()
     }

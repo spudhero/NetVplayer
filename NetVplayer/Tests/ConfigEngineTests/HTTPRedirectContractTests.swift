@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+import MediaServerEngine
+import Models
 @testable import Networking
 
 @Test func redirectContractChecksEveryOriginComponentAndPreservesMediaHeaders() throws {
@@ -7,6 +9,7 @@ import Testing
     previous.httpMethod = "POST"
     previous.httpBody = Data("payload".utf8)
     for (key, value) in ["Authorization": "Bearer fixture", "Cookie": "session=fixture", "Proxy-Authorization": "fixture",
+                         "Authx": "fixture-signature", "X-Emby-Authorization": "MediaBrowser fixture",
                          "Range": "bytes=10-20", "User-Agent": "fixture-agent", "Content-Type": "application/json"] {
         previous.setValue(value, forHTTPHeaderField: key)
     }
@@ -17,11 +20,15 @@ import Testing
         #expect(result.value(forHTTPHeaderField: "Authorization") == nil)
         #expect(result.value(forHTTPHeaderField: "Cookie") == nil)
         #expect(result.value(forHTTPHeaderField: "Proxy-Authorization") == nil)
+        #expect(result.value(forHTTPHeaderField: "Authx") == nil)
+        #expect(result.value(forHTTPHeaderField: "X-Emby-Authorization") == nil)
         #expect(result.value(forHTTPHeaderField: "Range") == "bytes=10-20")
         #expect(result.value(forHTTPHeaderField: "User-Agent") == "fixture-agent")
     }
     let same = try #require(HTTPRedirectPolicy.redirected(previous, proposed: URLRequest(url: URL(string: "https://origin.test:443/end")!), status: 308, hop: 20))
     #expect(same.value(forHTTPHeaderField: "Authorization") == "Bearer fixture")
+    #expect(same.value(forHTTPHeaderField: "Authx") == "fixture-signature")
+    #expect(same.value(forHTTPHeaderField: "X-Emby-Authorization") == "MediaBrowser fixture")
     #expect(HTTPRedirectPolicy.redirected(previous, proposed: same, status: 308, hop: 21) == nil)
     #expect(HTTPRedirectPolicy.redirected(previous, proposed: URLRequest(url: URL(string: "https://other.test/end")!), status: 302,
                                         allowedOrigin: previous.url, hop: 1) == nil)
@@ -84,6 +91,7 @@ private final class RedirectSocketFixture {
         process.arguments = ["-u", "-c", #"""
 import http.server, json, threading
 class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
     def log_message(self, *args): pass
     def do_GET(self): self.handle_request()
     def do_POST(self): self.handle_request()
@@ -99,7 +107,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-Length', '0')
             self.end_headers()
         else:
-            payload = json.dumps([self.command, data, self.headers.get('Authorization'), self.headers.get('Cookie'), self.headers.get('X-Api-Key')]).encode()
+            payload = json.dumps([self.command, data, self.headers.get('Authorization'), self.headers.get('Cookie'), self.headers.get('X-Api-Key'), self.headers.get('X-Emby-Token')]).encode()
             self.send_response(200)
             self.send_header('Content-Length', str(len(payload)))
             self.end_headers()
@@ -127,4 +135,34 @@ server.serve_forever()
         base = "http://127.0.0.1:\(port)"
     }
     deinit { if process.isRunning { process.terminate() } }
+}
+
+@Test func mediaServerPooledRequestsKeepIndependentRedirectCredentialsAndLimits() async throws {
+    let fixture = try RedirectSocketFixture()
+    let transport = MediaServerTransport()
+    func request(_ path: String, token: String) -> URLRequest {
+        var value = URLRequest(url: URL(string: fixture.base + path)!)
+        value.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        value.setValue(token, forHTTPHeaderField: "X-Emby-Token")
+        value.setValue("session=" + token, forHTTPHeaderField: "Cookie")
+        return value
+    }
+    let first = request("/same", token: "account-first")
+    let second = request("/same", token: "account-second")
+    let cross = request("/cross", token: "account-cross")
+    async let a = transport.request(first, maximumBytes: 4096, origin: first.url)
+    async let b = transport.request(second, maximumBytes: 4096, origin: second.url)
+    async let c = transport.request(cross, maximumBytes: 4096)
+    let values = try await [a, b, c].map { String(decoding: $0.0, as: UTF8.self) }
+    #expect(values[0].contains("account-first") && !values[0].contains("account-second"))
+    #expect(values[1].contains("account-second") && !values[1].contains("account-first"))
+    #expect(!values[2].contains("account-cross"))
+    await #expect(throws: MediaServerError.http(302)) {
+        try await transport.request(cross, maximumBytes: 4096, origin: cross.url)
+    }
+    await #expect(throws: MediaServerError.response) {
+        try await transport.request(first, maximumBytes: 4, origin: first.url)
+    }
+    let afterLimit = try await transport.request(second, maximumBytes: 4096, origin: second.url)
+    #expect(String(decoding: afterLimit.0, as: UTF8.self).contains("account-second"))
 }

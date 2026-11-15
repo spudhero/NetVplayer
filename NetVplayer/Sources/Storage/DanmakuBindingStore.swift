@@ -3,7 +3,6 @@ import CryptoKit
 import Models
 
 public final class DanmakuBindingStore: @unchecked Sendable {
-    public static let shared = DanmakuBindingStore()
     private struct Entry: Codable { var key: String; var attachment: DanmakuAttachment; var updatedAt: Date }
     private let storage: StorageManager
     private let lock = NSLock()

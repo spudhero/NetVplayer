@@ -1,0 +1,43 @@
+--- a/libavformat/dashdec.c
++++ b/libavformat/dashdec.c
+@@ -123,6 +123,7 @@
+     uint32_t init_sec_buf_read_offset;
+     int64_t cur_timestamp;
+     int is_restart_needed;
++    int is_eof;
+ };
+ 
+ typedef struct DASHContext {
+@@ -2324,7 +2325,7 @@
+         for (int j = 0; j < pls->nb_assoc_stream; j++)
+             needed |= pls->assoc_stream[j]->discard < AVDISCARD_ALL;
+ 
+-        if (needed && !pls->ctx) {
++        if (needed && !pls->ctx && !pls->is_eof) {
+             pls->cur_seg_offset = 0;
+             pls->init_sec_buf_read_offset = 0;
+             /* Catch up */
+@@ -2403,9 +2404,9 @@
+             close_demux_for_component(cur);
+             ff_format_io_close(cur->parent, &cur->input);
+             av_log(s, AV_LOG_DEBUG, "EOF on stream_index %d\n", cur->stream_index);
+-            // prevent recheck_discard_flags() from re-enabling the component
+-            for (int i = 0; i < cur->nb_assoc_stream; i++)
+-                cur->assoc_stream[i]->discard = AVDISCARD_ALL;
++            /* EOF belongs to this demuxer, not the caller's track selection.
++             * Preserve discard flags so a later seek can reopen selected streams. */
++            cur->is_eof = 1;
+             return FFERROR_REDO;
+         }
+     }
+@@ -2432,6 +2433,10 @@
+ 
+     av_log(pls->parent, AV_LOG_VERBOSE, "DASH seek pos[%"PRId64"ms] %s\n",
+            seek_pos_msec, dry_run ? " (dry)" : "");
++
++    /* Seeking revives exhausted representations, including dry-run streams
++     * whose demuxers were closed after reading ahead to EOF. */
++    pls->is_eof = 0;
+ 
+     // single fragment mode
+     if (pls->n_fragments == 1) {

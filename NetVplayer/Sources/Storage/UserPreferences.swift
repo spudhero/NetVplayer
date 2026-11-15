@@ -2,6 +2,7 @@
 // 用户偏好设置
 
 import Foundation
+import CryptoKit
 import Models
 
 public enum CachedCredentialAvailability: Sendable, Equatable {
@@ -10,13 +11,32 @@ public enum CachedCredentialAvailability: Sendable, Equatable {
     case unknown
 }
 
+public enum CloudAccountStatus: Sendable, Equatable {
+    case disconnected
+    case saved
+    case verified
+}
+
+public struct CloudDirectoryAccountSnapshot: Equatable, Sendable {
+    public let binding: CloudDirectoryBinding
+    public let values: [String: String]
+}
+
 /// 用户偏好设置，对应 FongMi: Setting.java / PlayerSetting.java
 public final class UserPreferences: @unchecked Sendable {
 
-    public static let shared = UserPreferences(credentialStore:
-        TestRuntime.isRunning
-            ? MemoryCredentialStore()
-            : LocalCredentialStore(legacyReader: LegacyKeychainCredentialReader()))
+    public static let shared: UserPreferences = {
+        if TestRuntime.isRunning { return UserPreferences(credentialStore: MemoryCredentialStore()) }
+        if CommandLine.arguments.contains("--android-provider-audit") {
+            if CommandLine.arguments.contains("--android-provider-account-free-audit") {
+                return makeEmptyIsolatedSession()
+            }
+            // Do not run legacy migration or publish refreshed credentials while
+            // a development acceptance run is using the user's existing account.
+            return UserPreferences(credentialStore: LocalCredentialStore()).makeIsolatedSnapshot()
+        }
+        return UserPreferences(credentialStore: LocalCredentialStore(legacyReader: LegacyKeychainCredentialReader()))
+    }()
     public static let credentialsDidChange = Notification.Name("NetVplayer.credentialsDidChange")
     public static let stableBundleIdentifier = "com.netvplayer.app"
     public static let legacyPreferenceDomains = [
@@ -47,6 +67,23 @@ public final class UserPreferences: @unchecked Sendable {
     public init(defaults: UserDefaults = .standard, credentialStore: any CredentialStore = MemoryCredentialStore()) {
         self.defaults = defaults
         self.credentialStore = credentialStore
+    }
+
+    /// A fresh acceptance session with no saved defaults, local credential
+    /// store or legacy migration. Network-only audits do not need user accounts.
+    public static func makeEmptyIsolatedSession() -> UserPreferences {
+        UserPreferences(defaults: SessionUserDefaults(), credentialStore: MemoryCredentialStore())
+    }
+
+    /// Copies preferences into a separate session and overlays account writes in
+    /// memory. Static playback helpers and AppState can share the same isolation.
+    public func makeIsolatedSnapshot() -> UserPreferences {
+        UserPreferences(defaults: SessionUserDefaults(values: defaults.dictionaryRepresentation()),
+            credentialStore: SessionCredentialStore(source: credentialStore))
+    }
+
+    public func discardIsolatedSnapshot() {
+        (defaults as? SessionUserDefaults)?.discard()
     }
 
     /// Returns only in-memory or legacy state and never waits for the backing credential store.
@@ -109,6 +146,9 @@ public final class UserPreferences: @unchecked Sendable {
     public func saveCredential(_ value: String, for key: String) throws {
         credentialLock.lock()
         credentialRevision &+= 1
+        if let provider = DriveProvider.allCases.first(where: { Self.cloudAccountCredentialKeys(for: $0).contains(key) }) {
+            defaults.removeObject(forKey: "cloudAccountVerification.v1." + provider.rawValue)
+        }
         defer {
             credentialLock.unlock()
             NotificationCenter.default.post(name: Self.credentialsDidChange, object: nil)
@@ -155,6 +195,128 @@ public final class UserPreferences: @unchecked Sendable {
     public func checkCredentialPersistence(for key: String) throws {
         credentialLock.lock(); defer { credentialLock.unlock() }
         if let error = credentialErrors[key] { throw error }
+    }
+
+    /// A successful authorization is remembered for these exact credentials, not a view session.
+    public func cloudAccountStatus(for provider: DriveProvider) -> CloudAccountStatus {
+        credentialLock.lock()
+        defer { credentialLock.unlock() }
+        guard let fingerprint = cloudAccountFingerprint(for: provider) else { return .disconnected }
+        return defaults.string(forKey: "cloudAccountVerification.v1." + provider.rawValue) == fingerprint
+            ? .verified : .saved
+    }
+
+    public func markCloudAccountVerified(_ provider: DriveProvider) {
+        credentialLock.lock()
+        defer { credentialLock.unlock() }
+        let keys = Self.cloudAccountCredentialKeys(for: provider)
+        guard keys.allSatisfy({ credentialErrors[$0] == nil }),
+              let fingerprint = cloudAccountFingerprint(for: provider) else { return }
+        // Only a digest is stored in preferences; credentials remain in the credential store.
+        defaults.set(fingerprint, forKey: "cloudAccountVerification.v1." + provider.rawValue)
+    }
+
+    /// Only an opaque identifier and a digest live in preferences. Secrets stay in the credential store.
+    /// An externally changed account must be selected again before its directories can be scanned.
+    public func cloudDirectoryAccount(_ provider: DriveProvider) throws -> CloudDirectoryAccountSnapshot {
+        credentialLock.lock(); defer { credentialLock.unlock() }
+        let keys = Self.directoryCredentialKeys(provider)
+        guard !keys.isEmpty else { throw FileServiceError.authorizationExpired }
+        var values: [String: String] = [:]
+        for key in keys {
+            values[key] = credential(key).trimmingCharacters(in: .whitespacesAndNewlines)
+            try checkCredentialPersistence(for: key)
+        }
+        let authorized = provider == .ali
+            ? !(values["aliRefreshToken"] ?? "").isEmpty || !(values["aliAccessToken"] ?? "").isEmpty
+            : !(values[keys[0]] ?? "").isEmpty
+        guard authorized else { throw FileServiceError.authorizationExpired }
+        if provider == .ali {
+            for key in Self.directoryMetadataKeys { values[key] = defaults.string(forKey: key) ?? "" }
+        }
+        let prefix = "cloudDirectoryAccount.v1." + provider.rawValue
+        let digest = Self.directoryCredentialDigest(values)
+        let accountID: String
+        if defaults.string(forKey: prefix + ".digest") == digest,
+           let saved = defaults.string(forKey: prefix + ".id"), UUID(uuidString: saved) != nil {
+            accountID = saved
+        } else {
+            accountID = UUID().uuidString
+            defaults.set(accountID, forKey: prefix + ".id")
+            defaults.set(digest, forKey: prefix + ".digest")
+        }
+        return .init(binding: .init(provider: provider, accountID: accountID), values: values)
+    }
+
+    /// Compare-and-swap prevents a delayed response from overwriting a newly logged-in account.
+    public func refreshCloudDirectoryAccount(_ expected: CloudDirectoryAccountSnapshot,
+                                             values: [String: String], aliOpenToken: String? = nil,
+                                             expectedAliOpenToken: String? = nil) throws {
+        credentialLock.lock(); defer { credentialLock.unlock() }
+        let provider = expected.binding.provider
+        let current = try cloudDirectoryAccount(provider)
+        guard current.binding == expected.binding else { throw FileServiceError.authorizationExpired }
+        let keys = Self.directoryCredentialKeys(provider)
+        let allowed = Set(keys + (provider == .ali ? Self.directoryMetadataKeys : []))
+        guard Set(values.keys) == allowed else { throw FileServiceError.authorizationExpired }
+        // Another successful refresh of this same account may already have committed.
+        // Keep its newer credentials instead of treating it as a new login or rolling it back.
+        guard current.values == expected.values else { return }
+        if provider == .ali, let expectedAliOpenToken {
+            let currentOpenToken = credential("aliOpenToken").trimmingCharacters(in: .whitespacesAndNewlines)
+            try checkCredentialPersistence(for: "aliOpenToken")
+            guard currentOpenToken == expectedAliOpenToken || currentOpenToken == aliOpenToken else {
+                throw FileServiceError.authorizationExpired
+            }
+        }
+        for key in keys where values[key] != expected.values[key] {
+            try saveCredential(values[key] ?? "", for: key)
+        }
+        if provider == .ali {
+            if let aliOpenToken { try saveCredential(aliOpenToken, for: "aliOpenToken") }
+            for key in Self.directoryMetadataKeys { defaults.set(values[key] ?? "", forKey: key) }
+        }
+        let prefix = "cloudDirectoryAccount.v1." + provider.rawValue
+        defaults.set(Self.directoryCredentialDigest(values), forKey: prefix + ".digest")
+        defaults.set(expected.binding.accountID, forKey: prefix + ".id")
+    }
+
+    private static let directoryMetadataKeys = ["aliDefaultDriveID", "aliAuthDomain", "aliUserID"]
+    private static func directoryCredentialKeys(_ provider: DriveProvider) -> [String] {
+        switch provider {
+        case .quark: ["quarkCookie"]
+        case .uc: ["ucCookie"]
+        case .baidu: ["baiduCookie"]
+        case .ali: ["aliRefreshToken", "aliAccessToken"]
+        case .p115: ["p115Cookie", "p115AccessToken"]
+        default: []
+        }
+    }
+    private static func directoryCredentialDigest(_ values: [String: String]) -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        return SHA256.hash(data: (try? encoder.encode(values)) ?? Data()).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func cloudAccountFingerprint(for provider: DriveProvider) -> String? {
+        let values = Self.cloudAccountCredentialKeys(for: provider).map {
+            credential($0).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard values.contains(where: { !$0.isEmpty }),
+              let data = try? JSONEncoder().encode(values) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func cloudAccountCredentialKeys(for provider: DriveProvider) -> [String] {
+        switch provider {
+        case .quark: return ["quarkCookie", "quarkTVRefreshToken", "quarkTVAccessToken"]
+        case .uc: return ["ucCookie", "ucTVRefreshToken", "ucTVAccessToken",
+                          "ucFongMiAccountToken", "ucFongMiPlaybackToken"]
+        case .ali: return ["aliRefreshToken", "aliAccessToken", "aliOpenToken"]
+        case .p115: return ["p115Cookie", "p115AccessToken"]
+        case .pikpak: return ["pikpakAccessToken", "pikpakRefreshToken"]
+        case .baidu: return ["baiduCookie"]
+        default: return []
+        }
     }
 
     public static let sensitiveCredentialKeys: Set<String> = [
@@ -236,6 +398,11 @@ public final class UserPreferences: @unchecked Sendable {
     }
 
     // MARK: - 配置源
+
+    public var providerExecutionPreference: ProviderExecutionPreference {
+        get { ProviderExecutionPreference(rawValue: defaults.string(forKey: ProviderExecutionPreference.storageKey) ?? "") ?? .automatic }
+        set { defaults.set(newValue.rawValue, forKey: ProviderExecutionPreference.storageKey) }
+    }
 
     public var currentVodConfigUrl: String {
         get { defaults.string(forKey: "currentVodConfigUrl") ?? "" }

@@ -34,6 +34,11 @@ fi
 INSTALL_DIR="/Applications"
 PACKAGE_PUBLIC=false
 PACKAGE_ONLY=false
+PACKAGE_RELEASE=false
+if [[ "$MODE" == "--package-release" ]]; then
+  PACKAGE_RELEASE=true
+  MODE="--package-dev"
+fi
 if [[ "$MODE" == "--package-dev" ]]; then
   PACKAGE_ONLY=true
   if [[ "${2:-}" != /* || "$2" == "/Applications" || -e "$2/$BUNDLE_NAME.app" ]]; then
@@ -172,8 +177,10 @@ fi
 APP_ICON_DIGEST="$(shasum -a 256 "$APP_ICON_SOURCE" "$APP_ICON_COMPOSER_JSON" | awk '{print $1}' | shasum -a 256 | awk '{print substr($1, 1, 12)}')"
 APP_ICON_FILENAME="$APP_ICON_NAME-$APP_ICON_DIGEST.icns"
 
+python3 "$ROOT_DIR/../script/build_android_dialog_presentation.py" --verify
+
 swift_build() {
-  if [[ "$PACKAGE_PUBLIC" == true ]]; then
+  if [[ "$PACKAGE_PUBLIC" == true || "$PACKAGE_RELEASE" == true ]]; then
     swift build --disable-sandbox --configuration release -Xswiftc -g "$@"
     return
   fi
@@ -410,6 +417,8 @@ python3 "$REPOSITORY_ROOT/script/audit_torrent_bridge_licenses.py" \
   --root "$TORRENT_BRIDGE_SOURCE" \
   --check "$REPOSITORY_ROOT/docs/data/torrent-bridge-license-audit-2026-08-18.json"
 
+python3 "$REPOSITORY_ROOT/script/prepare_file_transfer_runtime.py"
+export NETVPLAYER_FILE_TRANSFER_RUNTIME="$ROOT_DIR/.build/file-transfer-runtime"
 swift_build --product "$APP_NAME"
 BUILD_BIN_DIR="$(swift_build --show-bin-path)"
 BUILD_BINARY="$BUILD_BIN_DIR/$APP_NAME"
@@ -495,6 +504,7 @@ PLIST
 
 SOURCE_INFO_PLIST="$ROOT_DIR/Sources/NetVplayerApp/Info.plist"
 plutil -insert NSLocalNetworkUsageDescription -string "$(plutil -extract NSLocalNetworkUsageDescription raw "$SOURCE_INFO_PLIST")" "$INFO_PLIST"
+plutil -insert NSMotionUsageDescription -string "$(plutil -extract NSMotionUsageDescription raw "$SOURCE_INFO_PLIST")" "$INFO_PLIST"
 for usage_lproj in "$ROOT_DIR/Resources"/*.lproj; do
   if [[ -f "$usage_lproj/InfoPlist.strings" ]]; then
     mkdir -p "$APP_RESOURCES/$(basename "$usage_lproj")"
@@ -551,6 +561,22 @@ if [[ ! -d "$MODEL_RESOURCE_BUNDLE" ]]; then
   exit 1
 fi
 cp -R "$MODEL_RESOURCE_BUNDLE" "$APP_RESOURCES/NetVplayer_Models.bundle"
+SPIDER_RESOURCE_BUNDLE="$BUILD_BIN_DIR/NetVplayer_SpiderEngine.bundle"
+if [[ ! -d "$SPIDER_RESOURCE_BUNDLE" ]]; then
+  echo "error: generated Android host compatibility resource bundle is missing" >&2
+  exit 1
+fi
+cp -R "$SPIDER_RESOURCE_BUNDLE" "$APP_RESOURCES/NetVplayer_SpiderEngine.bundle"
+PARSE_RESOURCE_BUNDLE="$BUILD_BIN_DIR/NetVplayer_ParseEngine.bundle"
+PARSE_RESOURCE_ROOT="$PARSE_RESOURCE_BUNDLE"
+if [[ -d "$PARSE_RESOURCE_BUNDLE/Contents/Resources" ]]; then
+  PARSE_RESOURCE_ROOT="$PARSE_RESOURCE_BUNDLE/Contents/Resources"
+fi
+if [[ ! -s "$PARSE_RESOURCE_ROOT/PublicSuffixRules.dat" || ! -f "$PARSE_RESOURCE_ROOT/PublicSuffixRules.LICENSE" ]]; then
+  echo "error: cookie public-suffix resource bundle is missing" >&2
+  exit 1
+fi
+cp -R "$PARSE_RESOURCE_BUNDLE" "$APP_RESOURCES/NetVplayer_ParseEngine.bundle"
 /usr/bin/ditto "$SPARKLE_FRAMEWORK_SOURCE" "$APP_FRAMEWORKS/Sparkle.framework"
 mkdir -p "$APP_RESOURCES/ThirdPartyLicenses"
 cp "$SPARKLE_LICENSE_SOURCE" "$APP_RESOURCES/ThirdPartyLicenses/Sparkle.LICENSE"
@@ -578,16 +604,24 @@ python3 "$REPOSITORY_ROOT/script/package_tmdb_credentials.py" --app-bundle "$STA
 cp -R "$PREPARED_QUICKJS_RUNTIME_ROOT" "$BUNDLED_QUICKJS_RUNTIME_ROOT"
 cp -R "$PREPARED_NODE_RUNTIME_ROOT" "$BUNDLED_NODE_RUNTIME_ROOT"
 mkdir -p "$TORRENT_BRIDGE_DESTINATION"
-cp "$TORRENT_BRIDGE_SOURCE/torrent-bridge.mjs" "$TORRENT_BRIDGE_DESTINATION/"
+cp "$TORRENT_BRIDGE_SOURCE/torrent-bridge.mjs" "$TORRENT_BRIDGE_SOURCE/torrent-contract.mjs" "$TORRENT_BRIDGE_DESTINATION/"
 cp "$TORRENT_BRIDGE_SOURCE/package.json" "$TORRENT_BRIDGE_DESTINATION/"
 cp "$TORRENT_BRIDGE_SOURCE/package-lock.json" "$TORRENT_BRIDGE_DESTINATION/"
 cp -R "$TORRENT_BRIDGE_SOURCE/node_modules" "$TORRENT_BRIDGE_DESTINATION/"
 cp -R "$TORRENT_BRIDGE_SOURCE/THIRD_PARTY_LICENSES" "$TORRENT_BRIDGE_DESTINATION/"
+python3 "$REPOSITORY_ROOT/script/prune_torrent_prebuilds.py" \
+  --app-bundle "$STAGING_APP_BUNDLE" \
+  --architecture "$NODE_RUNTIME_ARCHITECTURE"
+if ! (cd "$TORRENT_BRIDGE_DESTINATION" && "$BUNDLED_NODE_EXECUTABLE" --input-type=module -e "await import('webtorrent')"); then
+  echo "error: packaged WebTorrent dependencies are not loadable for $TORRENT_RUNTIME_ID" >&2
+  exit 1
+fi
 
 if [[ -n "${NETVPLAYER_LIBMPV_PATH:-}" && -z "${NETVPLAYER_LIBMPV_SOURCE:-}" ]]; then
   export NETVPLAYER_LIBMPV_SOURCE="$NETVPLAYER_LIBMPV_PATH"
 fi
 "$REPOSITORY_ROOT/script/vendor_libmpv.sh" "$STAGING_APP_BUNDLE" "$APP_BINARY"
+python3 "$REPOSITORY_ROOT/script/package_file_transfer.py" --app-bundle "$STAGING_APP_BUNDLE"
 find "$APP_FRAMEWORKS" -maxdepth 1 -type f -name '*.dylib' -exec codesign --force --sign - {} \;
 codesign --force --sign - "$APP_FRAMEWORKS/SMB/libAMSMB2.dylib"
 if [[ -f "$XUNLEI_SDK_DESTINATION" ]]; then
@@ -632,6 +666,13 @@ python3 "$REPOSITORY_ROOT/script/package_libmpv_runtime_licenses.py" \
   --audit-only
 python3 "$REPOSITORY_ROOT/script/package_smb_component.py" \
   --app-bundle "$STAGING_APP_BUNDLE" --audit-only
+# Check every shipped Mach-O slice, including nested frameworks and helpers.
+# This gate applies to local, internal Release and public packages alike.
+python3 "$REPOSITORY_ROOT/script/validate_macos_compatibility.py" \
+  --root "$STAGING_APP_BUNDLE" \
+  --maximum-version "$MIN_SYSTEM_VERSION" \
+  --required-architecture "$NODE_RUNTIME_ARCHITECTURE" \
+  --require-mach-o
 python3 "$REPOSITORY_ROOT/script/generate_release_sbom.py" \
   --app-bundle "$STAGING_APP_BUNDLE" \
   --package-resolved "$ROOT_DIR/Package.resolved" \
@@ -639,7 +680,11 @@ python3 "$REPOSITORY_ROOT/script/generate_release_sbom.py" \
 if [[ "$PACKAGE_ONLY" == true ]]; then
   mkdir -p "$INSTALL_DIR"
   /usr/bin/ditto "$STAGING_APP_BUNDLE" "$APP_BUNDLE"
-  echo "Packaged development app at $APP_BUNDLE"
+  if [[ "$PACKAGE_RELEASE" == true ]]; then
+    echo "Packaged release app at $APP_BUNDLE"
+  else
+    echo "Packaged development app at $APP_BUNDLE"
+  fi
   exit 0
 fi
 if [[ "$PACKAGE_PUBLIC" == true ]]; then

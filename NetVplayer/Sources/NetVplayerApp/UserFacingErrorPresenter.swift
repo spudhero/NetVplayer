@@ -3,6 +3,8 @@ import ConfigEngine
 import DriveEngine
 import Models
 import Networking
+import ProviderSDK
+import ProviderRuntime
 import SpiderEngine
 import Storage
 
@@ -99,7 +101,27 @@ enum UserFacingErrorPresenter {
         for error: Error,
         context: UserFacingErrorContext
     ) -> UserFacingErrorPresentation {
-        let isCancellation = error is CancellationError || isCancelledURLError(error)
+        if let interaction = error as? ProviderInteractionError {
+            return UserFacingErrorPresentation(message: interaction == .canceled
+                ? L10n.text("操作已取消。")
+                : L10n.text("扫码或交互等待超时，请重新播放并按来源提示完成操作。"), recoverySuggestion: "")
+        }
+        if let artifact = error as? DevelopmentAndroidArtifactError {
+            return UserFacingErrorPresentation(
+                message: artifact.localizedDescription,
+                recoverySuggestion: ""
+            )
+        }
+        if let failure = error as? DriveServiceFailure {
+            let hint = failure.appFailure.presentationHint
+            return UserFacingErrorPresentation(message: hint.title, recoverySuggestion: hint.suggestedAction)
+        }
+        if let failure = error as? AppFailure, failure.reason != nil {
+            let hint = failure.presentationHint
+            return UserFacingErrorPresentation(message: hint.title, recoverySuggestion: hint.suggestedAction)
+        }
+        let isCancellation = TaskDiagnosticIssue.isCancellation(error) || isCancelledURLError(error)
+            || { if case DriveTaskRecoveryError.cancelled = error { return true }; return false }()
         return UserFacingErrorPresentation(
             message: specificMessage(for: error, context: context) ?? context.fallbackMessage,
             recoverySuggestion: isCancellation ? "" : context.recoverySuggestion
@@ -134,6 +156,57 @@ enum UserFacingErrorPresenter {
         for error: Error,
         context: UserFacingErrorContext
     ) -> String? {
+        if let magnet = error as? WebTorrentMagnetPlaybackError {
+            // The bridge can include private paths or URLs in its diagnostic.
+            // Present the typed failure stage using fixed product copy instead.
+            switch magnet {
+            case .invalidMagnet:
+                return L10n.text("磁力链接无效，请选择其他资源。")
+            case .bridgeResourcesMissing, .nodeRuntimeMissing:
+                return L10n.text("磁力播放组件不可用，请重新安装应用后重试。")
+            case .launchFailed:
+                return L10n.text("无法启动磁力播放，请稍后重试或选择其他资源。")
+            case .bridgeFailed:
+                return L10n.text("未能读取磁力文件信息，请稍后重试或选择其他资源。")
+            case .timedOut:
+                return L10n.text("等待磁力文件信息超时，请稍后重试或选择其他资源。")
+            }
+        }
+        if let provider = error as? ProviderErrorPayload {
+            // Use fixed local copy; never display a remote Provider's message.
+            switch provider.code {
+            case "android_original_runtimeUnavailable":
+                return L10n.text("请先在设置中安装 Android 原版运行组件。")
+            case "android_original_runtimeInvalid":
+                return L10n.text("Android 原版运行组件校验失败，请重新安装或回滚组件。")
+            case "android_player_address_missing":
+                return L10n.text("视频源未返回播放地址，请重试或切换线路。")
+            default: break
+            }
+        }
+        if let file = error as? FileServiceError {
+            let issue = TaskDiagnosticIssue.local(file)
+            if let reason = issue.reason.failureReason { return AppFailure(category: .source, reason: reason).presentationHint.title }
+            switch file {
+            case .authorizationExpired: return L10n.text("目录授权已失效，请在设置中重新选择文件夹。")
+            case .invalidConfiguration: return L10n.text("服务设置不完整，请在设置中检查连接信息。")
+            default: return L10n.text("服务暂时不可用，请检查设置后重试。")
+            }
+        }
+        if let scan = error as? MediaScanRecoveryError {
+            switch scan {
+            case .configurationChanged:
+                return L10n.text("服务、账号或媒体库设置已变化，请重新扫描。旧索引仍可浏览。")
+            case .expired:
+                return L10n.text("扫描检查点已过期，请手动重新扫描。旧索引仍可浏览。")
+            case .cancelled:
+                return L10n.text("扫描已取消，请手动重新扫描。旧索引仍可浏览。")
+            case .capacity, .readBudget:
+                return L10n.text("扫描达到本次读取或检查点上限，旧索引已保留。请缩小媒体库目录后重扫。")
+            case .unavailable, .superseded:
+                return L10n.text("此扫描检查点已不可继续，请重新扫描。旧索引仍可浏览。")
+            }
+        }
         if error is CancellationError || isCancelledURLError(error) {
             return L10n.text("操作已取消。")
         }
@@ -155,6 +228,20 @@ enum UserFacingErrorPresenter {
             }
         }
 
+        if let recovery = error as? DriveTaskRecoveryError {
+            switch recovery {
+            case .storageUnavailable:
+                return L10n.text("无法保存或读取转存记录，已停止转存。请检查本机存储后重试。")
+            case .capacityReached:
+                return L10n.text("待核对的转存记录已达上限。请先处理未完成任务。")
+            case .scopeChanged:
+                return L10n.text("账号、来源配置或目标目录已变化。请核对原设置，任务未继续。")
+            case .cancelled:
+                return L10n.text("任务已取消，不会恢复执行。")
+            case .requiresReview, .staleRecord:
+                return L10n.text("上次转存仍待核对。请在转存记录中手动继续，本次不会重复提交。")
+            }
+        }
         if let driveError = error as? DriveEngineError {
             return driveMessage(for: driveError)
         }
@@ -229,6 +316,8 @@ enum UserFacingErrorPresenter {
             return L10n.text("网盘未能返回完整播放地址，登录状态可能已失效。")
         case .officialPlayURLPending:
             return L10n.text("文件已转存，但播放地址尚未准备好。请稍后重试，或先在对应网盘应用中打开一次该文件。")
+        case .transferConfirmationPending:
+            return L10n.text("转存结果仍待确认。请稍后重试以核对文件，本次不会重复提交转存。")
         case .api(let provider, let statusCode, let code, _):
             if !(200..<300).contains(statusCode) {
                 return httpStatusMessage(statusCode, serviceName: provider.localizedDisplayName)

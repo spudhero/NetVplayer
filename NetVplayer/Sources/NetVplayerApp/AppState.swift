@@ -9,6 +9,7 @@ import Models
 import ApplicationCore
 import DriveEngine
 import FileServiceEngine
+import MediaServerEngine
 import MediaLibraryEngine
 import ConfigEngine
 import NodeBundleRuntime
@@ -236,14 +237,23 @@ final class AppState: ObservableObject {
     @Published var lastDanmakuParseDiagnostic: DanmakuPayloadParseDiagnostic?
     @Published var lastDriveFixtureDiagnostic: String?
     private let driveShareExpander: DriveShareExpander
-    private let storageManager: StorageManager
-    private let fileServiceStore: FileServiceStore
+    let storageManager: StorageManager
+    private let siteHealthStore: SiteHealthStore
+    private let liveLineHealthStore: LiveLineHealthStore
+    let fileServiceStore: FileServiceStore
+    let mediaServerStore: MediaServerStore
     private let applicationLibraryPersistence: any ApplicationLibraryPersistence
     private let historyWriter: HistoryWriteCoordinator
-    var libraryConfigurationURL = ""
+    var libraryConfigurationURL = "" {
+        didSet { onlineDetailMetadata.receive(onlineDetailInput) }
+    }
     private var historyDeletedThroughGeneration: [String: UInt64] = [:]
     private var historyClearedThroughGeneration: UInt64?
     private var danmakuRequestID = UUID()
+    private var providerDanmakuTask: Task<Void, Never>?
+    private var providerDanmakuFetchTask: Task<DanmakuPayloadParseResult, Error>?
+    private var providerDanmakuMediaOwner: UUID?
+    @Published var selectedProviderDanmakuIndex: Int?
     private var danmakuCandidateOwner: (id: UUID, url: String, session: String?)?
     private let danmakuBindings: DanmakuBindingStore
     @Published var danmakuCandidates: [DanmakuMatch] = []
@@ -252,8 +262,50 @@ final class AppState: ObservableObject {
         await DanmakuEngine.shared.manualSearch(request: $0, sources: $1)
     }
     private let configResolver: ConfigResolver
-    private let userPreferences: UserPreferences
+    let userPreferences: UserPreferences
+    let activeProviderExecutionPreference: ProviderExecutionPreference
+    @Published var preferredProviderExecution: ProviderExecutionPreference {
+        didSet { userPreferences.providerExecutionPreference = preferredProviderExecution }
+    }
+    @Published private(set) var providerExecutionBackends: [String: ProviderExecutionBackend] = [:]
+    var providerExecutionRequiresRestart: Bool { preferredProviderExecution != activeProviderExecutionPreference }
+    var hasBundledAndroidProviderRuntime: Bool {
+        DevelopmentAndroidSiteProvider.isBundled() || androidRuntimeComponentVersion != nil
+    }
+    @Published var androidRuntimeComponentVersion: String?
+    @Published var androidRuntimePreviousVersion: String?
+    @Published var androidRuntimeComponentError: String?
+    @Published var androidRuntimeComponentBusy = false
+    @Published var androidRuntimeComponentRequiresRestart = false
+
     private let providerRuntimeBootstrap: ProviderRuntimeBootstrap?
+    private let providerRuntimeRegistrationOverride: (@MainActor @Sendable () async -> Bool)?
+    private let androidProviderRegistrationOverride: (@MainActor @Sendable ([Site]) async throws -> Void)?
+    private let shouldDetectProviderProxy: Bool
+    private var hasStartedProviderRuntime = false
+    let driveTaskStore: DriveTransferTaskStore
+    let taskDiagnosticStore: TaskDiagnosticStore
+    lazy var localAutomation = LocalAutomationController { [weak self] endpoint in
+        guard let self else { throw LocalReadOnlyServer.Failure.unavailable }
+        return try await self.localAutomationData(endpoint)
+    }
+    @Published var recentTaskDiagnostics: [TaskDiagnosticRecord] = []
+    @Published var taskDiagnosticsUnavailable = false
+    @Published var activeTaskDiagnosticIDs = Set<UUID>()
+    var pendingTaskLogin: DriveProvider?
+    var pendingTaskSettings = false
+    let driveTransferCoordinator: DriveTransferCoordinator
+    @Published var driveTaskSummaries: [DriveTransferTask] = []
+    @Published var driveTaskMessage: String?
+    @Published var driveTaskStorageFailed = false
+    @Published var showsDriveTaskRecovery = false
+    @Published var driveRecoveryBusy = Set<UUID>()
+    var driveRecoveryOperations: [UUID: Task<Void, Never>] = [:]
+    @Published private(set) var startupRestorationDeferred = false
+    private(set) var startupServiceFailed = false
+    private(set) var isTerminating = false
+    private let ownsProxyServer: Bool
+    private var proxyDetectionTask: Task<Void, Never>?
     private let providerRuntimeStartupOverride: (@MainActor @Sendable () async -> Bool)?
     private var providerRuntimeRegistrationTask: Task<Bool, Never>?
     private(set) var providerRuntimeStartupTask: Task<Void, Never>?
@@ -287,13 +339,26 @@ final class AppState: ObservableObject {
             if oldSources != newSources { resetSearchState() }
         }
     }
-    @Published var activeSite: Site?
+    @Published var activeSite: Site? {
+        didSet { onlineDetailMetadata.receive(onlineDetailInput) }
+    }
     @Published private(set) var contentCatalogState = ContentCatalogState()
     @Published private(set) var isCatalogRefreshing = false
+    @Published private var homeRecommendationAvailability: (key: CatalogCacheBaseKey, hasItems: Bool)?
+    var showsHomeRecommendation: Bool {
+        guard let site = activeSite else { return true }
+        guard providerExecutionBackends[site.key] == .androidOriginal else {
+            return site.showsSyntheticRecommendation
+        }
+        let key = CatalogCacheBaseKey(revision: catalogCacheRevision, siteKey: site.key, kind: .home)
+        return homeRecommendationAvailability?.key == key && homeRecommendationAvailability?.hasItems == true
+    }
     var vods: [Vod] {
         get { contentCatalogState.vods }
         set { contentCatalogState.vods = newValue }
     }
+    @Published private(set) var mediaServerFolderPath: [VodClass] = []
+
     var categories: [VodClass] {
         get { contentCatalogState.categories }
         set { contentCatalogState.categories = newValue }
@@ -320,7 +385,11 @@ final class AppState: ObservableObject {
     }
     
     // 详情页业务数据
-    @Published var detailVod: Vod?
+    let onlineDetailMetadata: OnlineVodDetailModel
+    @Published var detailVod: Vod? {
+        didSet { onlineDetailMetadata.receive(onlineDetailInput) }
+    }
+    private var originalDetailRequest: (siteKey: String, id: String)?
     @Published var playFlags: [String] = []
     @Published var selectedPlayFlag: String = ""
     @Published var episodes: [Episode] = [] {
@@ -350,15 +419,19 @@ final class AppState: ObservableObject {
     @Published var isDetailPresented: Bool = false
     @Published var isDetailLoading: Bool = false
     @Published private(set) var episodeListState: EpisodeListLoadState = .ready
+    private(set) var detailRequestOutcome: VodDetailRequestOutcome = .notRequested
     private var episodeListRefreshTask: Task<Void, Never>?
     private var episodeListRefreshID = UUID()
     var episodeListRefreshTimeout: Duration = .seconds(12)
     @Published var isPlayerPresented: Bool = false {
         didSet {
             if !isPlayerPresented {
+                cancelPendingHostMagnet()
+                if oldValue { releaseLocalStreamRelayIfNeeded(spec: playerState.currentSpec, reason: "player-dismissed") }
                 pendingAutoAdvanceID = nil
                 episodePreparation = nil
-                danmakuRequestID = UUID()
+                cancelDanmakuSelection()
+                currentDanmakuCues = []
                 if oldValue {
                     cancelCloudAuthorization()
                     if !isDetailPresented { cancelEpisodeListRefresh() }
@@ -366,7 +439,6 @@ final class AppState: ObservableObject {
             }
         }
     }
-    private(set) var isDetailReturnPendingAfterPlayerExit: Bool = false
     @Published var isLivePlayerPresented: Bool = false
     @Published private(set) var livePlayerOpenRequestSerial: Int = 0
     @Published var isPlayerLoading: Bool = false
@@ -389,6 +461,10 @@ final class AppState: ObservableObject {
     @Published var isPlaybackErrorPresented: Bool = false
     @Published var playbackErrorMessage: String?
     @Published var playbackErrorAuthProvider: DriveProvider?
+    @Published var playbackTaskAction: TaskResultAction?
+    var taskRetryEpisode: Episode?
+    private var taskRetryOrigin: PlaybackAuthorizationOrigin?
+    var pendingPlaybackTaskAction: TaskResultAction?
     @Published var playbackVerificationRequest: PlaybackVerificationRequest?
     @Published var playbackWarningMessage: String?
     @Published private(set) var playbackRouteNotice: DrivePlaybackRouteNotice?
@@ -400,44 +476,31 @@ final class AppState: ObservableObject {
         get { playbackSessionState.selection }
         set {
             guard newValue == nil else { return }
-            playbackSessionState = PlaybackSessionCore.dismissSelection(playbackSessionState)
+            dismissPlaybackSelection()
         }
     }
 
     func beginPlayerDismissalReturningToDetail() {
-        cancelCloudAuthorization()
-        invalidateNextEpisodePreload(reason: "player-dismissed")
-        playerDismissalDetailTask?.cancel()
-        isDetailReturnPendingAfterPlayerExit = detailVod != nil
-        DiagnosticLog.write(
-            "[VOD_PLAYER_EXIT] stage=begin hasDetail=\(detailVod != nil) returnPending=\(isDetailReturnPendingAfterPlayerExit)"
-        )
-        isDetailPresented = false
+        let site = activeSite
+        let fileLeaseID = playerState.currentSpec?.metadata["files.leaseID"].flatMap(UUID.init(uuidString:))
+        let previousCleanup = playerDismissalCleanupTask
+        cancelPlaybackPreparation()
+
+        // Publish the destination before removing the player. Resource cleanup
+        // must never expose the catalog or reopen a detail the user has closed.
+        isDetailPresented = detailVod != nil
         isPlayerPresented = false
-        playerDismissalDetailTask = Task { @MainActor [weak self] in
-            await FileServiceRuntime.shared.releasePlayback()
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
-            self?.completePlayerDismissalPresentation()
+        DiagnosticLog.write("[VOD_PLAYER_EXIT] stage=presented restored=\(isDetailPresented)")
+        playerDismissalCleanupTask = Task {
+            await previousCleanup?.value
+            if let site { await DevelopmentAndroidSiteProvider.cancelPlaybackIfEnabled(site: site) }
+            if let fileLeaseID { await FileServiceRuntime.shared.releasePlayback(leaseID: fileLeaseID) }
+            DiagnosticLog.write("[VOD_PLAYER_EXIT] stage=cleanup-complete")
         }
     }
 
-    func completePlayerDismissalPresentation() {
-        guard isDetailReturnPendingAfterPlayerExit else {
-            DiagnosticLog.write("[VOD_PLAYER_EXIT] stage=complete returnPending=false")
-            return
-        }
-        playerDismissalDetailTask?.cancel()
-        playerDismissalDetailTask = nil
-        isDetailReturnPendingAfterPlayerExit = false
-        guard !isPlayerPresented, detailVod != nil else {
-            DiagnosticLog.write(
-                "[VOD_PLAYER_EXIT] stage=complete restored=false playerPresented=\(isPlayerPresented) hasDetail=\(detailVod != nil)"
-            )
-            return
-        }
-        isDetailPresented = true
-        DiagnosticLog.write("[VOD_PLAYER_EXIT] stage=complete restored=true")
+    func waitForPlayerDismissalCleanup() async {
+        await playerDismissalCleanupTask?.value
     }
 
     @Published var cloudAuthRequest: CloudAuthRequest? {
@@ -470,7 +533,7 @@ final class AppState: ObservableObject {
     private var startedVodPlaybackSpec: PlaySpec?
     private var playbackStartupTrace: PlaybackStartupTrace?
     private var pendingPlaybackStartTask: Task<Void, Never>?
-    private var playerDismissalDetailTask: Task<Void, Never>?
+    private var playerDismissalCleanupTask: Task<Void, Never>?
     private var detailPrefetchTask: Task<Void, Never>?
     private var detailLoadGeneration: UInt64 = 0
     private var historySaveTask: Task<Void, Never>?
@@ -480,7 +543,11 @@ final class AppState: ObservableObject {
     private let liveDataSource = LiveDataSourceCoordinator()
     private let catalogRepository: CatalogRepository
     private var catalogRefreshTask: Task<Void, Never>?
+    private var homeMetadataRefreshTask: Task<Void, Never>?
     private var catalogCacheRevision: UInt64 = 0
+    private var developmentAndroidConfigSHA256: String?
+    private(set) var developmentAndroidHomeObservation: DevelopmentAndroidLifecycleDiagnostics.Event?
+    private(set) var developmentAndroidCategoryObservation: DevelopmentAndroidLifecycleDiagnostics.Event?
     private var catalogRequestSerial: UInt64 = 0
     private var displayedCatalogCacheKey: CatalogCacheBaseKey?
     private var loadingCatalogCacheKey: CatalogCacheBaseKey?
@@ -497,9 +564,18 @@ final class AppState: ObservableObject {
     private let drivePlaybackSessionController = DrivePlaybackSessionController()
 
     // 直播业务数据
+    let livePreviews: LiveChannelPreviewStore
     @Published var lives: [Live] = []
     @Published var activeLive: Live?
-    @Published var channelGroups: [ChannelGroup] = []
+    @Published var channelGroups: [ChannelGroup] = [] {
+        didSet {
+            liveSourceRevision = UUID()
+            invalidateLiveCatchupForSourceRefresh()
+            invalidateLiveEpgScope()
+        }
+    }
+    private(set) var liveEpgRevision = UUID()
+    var liveEpgRepository: XMLTVRepository = .shared
     @Published var selectedGroup: ChannelGroup?
     @Published var selectedChannel: Channel?
     @Published var isLoadingLive: Bool = false
@@ -514,11 +590,20 @@ final class AppState: ObservableObject {
     @Published var liveEpgError: String?
     private var liveEpgRequestKey = ""
     @Published var liveEpgAvailability: EpgAvailability = .unconfigured
+    @Published var liveSourceRevision = UUID() {
+        didSet { livePreviews.setSource(livePreviewIdentity) }
+    }
+    @Published var liveCatchupContext: LiveCatchupContext?
+    @Published var liveCatchupPhase: LiveCatchupPhase = .idle
+    @Published var liveCatchupPosition: Double = 0
+    @Published var liveCatchupNotice: String?
+    var liveCatchupTask: Task<Void, Never>?
+    var liveCatchupNativeResume = false
     private var liveEpgRequestID = UUID()
     private var liveEpgTask: Task<EpgLoadResult, Never>?
     private var hlsRecoveryTasks: [Bool: Task<Void, Never>] = [:]
     private var hlsRecoverySlots = HLSRecoverySlots()
-    private var livePlaybackSessionID = UUID()
+    var livePlaybackSessionID = UUID()
     private var livePlaybackLoadingID: UUID?
     private var liveFallbackAttempts: [LivePlaybackAttempt] = []
     private var liveFallbackNextIndex: Int = 0
@@ -529,8 +614,18 @@ final class AppState: ObservableObject {
     private var liveConfigurationRequestID = UUID()
     private var liveExpiredAddressRefreshSessionID: UUID?
     private let liveHTTPClient: HTTPClient
-    private let livePlaybackProbe: LivePlaybackProbe
+    let livePlaybackProbe: LivePlaybackProbe
+    private var activeHostMagnetLeaseID: UUID?
+    private let hostMagnetResolver: any HostMagnetPlaybackResolving
+    private var hostMagnetPreparation: (generation: UInt64, task: Task<Result, any Error>)?
+    private var pendingHostMagnet: (generation: UInt64, playback: HostMagnetPlayback)?
     var playSpecHandler: ((PlaySpec) async -> Void)?
+    /// Exact audit runs must not probe, retry, switch lines, or advance after playback.
+    var allowsAutomaticVodPlaybackActions = true
+    /// Audits must keep an unavailable selection from expanding into other sources.
+    var allowsSearchFallbacks = true
+    /// Preserve the typed preparation outcome for audit stop rules.
+    private(set) var playbackPreparationTimedOut = false
     var drivePlaybackSourceRefreshHandler: ((PlaySpec, String) async throws -> PlaySpec)?
 
     // 配置、历史与收藏数据
@@ -556,6 +651,7 @@ final class AppState: ObservableObject {
     private var lastSearchCredentialRevision: UInt64 = 0
     private var searchCredentialsObserver: AnyCancellable?
     private var fileServicesObserver: AnyCancellable?
+    private var taskDiagnosticsObserver: AnyCancellable?
 
     var searchKeyword: String {
         get { contentSearchState.keyword }
@@ -578,35 +674,65 @@ final class AppState: ObservableObject {
     init(
         loadDefaultConfig: Bool = true,
         startProxyServer: Bool = true,
+        startProviderRuntime: Bool = true,
+        deferStartupRestoration: Bool = false,
         driveShareExpander: DriveShareExpander = .shared,
         liveHTTPClient: HTTPClient = .shared,
         configResolver: ConfigResolver = .shared,
         storageManager: StorageManager = .shared,
         applicationLibraryPersistence: (any ApplicationLibraryPersistence)? = nil,
         userPreferences: UserPreferences = .shared,
+        onlineDetailMetadata: OnlineVodDetailModel = OnlineVodDetailModel(),
+        livePreviews: LiveChannelPreviewStore = LiveChannelPreviewStore(),
         providerRuntimeBootstrap: ProviderRuntimeBootstrap? = ProviderRuntimeBootstrap.makeDefault(),
         providerRuntimeRegistrationOverride: (@MainActor @Sendable () async -> Bool)? = nil,
         providerRuntimeStartupOverride: (@MainActor @Sendable () async -> Bool)? = nil,
+        androidProviderRegistrationOverride: (@MainActor @Sendable ([Site]) async throws -> Void)? = nil,
         providerRuntimeCollapseDelay: @escaping @Sendable () async throws -> Void = {
             try await Task.sleep(for: .milliseconds(1_500))
         },
         configurationRefreshSleeper: @escaping @Sendable (Duration) async throws -> Void = {
             try await Task.sleep(for: $0)
         },
-        catalogRepository: CatalogRepository = .shared
+        catalogRepository: CatalogRepository = .shared,
+        hostMagnetResolver: any HostMagnetPlaybackResolving = HostMagnetPlaybackResolver()
     ) {
+        #if DEBUG
+        StartupRecoveryProbe.current?.checkInitialization()
+        #endif
         let resolvedLibraryPersistence = applicationLibraryPersistence ?? storageManager
+        self.onlineDetailMetadata = onlineDetailMetadata
+        self.livePreviews = livePreviews
+        self.hostMagnetResolver = hostMagnetResolver
         self.driveShareExpander = driveShareExpander
         self.catalogRepository = catalogRepository
         self.liveHTTPClient = liveHTTPClient
         self.livePlaybackProbe = LivePlaybackProbe(httpClient: liveHTTPClient)
         self.configResolver = configResolver
         self.storageManager = storageManager
+        self.siteHealthStore = storageManager === StorageManager.shared ? .shared : SiteHealthStore(storage: storageManager)
+        let taskStore = storageManager === StorageManager.shared ? DriveTransferTaskStore.shared : DriveTransferTaskStore(storage: storageManager)
+        self.driveTaskStore = taskStore
+        self.taskDiagnosticStore = taskStore.diagnostics
+        do { self.recentTaskDiagnostics = try taskStore.diagnostics.records() }
+        catch { self.taskDiagnosticsUnavailable = true }
+        self.driveTransferCoordinator = storageManager === StorageManager.shared ? .shared : DriveTransferCoordinator(store: taskStore)
+        do { self.driveTaskSummaries = try taskStore.records().sorted { $0.updatedAt > $1.updatedAt } }
+        catch { self.driveTaskStorageFailed = true }
+        self.liveLineHealthStore = storageManager === StorageManager.shared ? .shared : LiveLineHealthStore(storage: storageManager)
         self.fileServiceStore = FileServiceStore(storage: storageManager, preferences: userPreferences)
+        self.mediaServerStore = MediaServerStore(storage: storageManager, preferences: userPreferences)
         self.applicationLibraryPersistence = resolvedLibraryPersistence
         self.historyWriter = HistoryWriteCoordinator(persistence: resolvedLibraryPersistence)
         self.danmakuBindings = DanmakuBindingStore(storage: storageManager)
         self.userPreferences = userPreferences
+        self.activeProviderExecutionPreference = userPreferences.providerExecutionPreference
+        self.preferredProviderExecution = userPreferences.providerExecutionPreference
+        self.providerRuntimeRegistrationOverride = providerRuntimeRegistrationOverride
+        self.androidProviderRegistrationOverride = androidProviderRegistrationOverride
+        self.shouldDetectProviderProxy = startProxyServer
+        self.ownsProxyServer = startProxyServer
+        self.startupRestorationDeferred = deferStartupRestoration
         self.providerRuntimeBootstrap = providerRuntimeBootstrap
         self.providerRuntimeStartupOverride = providerRuntimeStartupOverride
         self.providerRuntimeCollapseDelay = providerRuntimeCollapseDelay
@@ -629,6 +755,7 @@ final class AppState: ObservableObject {
         self.appearanceThemeID = AppAppearanceDefaults.resolvedThemeID(
             storedRawValue: userPreferences.appearanceThemeID
         )
+        AndroidDialogThemePublisher.publish(AppThemeCatalog.palette(for: appearanceThemeID))
 
         configurePlayerEngine(MPVPlayerEngine.vod, playerState: playerState)
         configurePlayerEngine(MPVPlayerEngine.live, playerState: livePlayerState)
@@ -640,8 +767,8 @@ final class AppState: ObservableObject {
         
         // 提前在后台异步探测一次代理可用性，缓存可用端口
         if startProxyServer {
-            Task {
-                await ProxyDetector.shared.detectActiveProxy()
+            proxyDetectionTask = Task {
+                _ = await ProxyDetector.shared.detectActiveProxy()
             }
         }
         
@@ -654,7 +781,22 @@ final class AppState: ObservableObject {
                 ProxyServer.shared.prefetchedProxyHandler = playbackHandlers.prefetched
                 ProxyServer.shared.streamingProxyHandler = playbackHandlers.streaming
                 RemoteProviderProxyBridge.install(on: ProxyServer.shared)
+                ProxyServer.shared.streamingProxyHeadHandler = { parameters, head, body in
+                    try await DevelopmentAndroidSiteProvider.streamProxyIfEnabled(parameters: parameters, sendHead: head, sendBody: body)
+                }
+                let previousStreaming = ProxyServer.shared.streamingProxyHandler
+                ProxyServer.shared.streamingProxyHandler = { parameters, head, body in
+                    if try await DevelopmentAndroidSiteProvider.streamProxyIfEnabled(parameters: parameters, sendHead: head, sendBody: body) { return true }
+                    return try await previousStreaming?(parameters, head, body) ?? false
+                }
+                ProxyServer.shared.rawProxyHandler = { parameters in
+                    if let response = try await DevelopmentAndroidSiteProvider.proxyResponseIfEnabled(parameters: parameters) {
+                        return response
+                    }
+                    return try await SpiderReplacementRegistry.shared.remoteProxyResponse(parameters: parameters)
+                }
             } catch {
+                startupServiceFailed = true
                 print("[AppState] 本地代理服务器启动失败: \(error)")
             }
         }
@@ -662,10 +804,10 @@ final class AppState: ObservableObject {
         // 从持久化端口加载配置、历史和收藏
         self.applicationLibraryState = resolvedLibraryPersistence.loadApplicationLibrary()
         self.trackItems = storageManager.loadTracks()
-        self.siteHealthSummaries = SiteHealthStore.shared.summaries()
-        self.liveLineHealthSummaries = LiveLineHealthStore.shared.summaries()
+        self.siteHealthSummaries = siteHealthStore.summaries()
+        self.liveLineHealthSummaries = liveLineHealthStore.summaries()
         self.sourceHygieneRules = SourceHygieneStore.shared.loadRules()
-        self.selectedSearchSiteKeys = UserPreferences.shared.defaultSearchSiteKeys
+        self.selectedSearchSiteKeys = userPreferences.defaultSearchSiteKeys
         lastSearchCredentialRevision = userPreferences.searchCredentialRevision
         searchCredentialsObserver = NotificationCenter.default.publisher(for: UserPreferences.credentialsDidChange)
             .receive(on: DispatchQueue.main)
@@ -675,10 +817,16 @@ final class AppState: ObservableObject {
                     let revision = self.userPreferences.searchCredentialRevision
                     guard revision != self.lastSearchCredentialRevision else { return }
                     self.lastSearchCredentialRevision = revision
+                    self.playerState.playbackSummaries.invalidate()
                     if !self.contentSearchState.sourceScope.isEmpty,
                        self.contentSearchState.sourceScope != self.searchDataScope { self.resetSearchState() }
                     await self.searchEngine.invalidateSearchCache()
                 }
+            }
+
+        taskDiagnosticsObserver = NotificationCenter.default.publisher(for: .taskDiagnosticsDidChange)
+            .receive(on: DispatchQueue.main).sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refreshTaskDiagnostics() }
             }
 
 
@@ -689,60 +837,15 @@ final class AppState: ObservableObject {
             savedConfigStartupPhase = .preparingExtension
         }
 
-        let runtimeRegistrationTask: Task<Bool, Never>?
-        if let providerRuntimeRegistrationOverride {
-            runtimeRegistrationTask = Task { @MainActor in
-                await providerRuntimeRegistrationOverride()
-            }
-        } else if let providerRuntimeBootstrap {
-            runtimeRegistrationTask = Task { @MainActor [weak self] in
-                if await providerRuntimeBootstrap.manager.isDisabled() {
-                    self?.providerComponentsDisabled = true
-                    self?.providerRuntimeInstalled = []
-                    return false
-                }
-                await providerRuntimeBootstrap.registerInstalledProviders()
-                let installed = await providerRuntimeBootstrap.installedManifests()
-                self?.providerRuntimeInstalled = installed
-                return !installed.isEmpty
-            }
-        } else {
-            runtimeRegistrationTask = nil
-            providerRuntimeHasFailure = providerRuntimeStartupOverride == nil
-            providerRuntimeStatus = L10n.text("当前构建未配置扩展支持")
-        }
-        providerRuntimeRegistrationTask = runtimeRegistrationTask
-        if let providerRuntimeStartupOverride {
-            providerRuntimeBusy = true
-            providerRuntimeStatus = L10n.text("正在检查播放扩展")
-            providerRuntimeStartupTask = Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.finishLocalProviderRegistration(await runtimeRegistrationTask?.value ?? false)
-                let installationID = self.beginProviderRuntimePresentation()
-                self.finishProviderRuntimeStartupOverride(await providerRuntimeStartupOverride(), installationID: installationID)
-            }
-        } else if let providerRuntimeBootstrap {
-            providerRuntimeBusy = true
-            providerRuntimeStatus = L10n.text("正在检查播放扩展")
-            let shouldDetectProviderProxy = startProxyServer
-            providerRuntimeStartupTask = Task { @MainActor [weak self] in
-                self?.finishLocalProviderRegistration(await runtimeRegistrationTask?.value ?? false)
-                let installationID = self?.providerComponentsDisabled == false
-                    ? self?.beginProviderRuntimePresentation() : nil
-                if shouldDetectProviderProxy {
-                    let proxyPort = await ProxyDetector.shared.detectActiveProxy()
-                    await providerRuntimeBootstrap.configureDistributionProxy(port: proxyPort)
-                }
-                await self?.synchronizeProviderRuntime(using: providerRuntimeBootstrap, installationID: installationID)
-            }
-        }
+        if startProviderRuntime { startProviderRuntimeIfNeeded() }
 
         if loadDefaultConfig {
             fileServicesObserver = NotificationCenter.default.publisher(for: .fileServicesDidChange)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in Task { @MainActor [weak self] in self?.reloadFileServiceSites() } }
             reloadFileServiceSites()
-            Task { await MediaLibraryScanner.shared.scanStaleLibraries() }
+            // Startup restores the persisted media index without enumerating NAS directories.
+            // Adding/editing a library, explicit refresh and catalog restore own scanning.
         }
         // 仅恢复用户保存的配置；首次启动保持空壳，不内置或发现视频源。
         if !savedURL.isEmpty {
@@ -768,15 +871,174 @@ final class AppState: ObservableObject {
 
     deinit {
         configurationRefreshTask?.cancel()
+        hostMagnetPreparation?.task.cancel()
+        let resolver = hostMagnetResolver
+        let leases = Set([pendingHostMagnet?.playback.leaseID, activeHostMagnetLeaseID].compactMap { $0 })
+        Task { for lease in leases { await resolver.release(lease) } }
+    }
+
+    func beginApplicationTermination() {
+        guard !isTerminating else { return }
+        isTerminating = true
+        livePreviews.cancelRefresh()
+        cancelPendingHostMagnet()
+        releaseLocalStreamRelayIfNeeded(spec: playerState.currentSpec, reason: "termination")
+        saveCurrentPlaybackProgress()
+    }
+
+    /// Quiesce the owned startup/playback jobs before the process is allowed to exit.
+    func prepareForApplicationTermination() async throws {
+        beginApplicationTermination()
+        if livePreviews.activeCount > 0 { await livePreviews.drain() }
+        await localAutomation.shutdown()
+        DevelopmentAndroidAppAudit.cancel()
+        await DevelopmentAndroidSiteProvider.shutdownAll()
+        let epgJob = liveEpgTask
+        let jobs = [proxyDetectionTask, initialConfigTask, configurationRefreshTask, providerRuntimeStartupTask,
+                    pendingPlaybackStartTask, activeSearchTask, episodeListRefreshTask,
+                    providerRuntimeCollapseTask, detailPrefetchTask, playerDismissalCleanupTask,
+                    libraryHomeRefreshTask, catalogRefreshTask, homeMetadataRefreshTask, vodLineFallbackTask,
+                    nextEpisodeEssentialsTask, nextEpisodeThunderTask, drivePlaybackStallTask,
+                    liveFallbackTask, livePendingFailureTask, liveCatchupTask, historySaveTask]
+            + hlsRecoveryTasks.values.map { Optional($0) }
+            + searchContinuationTasks.values.map { Optional($0) }
+            + driveRecoveryOperations.values.map { Optional($0) }
+        initialConfigTask?.cancel()
+        invalidateConfigurationRefresh()
+        providerRuntimeRegistrationTask?.cancel()
+        providerRuntimeStartupTask?.cancel()
+        providerRuntimeCollapseTask?.cancel()
+        fileServicesObserver = nil
+        taskDiagnosticsObserver = nil
+        searchCredentialsObserver = nil
+        detailLoadGeneration &+= 1
+        liveConfigurationRequestID = UUID()
+        vodDataSource.retire(catalog: catalogRepository)
+        liveDataSource.contentRequests.cancelAll()
+        resetSearchState()
+        await cancelLoading()
+        cancelPendingPlaybackStart()
+        cancelLivePlaybackAttempts()
+        cancelEpisodeListRefresh()
+
+        jobs.forEach { $0?.cancel() }
+        liveEpgTask?.cancel()
+        hlsRecoveryTasks.values.forEach { $0.cancel() }
+        if ownsProxyServer {
+            await MPVPlayerEngine.vod.stopAndWaitForRetirement()
+            await MPVPlayerEngine.live.stopAndWaitForRetirement()
+        }
+        for job in jobs { await job?.value }
+        _ = await epgJob?.value
+        _ = await providerRuntimeRegistrationTask?.value
+        await vodDataSource.waitForRetirement()
+        await providerRuntimeBootstrap?.shutdown()
+        if historySaveTask != nil { try historyWriter.replace(with: historyItems) }
+        if ownsProxyServer {
+            await MPVPlayerEngine.restoreSystemHDRForTermination()
+            await NodeBundleRuntimeRegistry.shared.shutdown()
+            await ProxyServer.shared.stopAndWait()
+            siteHealthStore.flushPendingWrites()
+            searchEngine.flushPerformanceRecords()
+        }
+    }
+
+    /// File-open requests are confirmed in the startup shell, never replayed during recovery.
+    func openStartupFile(_ url: URL) async {
+        guard !isTerminating, url.isFileURL else { return }
+        await cancelLoading()
+        detailVod = nil
+        isDetailPresented = false
+        isPlayerPresented = true
+        var spec = PlaySpec(url: url.absoluteString, title: url.lastPathComponent)
+        spec.userOpenedLocalFile = url
+        await play(spec: spec)
     }
 
     func selectAppearanceTheme(_ id: AppAppearanceThemeID) {
         guard appearanceThemeID != id else { return }
         UserPreferences.shared.appearanceThemeID = id.rawValue
         appearanceThemeID = id
+        AndroidDialogThemePublisher.publish(appearancePalette)
+    }
+
+    private func startProviderRuntimeIfNeeded() {
+        guard !hasStartedProviderRuntime, !isTerminating else { return }
+        hasStartedProviderRuntime = true
+        let runtimeRegistrationTask: Task<Bool, Never>?
+        if let providerRuntimeRegistrationOverride {
+            runtimeRegistrationTask = Task { @MainActor in
+                guard !Task.isCancelled else { return false }
+                return await providerRuntimeRegistrationOverride()
+            }
+        } else if let providerRuntimeBootstrap {
+            runtimeRegistrationTask = Task { @MainActor [weak self] in
+                if await providerRuntimeBootstrap.manager.isDisabled() {
+                    self?.providerComponentsDisabled = true
+                    self?.providerRuntimeInstalled = []
+                    return false
+                }
+                guard !Task.isCancelled else { return false }
+                await providerRuntimeBootstrap.registerInstalledProviders()
+                let installed = await providerRuntimeBootstrap.installedManifests()
+                self?.providerRuntimeInstalled = installed
+                return !installed.isEmpty
+            }
+        } else {
+            runtimeRegistrationTask = nil
+            providerRuntimeHasFailure = providerRuntimeStartupOverride == nil
+            providerRuntimeStatus = L10n.text("当前构建未配置扩展支持")
+        }
+        providerRuntimeRegistrationTask = runtimeRegistrationTask
+        if let providerRuntimeStartupOverride {
+            providerRuntimeBusy = true
+            providerRuntimeStatus = L10n.text("正在检查播放扩展")
+            providerRuntimeStartupTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.finishLocalProviderRegistration(await runtimeRegistrationTask?.value ?? false)
+                guard !self.isTerminating, !Task.isCancelled else { return }
+                let installationID = self.beginProviderRuntimePresentation()
+                self.finishProviderRuntimeStartupOverride(await providerRuntimeStartupOverride(), installationID: installationID)
+            }
+        } else if let providerRuntimeBootstrap {
+            providerRuntimeBusy = true
+            providerRuntimeStatus = L10n.text("正在检查播放扩展")
+            let shouldDetectProviderProxy = self.shouldDetectProviderProxy
+            providerRuntimeStartupTask = Task { @MainActor [weak self] in
+                self?.finishLocalProviderRegistration(await runtimeRegistrationTask?.value ?? false)
+                guard !Task.isCancelled, self?.isTerminating == false else { return }
+                let installationID = self?.providerComponentsDisabled == false
+                    ? self?.beginProviderRuntimePresentation() : nil
+                if shouldDetectProviderProxy {
+                    let proxyPort = await ProxyDetector.shared.detectActiveProxy()
+                    await providerRuntimeBootstrap.configureDistributionProxy(port: proxyPort)
+                }
+                await self?.synchronizeProviderRuntime(using: providerRuntimeBootstrap, installationID: installationID)
+            }
+        }
+
+    }
+
+    func restoreDeferredStartup() {
+        guard startupRestorationDeferred, !isTerminating else { return }
+        startupRestorationDeferred = false
+        startProviderRuntimeIfNeeded()
+        fileServicesObserver = NotificationCenter.default.publisher(for: .fileServicesDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in Task { @MainActor [weak self] in self?.reloadFileServiceSites() } }
+        reloadFileServiceSites()
+        if !userPreferences.currentVodConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            retrySavedConfigStartup()
+        } else if !userPreferences.currentLiveConfigUrl.isEmpty {
+            initialConfigTask = Task { @MainActor [weak self] in
+                guard let self, !self.isTerminating else { return }
+                await self.loadLiveConfiguration(url: self.userPreferences.currentLiveConfigUrl)
+            }
+        }
     }
 
     private func finishLocalProviderRegistration(_ hasVerifiedPackages: Bool) {
+        guard !isTerminating else { return }
         guard !providerRuntimeRegistrationResolved else { return }
         providerRuntimeRegistrationResolved = true
         providerRuntimeLocalReady = hasVerifiedPackages
@@ -859,6 +1121,8 @@ final class AppState: ObservableObject {
     }
 
     private func waitForProviderRuntimeReadiness() async -> Bool {
+        guard !isTerminating else { return false }
+        startProviderRuntimeIfNeeded()
         let hasVerifiedPackages = await providerRuntimeRegistrationTask?.value ?? false
         finishLocalProviderRegistration(hasVerifiedPackages)
         if userPreferences.providerRuntimeInitialInstallCompleted && providerRuntimeLocalReady {
@@ -870,6 +1134,11 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func refreshProviderRuntimeCatalog() -> Task<Void, Never>? {
+        guard !isTerminating else { return nil }
+        if !hasStartedProviderRuntime {
+            startProviderRuntimeIfNeeded()
+            return providerRuntimeStartupTask
+        }
         if let providerRuntimeStartupOverride {
             if providerRuntimeBusy { return providerRuntimeStartupTask }
             providerRuntimeBusy = true
@@ -900,6 +1169,7 @@ final class AppState: ObservableObject {
     }
 
     func retrySavedConfigStartup() {
+        guard !isTerminating else { return }
         initialConfigTask?.cancel()
         invalidateConfigurationRefresh()
         let startupGeneration = configurationLoadGeneration
@@ -933,6 +1203,7 @@ final class AppState: ObservableObject {
     }
 
     func synchronizeProviderRuntime(using bootstrap: ProviderRuntimeBootstrap, installationID: UUID? = nil) async {
+        guard !isTerminating, !Task.isCancelled else { return }
         if await bootstrap.manager.isDisabled() {
             providerComponentsDisabled = true
             providerRuntimeInstalled = []
@@ -963,7 +1234,8 @@ final class AppState: ObservableObject {
                     await self?.applyProviderRuntimeProgress(progress, installationID: installationID)
                 }
             )
-            guard providerInstallation.sessionID == installationID else { return }
+            guard !isTerminating, !Task.isCancelled,
+                  providerInstallation.sessionID == installationID else { return }
             if !result.installedOrUpdated.isEmpty {
                 await invalidateContentCaches()
             }
@@ -1417,17 +1689,18 @@ final class AppState: ObservableObject {
     }
 
     func clearSiteHealthRecords() {
-        SiteHealthStore.shared.clear()
+        siteHealthStore.clear()
+        searchEngine.clearPerformanceRecords()
         siteHealthSummaries = [:]
     }
 
     func clearLiveLineHealthRecords() {
-        LiveLineHealthStore.shared.clear()
+        liveLineHealthStore.clear()
         liveLineHealthSummaries = []
     }
 
     func refreshLiveLineHealthSummaries() {
-        liveLineHealthSummaries = LiveLineHealthStore.shared.summaries()
+        liveLineHealthSummaries = liveLineHealthStore.summaries()
     }
 
     func reloadSourceHygieneRules() {
@@ -1509,8 +1782,9 @@ final class AppState: ObservableObject {
         errorCategory: AppFailureCategory? = nil,
         host: String = ""
     ) {
+        if DevelopmentAndroidAppAudit.current != nil { return }
         guard !siteKey.isEmpty else { return }
-        SiteHealthStore.shared.record(SiteHealthEvent(
+        siteHealthStore.record(SiteHealthEvent(
             eventType: eventType,
             siteKey: siteKey,
             siteName: siteName,
@@ -1519,7 +1793,7 @@ final class AppState: ObservableObject {
             errorCategory: errorCategory,
             host: host
         ))
-        siteHealthSummaries = SiteHealthStore.shared.summaries()
+        siteHealthSummaries = siteHealthStore.summaries()
     }
 
     private func recordLiveLineHealth(
@@ -1529,7 +1803,7 @@ final class AppState: ObservableObject {
         durationMs: Int
     ) {
         let groupName = selectedGroup?.name ?? sourceGroup(forLiveChannel: channel)?.name ?? ""
-        LiveLineHealthStore.shared.record(LiveLineHealthEvent(
+        liveLineHealthStore.record(LiveLineHealthEvent(
             liveName: activeLive?.name ?? "live",
             groupName: groupName,
             channelName: channel.name,
@@ -1589,7 +1863,7 @@ final class AppState: ObservableObject {
                     }
                 }
                 for await event in group {
-                    LiveLineHealthStore.shared.record(event)
+                    liveLineHealthStore.record(event)
                 }
             }
         }
@@ -1606,8 +1880,11 @@ final class AppState: ObservableObject {
         persistUserConfig: Bool = true,
         waitForProviderRuntime: Bool = true,
         restoreSavedConfiguration: Bool = false,
+        refreshCachedConfiguration: Bool = true,
+        includeLiveContent: Bool = true,
         preparedInput: ResolvedVodInput? = nil
     ) async {
+        guard !isTerminating, !Task.isCancelled else { return }
         invalidateConfigurationRefresh()
         let generation = configurationLoadGeneration
         if waitForProviderRuntime && !url.hasPrefix("netvplayer-xtream://") {
@@ -1632,6 +1909,7 @@ final class AppState: ObservableObject {
             self.externalSourceReports = []
             self.configAggregationSnapshot = ConfigAggregationSnapshot(rootURL: url)
             self.nativeReplacementSiteKeys = []
+            self.providerExecutionBackends = [:]
             self.currentVodInputFingerprint = nil
             self.currentVodInputKind = nil
             self.currentVodProviderID = nil
@@ -1656,6 +1934,16 @@ final class AppState: ObservableObject {
             guard !Task.isCancelled, generation == configurationLoadGeneration else { return }
             let canonicalURL = resolvedInput.canonicalURL
             self.currentVodInputFingerprint = resolvedInput.fingerprint
+            if DevelopmentAndroidLifecycleDiagnostics.isEnabled {
+                developmentAndroidConfigSHA256 = try? DevelopmentAndroidLifecycleDiagnostics.canonicalJSONSHA256(Data(resolvedInput.json.utf8))
+                var observation = DevelopmentAndroidLifecycleDiagnostics.Event(.configuration)
+                observation.inputSHA256 = developmentAndroidConfigSHA256
+                observation.configurationGeneration = generation
+                observation.catalogRevision = catalogCacheRevision
+                observation.operation = resolvedInput.usesCachedConfiguration ? "saved_snapshot" : "resolved_input"
+                observation.outcome = refreshCachedConfiguration ? "background_refresh_enabled" : "frozen_snapshot"
+                DevelopmentAndroidLifecycleDiagnostics.record(observation)
+            }
             self.currentVodInputKind = resolvedInput.kind
             self.currentVodProviderID = resolvedInput.providerID
             log("[DEBUG_LOGGER] 点播输入识别成功: \(resolvedInput.kind.rawValue), 长度: \(resolvedInput.json.count)")
@@ -1682,7 +1970,24 @@ final class AppState: ObservableObject {
                 userPreferences.currentVodConfigUrl = canonicalURL
             }
 
-            self.sites = VodConfig.shared.sites + fileServiceStore.load().services.map { $0.site() }
+            self.sites = VodConfig.shared.sites + fileServiceStore.load().services.map { $0.site() } + mediaServerStore.load().map { $0.site() }
+            if let androidProviderRegistrationOverride {
+                try await androidProviderRegistrationOverride(self.sites)
+            } else {
+                try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: self.sites,
+                    preference: activeProviderExecutionPreference, cloudCredentialProvider: { [weak self] drive in
+                    await MainActor.run {
+                        guard let preferences = self?.userPreferences else { return nil }
+                        switch drive {
+                        case .baidu: return preferences.baiduCookie
+                        case .ali: return preferences.aliRefreshToken
+                        case .quark: return preferences.quarkCookie
+                        case .uc: return preferences.ucCookie
+                        default: return nil
+                        }
+                    }
+                })
+            }
             if let providerID = resolvedInput.providerID {
                 let provider = NodeBundleSiteContentProvider(providerID: providerID)
                 for site in self.sites where site.isSpider {
@@ -1691,6 +1996,12 @@ final class AppState: ObservableObject {
                 }
                 log("[DEBUG_LOGGER] 已注册 Node .js.md5 Provider: \(providerID)，站点数: \(self.sites.filter(\.isSpider).count)")
             }
+            var backends: [String: ProviderExecutionBackend] = [:]
+            for site in self.sites {
+                backends[site.key] = await SpiderReplacementRegistry.shared.executionBackend(for: site)
+                guard !Task.isCancelled, generation == configurationLoadGeneration else { return }
+            }
+            self.providerExecutionBackends = backends
             self.configAggregationSnapshot = VodConfig.shared.aggregationSnapshot
             let replacementKeys = await replacementSiteKeys(for: self.sites)
             guard !Task.isCancelled, generation == configurationLoadGeneration else { return }
@@ -1719,7 +2030,7 @@ final class AppState: ObservableObject {
             self.preferredVodHomeSiteKey = sourceSelection.site?.key
             self.configNotice = VodConfig.shared.config?.notice.isEmpty == false ? VodConfig.shared.config?.notice : nil
             let sourceNotice = self.configNotice
-            if resolvedInput.usesCachedConfiguration {
+            if resolvedInput.usesCachedConfiguration && refreshCachedConfiguration {
                 self.configNotice = [
                     L10n.text("已恢复上次成功加载的站点配置，正在后台检查更新。"),
                     self.configNotice,
@@ -1736,23 +2047,25 @@ final class AppState: ObservableObject {
             
             // 独立直播配置优先；点播刷新不能把用户选中的直播源换回第一项。
             let liveConfigURL = userPreferences.currentLiveConfigUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !liveConfigURL.isEmpty, liveConfigURL != canonicalURL {
-                await loadLiveConfiguration(url: liveConfigURL)
-                guard !Task.isCancelled, generation == configurationLoadGeneration else { return }
-            } else {
-                self.lives = LiveConfig.shared.lives
-                if let account = userPreferences.xtreamConfigurations.first(where: { $0.url == canonicalURL }) {
-                    self.lives.append(Live(name: account.name, url: account.url))
+            if includeLiveContent {
+                if !liveConfigURL.isEmpty, liveConfigURL != canonicalURL {
+                    await loadLiveConfiguration(url: liveConfigURL)
+                    guard !Task.isCancelled, generation == configurationLoadGeneration else { return }
+                } else {
+                    self.lives = LiveConfig.shared.lives
+                    if let account = userPreferences.xtreamConfigurations.first(where: { $0.url == canonicalURL }) {
+                        self.lives.append(Live(name: account.name, url: account.url))
+                    }
+                    let selected = LiveConfigurationInput(sources: lives, initialGroups: nil)
+                        .selectedSource(preferredName: userPreferences.currentLiveName)
+                    resetLiveSource(selected)
                 }
-                let selected = LiveConfigurationInput(sources: lives, initialGroups: nil)
-                    .selectedSource(preferredName: userPreferences.currentLiveName)
-                resetLiveSource(selected)
             }
             
             self.configError = nil
             self.isConfigLoaded = true
             self.savedConfigStartupPhase = .ready
-            if resolvedInput.usesCachedConfiguration {
+            if resolvedInput.usesCachedConfiguration && refreshCachedConfiguration {
                 scheduleConfigurationRefresh(
                     url: canonicalURL, generation: generation,
                     sourceNotice: sourceNotice, previousError: resolvedInput.configurationRefreshError
@@ -1772,7 +2085,7 @@ final class AppState: ObservableObject {
                 await loadHomeContent()
             }
             guard !Task.isCancelled, generation == configurationLoadGeneration else { return }
-            if liveConfigURL.isEmpty || liveConfigURL == canonicalURL {
+            if includeLiveContent && (liveConfigURL.isEmpty || liveConfigURL == canonicalURL) {
                 await loadLiveContentAndResumeIfNeeded()
             }
         } catch {
@@ -1913,7 +2226,7 @@ final class AppState: ObservableObject {
             applicationLibraryState,
             with: applicationLibraryPersistence.loadConfigs()
         )
-        self.selectedSearchSiteKeys = UserPreferences.shared.defaultSearchSiteKeys
+        self.selectedSearchSiteKeys = userPreferences.defaultSearchSiteKeys
     }
 
     @discardableResult
@@ -1953,12 +2266,12 @@ final class AppState: ObservableObject {
         }
         let ordered = searchableKeys.filter { selected.contains($0) }
         selectedSearchSiteKeys = ordered.count == searchableKeys.count ? [] : ordered
-        UserPreferences.shared.defaultSearchSiteKeys = selectedSearchSiteKeys
+        userPreferences.defaultSearchSiteKeys = selectedSearchSiteKeys
     }
 
     func resetDefaultSearchSites() {
         selectedSearchSiteKeys = []
-        UserPreferences.shared.defaultSearchSiteKeys = []
+        userPreferences.defaultSearchSiteKeys = []
     }
 
     func exportBackup(to url: URL) throws {
@@ -1980,7 +2293,7 @@ final class AppState: ObservableObject {
         self.applicationLibraryState = applicationLibraryPersistence.loadApplicationLibrary()
         migrateLibraryIdentityIfPossible()
         self.trackItems = storageManager.loadTracks()
-        self.selectedSearchSiteKeys = UserPreferences.shared.defaultSearchSiteKeys
+        self.selectedSearchSiteKeys = userPreferences.defaultSearchSiteKeys
         selectAppearanceTheme(AppAppearanceDefaults.resolvedThemeID(
             storedRawValue: UserPreferences.shared.appearanceThemeID
         ))
@@ -1994,7 +2307,11 @@ final class AppState: ObservableObject {
                     corrections: FileServiceStore.shared.loadCorrections(), resetScanState: backup.fileServices != nil)
             } catch { FileServicesState.shared.error = error.localizedDescription }
             FileServicesState.shared.loadMedia()
-            await MediaLibraryScanner.shared.scanStaleLibraries()
+            if backup.fileServices != nil {
+                for library in FileServiceStore.shared.load().libraries {
+                    await MediaLibraryScanner.shared.start(library)
+                }
+            }
         }
         return backup
     }
@@ -2220,9 +2537,9 @@ final class AppState: ObservableObject {
 
     /// 切换当前激活的点播源
     func reloadFileServiceSites() {
-        let nativeSites = fileServiceStore.load().services.map { $0.site() }
-        sites = sites.filter { !$0.api.hasPrefix("netvplayer-files://") } + nativeSites
-        if activeSite == nil || (activeSite?.api.hasPrefix("netvplayer-files://") == true && !sites.contains(where: { $0.key == activeSite?.key })) {
+        let nativeSites = fileServiceStore.load().services.map { $0.site() } + mediaServerStore.load().map { $0.site() }
+        sites = sites.filter { !$0.api.hasPrefix("netvplayer-files://") && !$0.api.hasPrefix("netvplayer-server://") } + nativeSites
+        if activeSite == nil || ((activeSite?.api.hasPrefix("netvplayer-files://") == true || activeSite?.api.hasPrefix("netvplayer-server://") == true) && !sites.contains(where: { $0.key == activeSite?.key })) {
             if let site = sites.first(where: { $0.key == userPreferences.currentVodSiteKey }) ?? sites.first {
                 activateSite(site); preferredVodHomeSiteKey = site.key
             } else { activeSite = nil; currentSiteName = "选择线路" }
@@ -2248,6 +2565,10 @@ final class AppState: ObservableObject {
     }
 
     private func activateSite(_ site: Site) {
+        homeMetadataRefreshTask?.cancel()
+        homeMetadataRefreshTask = nil
+        homeRecommendationAvailability = nil
+        mediaServerFolderPath = []
         vodDataSource.retire(catalog: catalogRepository)
         cancelCloudAuthorization()
         cancelEpisodeListRefresh()
@@ -2271,7 +2592,6 @@ final class AppState: ObservableObject {
         guard selectedTab == .vodHome,
               !isDetailPresented,
               !isPlayerPresented,
-              !isDetailReturnPendingAfterPlayerExit,
               let preferredVodHomeSiteKey,
               activeSite?.key != preferredVodHomeSiteKey,
               let site = sites.first(where: { $0.key == preferredVodHomeSiteKey }) else {
@@ -2297,8 +2617,32 @@ final class AppState: ObservableObject {
             return
         }
         guard !Task.isCancelled else { return }
+        homeMetadataRefreshTask?.cancel()
+        homeMetadataRefreshTask = nil
+        mediaServerFolderPath = []
         catalogRequestSerial &+= 1
         let requestSerial = catalogRequestSerial
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
+        var observation = DevelopmentAndroidLifecycleDiagnostics.Event(.homeStart, siteKey: site.key)
+        observation.inputSHA256 = developmentAndroidConfigSHA256
+        observation.configurationGeneration = configurationLoadGeneration
+        observation.catalogRevision = catalogCacheRevision
+        observation.contentGeneration = contentCatalogState.generation
+        observation.requestSerial = requestSerial
+        observation.operation = forceRefresh ? "refresh" : "load"
+        DevelopmentAndroidLifecycleDiagnostics.record(observation)
+        observation.outcome = "discarded"
+        defer {
+            observation.phase = .homeFinish
+            observation.elapsedMS = max(0, (ProcessInfo.processInfo.systemUptime - diagnosticStart) * 1_000)
+            observation.contentGeneration = contentCatalogState.generation
+            if activeSite?.key == site.key, requestSerial == catalogRequestSerial {
+                observation.listItems = vods.count
+                observation.categories = categories.count
+                developmentAndroidHomeObservation = observation
+            }
+            DevelopmentAndroidLifecycleDiagnostics.record(observation)
+        }
         loadingCatalogCacheKey = nil
         isCatalogRefreshing = false
         let coordinator = vodDataSource
@@ -2318,20 +2662,28 @@ final class AppState: ObservableObject {
             let cached = await catalogRepository.lookup(cacheKey)
             guard requestSerial == catalogRequestSerial, activeSite?.key == site.key else { return }
             if let first = cached.pages.first {
-                contentCatalogState = ContentCatalogCore.restoreHome(
-                    contentCatalogState,
-                    payload: Self.catalogPayload(from: first)
-                )
-                displayedCatalogCacheKey = cacheKey
+                observation.phase = .homeCache
+                observation.outcome = String(describing: cached.freshness)
+                observation.listItems = first.list.count
+                observation.categories = first.types.count
+                DevelopmentAndroidLifecycleDiagnostics.record(observation)
+                let defaultCategory = applyHomeCatalog(first, cacheKey: cacheKey)
                 preserveExisting = true
                 vodError = nil
                 DiagnosticLog.write("[CATALOG_CACHE_HIT] kind=home freshness=\(cached.freshness)")
                 switch cached.freshness {
                 case .fresh:
+                    if let defaultCategory { await selectCategory(defaultCategory) }
                     return
                 case .stale:
-                    scheduleCatalogRefresh {
-                        await self.loadHomeContent(forceRefresh: true, invalidateCache: false)
+                    if let defaultCategory {
+                        // Keep category requests independent of the home metadata refresh.
+                        refreshOriginalHomeMetadata(site: site, cacheKey: cacheKey)
+                        await selectCategory(defaultCategory)
+                    } else {
+                        scheduleCatalogRefresh {
+                            await self.loadHomeContent(forceRefresh: true, invalidateCache: false)
+                        }
                     }
                     return
                 case .expired, .miss:
@@ -2366,6 +2718,7 @@ final class AppState: ObservableObject {
             if isCurrent {
                 self.vodError = site.unsupportedSourceMessage
             }
+            observation.outcome = "unsupported"
             log("[DEBUG_LOGGER] \(site.unsupportedSourceMessage)")
             return
         }
@@ -2383,25 +2736,27 @@ final class AppState: ObservableObject {
                   activeSite?.key == site.key,
                   requestSerial == catalogRequestSerial,
                   contentCatalogState.generation == generation else { return }
-            contentCatalogState = ContentCatalogCore.restoreHome(
-                contentCatalogState,
-                payload: Self.catalogPayload(from: result)
-            )
-            displayedCatalogCacheKey = cacheKey
+            let defaultCategory = applyHomeCatalog(result, cacheKey: cacheKey)
+            observation.outcome = "received"
+            observation.listItems = result.list.count
+            observation.categories = result.types.count
             log("[DEBUG_LOGGER] 首页加载成功! 分类数: \(result.types.count), 影片数: \(result.list.count)")
+            if let defaultCategory { await selectCategory(defaultCategory) }
         } catch {
             guard !Task.isCancelled,
                   requestSerial == catalogRequestSerial,
                   activeSite?.key == site.key,
                   contentCatalogState.generation == generation else { return }
             log("[DEBUG_LOGGER] 加载首页推荐发生异常: \(error)")
-            if let delay = Self.transientPreparationRetryDelayNanoseconds(
+            observation.outcome = preserveExisting ? "error_retained_content" : "error"
+            if allowsAutomaticVodPlaybackActions,
+               let delay = Self.transientPreparationRetryDelayNanoseconds(
                 for: error,
                 attempt: retryAttempt
             ) {
                 log("[CATALOG_LOAD_RETRY] attempt=\(retryAttempt + 1)")
                 try? await Task.sleep(nanoseconds: delay)
-                guard !Task.isCancelled,
+                guard !Task.isCancelled, allowsAutomaticVodPlaybackActions,
                       requestSerial == catalogRequestSerial,
                       activeSite?.key == site.key,
                       contentCatalogState.generation == generation else { return }
@@ -2435,13 +2790,53 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// FongMi inserts its home tab only when the merged home list has items.
+    private func applyHomeCatalog(_ result: Result, cacheKey: CatalogCacheBaseKey) -> VodClass? {
+        homeRecommendationAvailability = (cacheKey, !result.list.isEmpty)
+        contentCatalogState = ContentCatalogCore.restoreHome(
+            contentCatalogState,
+            payload: Self.catalogPayload(from: result)
+        )
+        displayedCatalogCacheKey = cacheKey
+        guard providerExecutionBackends[cacheKey.siteKey] == .androidOriginal,
+              result.list.isEmpty else { return nil }
+        return categories.first
+    }
+
+    private func refreshOriginalHomeMetadata(site: Site, cacheKey: CatalogCacheBaseKey) {
+        homeMetadataRefreshTask?.cancel()
+        let coordinator = vodDataSource
+        let sourceScope = vodScope(for: site)
+        homeMetadataRefreshTask = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            do {
+                let result = try await self.catalogRepository.result(for: cacheKey, page: 1, forceRefresh: true) {
+                    try await coordinator.home(site: site, scope: sourceScope)
+                }
+                guard !Task.isCancelled, self.activeSite?.key == site.key,
+                      self.catalogCacheRevision == cacheKey.revision else { return }
+                // A background home response must not replace the user's selected category or its list.
+                self.homeRecommendationAvailability = (cacheKey, !result.list.isEmpty)
+                self.categories = ContentCatalogCore.visibleCategories(from: result.types)
+                self.contentCatalogState.filtersByCategoryID = result.filters
+            } catch {
+                // Like other stale refreshes, retain the successful cached content on failure.
+            }
+        }
+    }
+
     /// 切换点播分类
     func selectCategory(
         _ category: VodClass,
         forceRefresh: Bool = false,
-        invalidateCache: Bool = true
+        invalidateCache: Bool = true,
+        preservingFolderPath: Bool = false,
+        preservingFilterSelection: Bool = false
     ) async {
         guard let site = activeSite, !Task.isCancelled else { return }
+        if !preservingFolderPath && !forceRefresh {
+            mediaServerFolderPath = site.api.hasPrefix("netvplayer-server://") ? [category] : []
+        }
         if !forceRefresh, selectedCategory?.typeId == category.typeId,
            let currentKey = loadingCatalogCacheKey ?? displayedCatalogCacheKey,
            currentKey.revision == catalogCacheRevision,
@@ -2449,7 +2844,7 @@ final class AppState: ObservableObject {
            currentKey.kind == .category(category.typeId) {
             return
         }
-        if site.isAllliveGuard, category.typeId == "search" {
+        if providerExecutionBackends[site.key] != .androidOriginal, site.isAllliveGuard, category.typeId == "search" {
             catalogRequestSerial &+= 1
             loadingCatalogCacheKey = nil
             isCatalogRefreshing = false
@@ -2458,7 +2853,7 @@ final class AppState: ObservableObject {
             self.selectedTab = .search
             return
         }
-        let transition = ContentCatalogCore.beginCategory(contentCatalogState, category: category)
+        let transition = ContentCatalogCore.beginCategory(contentCatalogState, category: category, preservingFilterSelection: preservingFilterSelection)
         await executeCategoryTransition(
             transition,
             site: site,
@@ -2578,8 +2973,26 @@ final class AppState: ObservableObject {
         catalogRequestSerial &+= 1
         let requestSerial = catalogRequestSerial
         loadingCatalogCacheKey = cacheKey
+        let diagnosticStart = ProcessInfo.processInfo.systemUptime
+        var observation = DevelopmentAndroidLifecycleDiagnostics.Event(.categoryStart, siteKey: site.key)
+        observation.categorySHA256 = DevelopmentAndroidLifecycleDiagnostics.sha256(Data(request.categoryID.utf8))
+        observation.requestSerial = requestSerial
+        observation.catalogRevision = catalogCacheRevision
+        observation.configurationGeneration = configurationLoadGeneration
+        observation.operation = forceRefresh ? "refresh" : "load"
+        DevelopmentAndroidLifecycleDiagnostics.record(observation)
+        observation.outcome = "discarded"
+        developmentAndroidCategoryObservation = nil
         defer {
             if requestSerial == catalogRequestSerial { loadingCatalogCacheKey = nil }
+            observation.phase = .categoryFinish
+            observation.elapsedMS = max(0, (ProcessInfo.processInfo.systemUptime - diagnosticStart) * 1_000)
+            observation.contentGeneration = contentCatalogState.generation
+            if activeSite?.key == site.key, requestSerial == catalogRequestSerial {
+                observation.listItems = vods.count
+                developmentAndroidCategoryObservation = observation
+            }
+            DevelopmentAndroidLifecycleDiagnostics.record(observation)
         }
         isCatalogRefreshing = false
         vodError = nil
@@ -2601,6 +3014,10 @@ final class AppState: ObservableObject {
                 )
                 displayedCatalogCacheKey = cacheKey
                 preserveExisting = true
+                observation.phase = .categoryCache
+                observation.outcome = "cache_\(cached.freshness)"
+                observation.androidCategoryPayload = cached.pages.first?.androidCategoryPayload
+                DevelopmentAndroidLifecycleDiagnostics.record(observation)
                 DiagnosticLog.write("[CATALOG_CACHE_HIT] kind=category freshness=\(cached.freshness) pages=\(cached.pages.count)")
                 switch cached.freshness {
                 case .fresh:
@@ -2635,6 +3052,7 @@ final class AppState: ObservableObject {
                 contentCatalogState = ContentCatalogCore.failCategory(contentCatalogState, request: request)
             }
             vodError = preserveExisting ? nil : site.unsupportedSourceMessage
+            observation.outcome = "unsupported"
             return
         }
 
@@ -2664,11 +3082,15 @@ final class AppState: ObservableObject {
                 payloads: (cached.pages.isEmpty ? [result] : cached.pages).map(Self.catalogPayload(from:))
             )
             displayedCatalogCacheKey = cacheKey
+            observation.outcome = result.list.isEmpty ? "empty" : "success"
+            observation.androidCategoryPayload = result.androidCategoryPayload
         } catch {
             let isCurrent = requestSerial == catalogRequestSerial
                 && activeSite?.key == site.key
                 && contentCatalogState.generation == generation
             guard isCurrent else { return }
+            observation.outcome = preserveExisting ? "error_retained_content" : "error"
+            observation.failure = DevelopmentAndroidLifecycleDiagnostics.Failure(error, stage: .operation)
             if !preserveExisting {
                 contentCatalogState = ContentCatalogCore.failCategory(contentCatalogState, request: request)
             }
@@ -2718,6 +3140,8 @@ final class AppState: ObservableObject {
     }
 
     private func invalidateContentCaches() async {
+        developmentAndroidCategoryObservation = nil
+        playerState.playbackSummaries.invalidate()
         invalidateNextEpisodePreload(reason: "content-cache-invalidated")
         vodDataSource.requests.cancelAll()
         catalogCacheRevision &+= 1
@@ -2726,6 +3150,8 @@ final class AppState: ObservableObject {
         loadingCatalogCacheKey = nil
         catalogRefreshTask?.cancel()
         catalogRefreshTask = nil
+        homeMetadataRefreshTask?.cancel()
+        homeMetadataRefreshTask = nil
         detailPrefetchTask?.cancel()
         detailPrefetchTask = nil
         detailLoadGeneration &+= 1
@@ -2739,11 +3165,20 @@ final class AppState: ObservableObject {
     }
 
     func didClearPerformanceCaches() {
+        developmentAndroidCategoryObservation = nil
+        playerState.playbackSummaries.invalidate()
         resetSearchState()
         Task { await searchEngine.invalidateSearchCache() }
         invalidateNextEpisodePreload(reason: "performance-cache-cleared")
         vodDataSource.requests.cancelAll()
         catalogCacheRevision &+= 1
+        if let homeRecommendationAvailability {
+            self.homeRecommendationAvailability = (
+                CatalogCacheBaseKey(revision: catalogCacheRevision,
+                                    siteKey: homeRecommendationAvailability.key.siteKey, kind: .home),
+                homeRecommendationAvailability.hasItems
+            )
+        }
         catalogRequestSerial &+= 1
         contentCatalogState.generation &+= 1
         contentCatalogState.isLoading = false
@@ -2754,6 +3189,8 @@ final class AppState: ObservableObject {
         loadingCatalogCacheKey = nil
         catalogRefreshTask?.cancel()
         catalogRefreshTask = nil
+        homeMetadataRefreshTask?.cancel()
+        homeMetadataRefreshTask = nil
         isCatalogRefreshing = false
         detailLoadGeneration &+= 1
         isDetailLoading = false
@@ -2762,18 +3199,60 @@ final class AppState: ObservableObject {
     }
 
     private static func catalogPayload(from result: Result) -> ContentCatalogPayload {
-        ContentCatalogPayload(
+        var payload = ContentCatalogPayload(
             types: result.types,
             vods: result.list,
             filters: result.filters,
             page: result.page,
             pageCount: result.pagecount
         )
+        if result.androidCategoryPayload != nil {
+            payload.originalCategoryPageCount = result.androidCategoryPayload == .object ? result.pagecount : 0
+        }
+        return payload
     }
 
     /// 打开首页/分类卡片。部分抓包源的卡片在 Android 端是搜索或二级分类入口。
     func openVodCard(_ vod: Vod) async {
         guard let site = activeSite else { return }
+        if providerExecutionBackends[site.key] == .androidOriginal {
+            if vod.isFolder {
+                cancelEpisodeListRefresh()
+                detailPrefetchTask?.cancel()
+                detailPrefetchTask = nil
+                detailLoadGeneration &+= 1
+                isDetailPresented = false
+                isDetailLoading = false
+                detailVod = nil
+                selectedTab = .vodHome
+                await selectCategory(VodClass(typeId: vod.vodId, typeName: vod.vodName, typeFlag: "1"), preservingFilterSelection: true)
+            } else if site.isIndex {
+                isDetailPresented = false
+                isDetailLoading = false
+                selectedTab = .search
+                await search(keyword: vod.vodName)
+            } else {
+                await selectVod(vod)
+            }
+            return
+        }
+        if let folder = VodCardRoutingPolicy.mediaServerFolderCategory(site: site, vod: vod) {
+            cancelEpisodeListRefresh()
+            detailPrefetchTask?.cancel()
+            detailPrefetchTask = nil
+            detailLoadGeneration &+= 1
+            isDetailPresented = false
+            detailVod = nil
+            selectedTab = .vodHome
+            if mediaServerFolderPath.isEmpty, let selectedCategory { mediaServerFolderPath = [selectedCategory] }
+            if let existing = mediaServerFolderPath.firstIndex(where: { $0.typeId == folder.typeId }) {
+                mediaServerFolderPath = Array(mediaServerFolderPath.prefix(existing + 1))
+            } else {
+                mediaServerFolderPath.append(folder)
+            }
+            await selectCategory(folder, preservingFolderPath: true)
+            return
+        }
         if let action = MyDriveConfigurationAction.decode(vodID: vod.vodId) {
             handleMyDriveConfigurationAction(action)
             return
@@ -2801,6 +3280,13 @@ final class AppState: ObservableObject {
             return
         }
         await selectVod(vod)
+    }
+
+    func openMediaServerAncestor(at index: Int) async {
+        guard mediaServerFolderPath.indices.contains(index), index < mediaServerFolderPath.count - 1 else { return }
+        let category = mediaServerFolderPath[index]
+        mediaServerFolderPath = Array(mediaServerFolderPath.prefix(index + 1))
+        await selectCategory(category, preservingFolderPath: true)
     }
 
     private func handleMyDriveConfigurationAction(_ action: MyDriveConfigurationAction) {
@@ -2835,7 +3321,7 @@ final class AppState: ObservableObject {
         selectedTab = .settings
     }
 
-    func feedbackSourceContext(for category: FeedbackCategory) async -> SourceReproductionContext {
+    func feedbackSourceContext(for _: FeedbackCategory) async -> SourceReproductionContext {
         let site = activeSite
         let installedManifests: [SignedProviderManifest]
         if providerRuntimeInstalled.isEmpty, let providerRuntimeBootstrap {
@@ -2878,6 +3364,8 @@ final class AppState: ObservableObject {
         guard settingsNavigationDestination == destination else { return }
         settingsNavigationDestination = nil
     }
+
+    func openTaskSettings() { settingsNavigationDestination = .dataSource; selectedTab = .settings }
 
     func cancelCloudCredentialClear() {
         cloudCredentialClearRequest = nil
@@ -2943,6 +3431,10 @@ final class AppState: ObservableObject {
         if activeSite?.key != site.key {
             activateSite(site)
         }
+        if vod.isFolder, await DevelopmentAndroidSiteProvider.isRegistered(site: site) {
+            await openVodCard(vod)
+            return
+        }
         await selectVod(vod)
     }
 
@@ -2982,6 +3474,10 @@ final class AppState: ObservableObject {
 
     /// 选中视频并加载详情
     func selectVod(_ vod: Vod, acknowledgeKeepUpdate: Bool = false) async {
+        if let site = activeSite, VodCardRoutingPolicy.mediaServerFolderCategory(site: site, vod: vod) != nil {
+            await openVodCard(vod)
+            return
+        }
         cancelCloudAuthorization()
         cancelEpisodeListRefresh()
         invalidateNextEpisodePreload(reason: "vod-changed")
@@ -2996,6 +3492,11 @@ final class AppState: ObservableObject {
             initialVod.siteKey = site.key
         }
         self.detailVod = initialVod
+        detailRequestOutcome = .loading
+        originalDetailRequest = nil
+        if providerExecutionBackends[site.key] == .androidOriginal {
+            originalDetailRequest = (site.key, vod.vodId)
+        }
         self.episodes = []
         self.playFlags = []
         self.selectedPlayFlag = ""
@@ -3036,6 +3537,7 @@ final class AppState: ObservableObject {
                 host: site.api
             )
             episodeListState = .incomplete
+            detailRequestOutcome = .failed
             print("[AppState] 加载详情失败: \(error)")
             return
         }
@@ -3087,6 +3589,7 @@ final class AppState: ObservableObject {
         let key = VodDetailCacheKey(revision: catalogCacheRevision, siteKey: site.key, vodID: vodID)
         let sites = sites
         episodeListState = .loading
+        detailRequestOutcome = .loading
         isDetailLoading = true
         let timeout = Task { @MainActor [weak self] in
             try? await Task.sleep(for: self?.episodeListRefreshTimeout ?? .seconds(12))
@@ -3129,7 +3632,10 @@ final class AppState: ObservableObject {
                         }
                         return
                     }
-                } catch { return }
+                } catch {
+                    if stillOwned() { self.detailRequestOutcome = .failed }
+                    return
+                }
             }
         }
         episodeListRefreshTask = refresh
@@ -3137,11 +3643,13 @@ final class AppState: ObservableObject {
     }
 
     private func applyDetailResult(_ result: Result, site: Site, acknowledgeKeepUpdate: Bool) {
+        detailRequestOutcome = result.list.isEmpty ? .empty : (isProvisionalDetailResult(result) ? .loading : .result)
         guard var detail = result.list.first else { episodeListState = .incomplete; return }
         episodeListState = isProvisionalDetailResult(result) ? .loading : .ready
         if detail.siteKey.isEmpty {
             detail.siteKey = site.key
         }
+        detail = VodDetailArtworkPolicy.preservingPoster(in: detail, from: detailVod, siteKey: site.key)
         self.detailVod = detail
         syncKeepRemarks(for: detail, acknowledge: acknowledgeKeepUpdate)
 
@@ -3158,6 +3666,12 @@ final class AppState: ObservableObject {
         detailPrefetchTask = nil
         guard hovering,
               let site,
+              // Original Android spiders may mutate shared state in detail().
+              // A Mac-only hover must not pre-run business code before a click.
+              !(activeProviderExecutionPreference == .androidPreferred && AndroidOriginalProviderPolicy.applies(to: site)),
+              !vod.isFolder,
+              site.allliveCategory(for: vod) == nil,
+              VodCardRoutingPolicy.mediaServerFolderCategory(site: site, vod: vod) == nil,
               site.key != Self.driveShareImportSiteKey,
               !vod.vodId.isEmpty else { return }
 
@@ -3234,12 +3748,18 @@ final class AppState: ObservableObject {
         }
         let episodeURL = spec.metadata["vod.episodeURL"] ?? spec.url
         if let exact = candidates.first(where: { $0.url == episodeURL }) { return exact }
+        if let reference = MediaServerReference(locator: episodeURL) {
+            return candidates.first { reference.matchesItem($0.url) }
+        }
         // A refreshed share token must not move playback into a namesake upload.
         if let reference = DriveFileReference.parse(episodeURL) {
             return candidates.first { episode in
                 guard let other = DriveFileReference.parse(episode.url) else { return false }
                 return other.provider == reference.provider && other.pwdID == reference.pwdID && other.fid == reference.fid
             }
+        }
+        if let identity = OriginalAndroidPlaybackIdentity.stableCloudSHA256(for: episodeURL) {
+            return candidates.first { OriginalAndroidPlaybackIdentity.stableCloudSHA256(for: $0.url) == identity }
         }
         if spec.metadata["vod.episodeSeriesID"] == nil,
            candidates.contains(where: { $0.series != nil }),
@@ -3300,7 +3820,8 @@ final class AppState: ObservableObject {
     }
 
     private func playbackPreloadKey(for targetEpisode: Episode) -> PlaybackPreloadKey? {
-        guard let site = activeSite,
+        guard allowsAutomaticVodPlaybackActions,
+              let site = activeSite,
               let spec = playerState.currentSpec,
               spec.metadata["playback.kind"] != "live" else { return nil }
         let currentEpisodeURL = PlaybackResumePolicy.episodeURL(for: spec)
@@ -3382,6 +3903,9 @@ final class AppState: ObservableObject {
         allowsMetadataEssentials: Bool,
         reusable: PreparedEpisodePlayback?
     ) async -> PreparedEpisodePlayback? {
+        // A queued prefetch may enter after a single-attempt audit disables automation.
+        guard !Task.isCancelled, playbackPreloadKey(for: episode) == key else { return nil }
+
         do {
             if var reusable, reusable.key == key {
                 if decision == .metadataAndMedia, reusable.decision < decision {
@@ -3398,6 +3922,9 @@ final class AppState: ObservableObject {
                                                          sites: sites, scope: vodScope(for: site))
             var retainedFileLease = false
             defer {
+                if !retainedFileLease, let server = result.mediaServer {
+                    Task { await MediaServerRuntime.shared.release(server.leaseID) }
+                }
                 if !retainedFileLease, let value = result.fileResourceLeaseID, let id = UUID(uuidString: value) {
                     Task { await FileServiceRuntime.shared.releasePlayback(leaseID: id) }
                 }
@@ -3415,7 +3942,7 @@ final class AppState: ObservableObject {
                     DiagnosticLog.write("[NEXT_PRELOAD] stage=deferred-selection candidates=\(playable.count)")
                     return nil
                 }
-                resolvedResult = resolvedPlaybackCandidateResult(result, candidate: candidate)
+                resolvedResult = try resolvedPlaybackCandidateResult(result, candidate: candidate)
             }
 
             guard let spec = try await prepareResolvedPlayback(
@@ -3471,6 +3998,8 @@ final class AppState: ObservableObject {
         _ prepared: PreparedEpisodePlayback
     ) async -> PreparedEpisodePlayback {
         var warmed = prepared
+        let readSession = playerState.currentSpec?.readSession
+        let readGeneration = readSession?.generation
         guard !Task.isCancelled,
               playbackPreloadKey(for: prepared.episode) == prepared.key else {
             return warmed
@@ -3479,7 +4008,8 @@ final class AppState: ObservableObject {
         nextEpisodeEssentialsTask = nil
         essentialsTask?.cancel()
         await essentialsTask?.value
-        guard !Task.isCancelled, playbackPreloadKey(for: prepared.episode) == prepared.key else { return warmed }
+        guard !Task.isCancelled, playbackPreloadKey(for: prepared.episode) == prepared.key,
+              readGeneration.map({ readSession?.isCurrent($0) == true }) ?? true else { return warmed }
 
         let activeStreamURL = playerState.currentSpec?.url
         let playbackConcurrency = playerState.currentSpec.flatMap {
@@ -3507,18 +4037,23 @@ final class AppState: ObservableObject {
         }
         if let snapshot = try? await ProxyServer.shared.prefetchRemoteStream(
             forLocalURL: prepared.spec.url,
-            byteLimit: 16 * 1024 * 1024
+            byteLimit: 16 * 1024 * 1024,
+            session: readSession,
+            mediaIdentity: PlaybackMediaIdentity.resolved(for: prepared.spec)
         ), snapshot.cachedBytes > 0 {
             warmed.decision = .metadataAndMedia
             warmed.mediaBytes = min(snapshot.cachedBytes, 16 * 1024 * 1024)
             return warmed
         }
+        guard !Task.isCancelled, readGeneration.map({ readSession?.isCurrent($0) == true }) ?? true else { return warmed }
         if prepared.spec.metadata[LiveHLSRelayPolicy.transportMetadataKey]
             == LiveHLSRelayPolicy.localRelayTransport,
            let result = try? await ProxyPlaybackHandler.prefetchStaticHLS(
             localURL: prepared.spec.url,
             byteLimit: 16 * 1024 * 1024,
-            maxSegments: 2
+            maxSegments: 2,
+            session: readSession,
+            mediaIdentity: PlaybackMediaIdentity.resolved(for: prepared.spec)
         ) {
             warmed.decision = result.mediaSegments > 0 ? .metadataAndMedia : .metadataOnly
             warmed.mediaBytes = Int64(result.cachedBytes)
@@ -3532,11 +4067,16 @@ final class AppState: ObservableObject {
               ThunderNextEpisodeCache.supports(prepared.spec), nextEpisodeThunderKey != prepared.key else { return }
         nextEpisodeThunderTask?.cancel()
         nextEpisodeThunderKey = prepared.key
+        let readSession = playerState.currentSpec?.readSession
+        let readGeneration = readSession?.generation
         nextEpisodeThunderTask = Task { @MainActor [weak self] in
             // Let the ordinary preload publish first; SDK work never delays it.
             await Task.yield()
-            guard let self, !Task.isCancelled, self.nextEpisodePreloadCoordinator.currentKey == prepared.key else { return }
-            guard let localSpec = await ThunderNextEpisodeCache.shared.prepare(prepared.spec, while: { @MainActor [weak self] in
+            guard let self, !Task.isCancelled, self.nextEpisodePreloadCoordinator.currentKey == prepared.key,
+                  readGeneration.map({ readSession?.isCurrent($0) == true }) ?? true else { return }
+            var source = prepared.spec
+            source.readSession = readSession
+            guard let localSpec = await ThunderNextEpisodeCache.shared.prepare(source, while: { @MainActor [weak self] in
                 self?.nextEpisodePreloadCoordinator.currentKey == prepared.key
             }) else { return }
             let upgraded = PreparedEpisodePlayback(key: prepared.key, site: prepared.site, episode: prepared.episode,
@@ -3552,12 +4092,14 @@ final class AppState: ObservableObject {
 
     private func startMetadataEssentialsPrewarm(_ spec: PlaySpec) {
         nextEpisodeEssentialsTask?.cancel()
+        let readSession = playerState.currentSpec?.readSession
+        let readGeneration = readSession?.generation
         let activeURL = playerState.currentSpec?.url
         let playbackConcurrency = playerState.currentSpec.flatMap {
             LiveHLSRelayPolicy.playbackConcurrencyDuringPreload(for: $0, essentialsOnly: true)
         }
         nextEpisodeEssentialsTask = Task {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, readGeneration.map({ readSession?.isCurrent($0) == true }) ?? true else { return }
             let previousConcurrency = activeURL.flatMap {
                 guard let playbackConcurrency else { return nil as Int? }
                 return ProxyServer.shared.setRemoteStreamParallelConcurrencyLimit(forLocalURL: $0, limit: playbackConcurrency)
@@ -3573,7 +4115,9 @@ final class AppState: ObservableObject {
             let snapshot = try? await ProxyServer.shared.prefetchRemoteStream(
                 forLocalURL: spec.url,
                 byteLimit: 3 * 1024 * 1024,
-                mode: .essentials
+                mode: .essentials,
+                session: readSession,
+                mediaIdentity: PlaybackMediaIdentity.resolved(for: spec)
             )
             DiagnosticLog.write(
                 "[NEXT_PRELOAD] stage=essentials-ready bytes=\(snapshot?.cachedBytes ?? 0)"
@@ -3645,6 +4189,13 @@ final class AppState: ObservableObject {
 
     /// 取消当前的视频加载/解析
     func cancelLoading() async {
+        let site = activeSite
+        cancelPlaybackPreparation()
+        if let site { await DevelopmentAndroidSiteProvider.cancelPlaybackIfEnabled(site: site) }
+    }
+
+    private func cancelPlaybackPreparation() {
+        cancelPendingHostMagnet()
         pendingAutoAdvanceID = nil
         episodePreparation = nil
         cancelCloudAuthorization()
@@ -3722,16 +4273,24 @@ final class AppState: ObservableObject {
         preparationRetryAttempt: Int = 0,
         authorizationOrigin: PlaybackAuthorizationOrigin? = nil,
         expectedPlaybackOrigin: PlaybackAuthorizationOrigin? = nil,
-        restartFromBeginning: Bool = false
+        restartFromBeginning: Bool = false,
+        resumeMagnetFile: MagnetFileIdentity? = nil,
+        startupStartedAt: ContinuousClock.Instant? = nil
     ) async {
+        let transitionStartedAt = startupStartedAt ?? ContinuousClock.now
+        let originBeforeCleanup = playbackAuthorizationOrigin
+        await waitForPlayerDismissalCleanup()
+        guard originBeforeCleanup == playbackAuthorizationOrigin, !Task.isCancelled else { return }
         guard (authorizationOrigin ?? expectedPlaybackOrigin) == nil || (authorizationOrigin ?? expectedPlaybackOrigin) == playbackAuthorizationOrigin,
               !Task.isCancelled else { return }
         guard let site = activeSite else { return }
+        cancelPendingHostMagnet()
+        playbackPreparationTimedOut = false
         let targetLine = playbackLine(for: episode)
         if targetLine != selectedPlayFlag { selectPlayFlag(targetLine) }
         if !automaticSelection { pendingAutoAdvanceID = nil }
         let sourceScope = vodScope(for: site)
-        if VodPlaybackAvailabilityPolicy.needsMagnetExpansion(episode, site: site) {
+        if providerExecutionBackends[site.key] != .androidOriginal, VodPlaybackAvailabilityPolicy.needsMagnetExpansion(episode, site: site) {
             await expandMagnetEpisode(episode, site: site, automaticSelection: automaticSelection)
             return
         }
@@ -3744,7 +4303,6 @@ final class AppState: ObservableObject {
         defer {
             if episodePreparation?.id == preparation.id { episodePreparation = nil }
         }
-        let transitionStartedAt = ContinuousClock.now
         let preloadKey = playbackPreloadKey(for: episode)
         let preparedPlayback: PreparedEpisodePlayback?
         if !restartFromBeginning, authorizationOrigin == nil, verificationResult == nil,
@@ -3859,15 +4417,30 @@ final class AppState: ObservableObject {
                 )
             }
             // 调用 SiteApi 抓取该剧集对应的播放流地址
-            let result = try await vodDataSource.playback(site: site, flag: self.selectedPlayFlag, id: episode.url,
+            var result = try await vodDataSource.playback(site: site, flag: self.selectedPlayFlag, id: episode.url,
                                                              sites: self.sites, scope: sourceScope)
             var transferredFileLease = false
             defer {
+                if !transferredFileLease, let server = result.mediaServer {
+                    Task { await MediaServerRuntime.shared.release(server.leaseID) }
+                }
                 if !transferredFileLease, let value = result.fileResourceLeaseID, let id = UUID(uuidString: value) {
                     Task { await FileServiceRuntime.shared.releasePlayback(leaseID: id) }
                 }
             }
             try Task.checkCancellation()
+            guard playbackSessionState.generation == generation else { return }
+            if HostMagnetPlaybackResolver.needsResolution(result) {
+                let history = currentDetailHistory()
+                let exactHistory = history.flatMap { record -> History? in
+                    let key = HistoryPersistencePolicy.episodeKey(siteKey: site.key, vodId: record.vodId,
+                        vodFlag: selectedPlayFlag, episodeURL: episode.url)
+                    return record.episodeKey == key ? record : nil
+                }
+                let file = !restartFromBeginning && (resumePosition ?? 0) > 0
+                    ? (resumeMagnetFile ?? exactHistory?.magnet) : nil
+                result = try await prepareHostMagnet(result, resumeFile: file, generation: generation)
+            }
             recordPlaybackStartupStage("player-content", generation: generation)
             
             self.log("[PLAY_EPISODE] SiteApi 返回 url: \(redactedPlaybackURL(result.url)), needParse: \(result.needParse)")
@@ -3889,6 +4462,7 @@ final class AppState: ObservableObject {
             try await executePlaybackSessionCommand(transition.command)
             transferredFileLease = true
         } catch {
+            releasePendingHostMagnet(generation: generation)
             let isCurrent = playbackSessionState.generation == generation
             if let preparedPlayback {
                 discardPreparedPreload(preparedPlayback, reason: "preload-start-failed")
@@ -3898,15 +4472,24 @@ final class AppState: ObservableObject {
                 _ = finishPlaybackStartupTrace(stage: "cancelled", generation: generation)
                 return
             }
-            if isCurrent,
+            if isCurrent {
+                if let processError = error as? ProviderProcessError, case .timedOut = processError {
+                    playbackPreparationTimedOut = true
+                } else {
+                    let failure = error as NSError
+                    playbackPreparationTimedOut = failure.domain == NSURLErrorDomain
+                        && failure.code == URLError.timedOut.rawValue
+                }
+            }
+            if isCurrent, allowsAutomaticVodPlaybackActions,
                let delay = Self.transientPreparationRetryDelayNanoseconds(
                    for: error,
                    attempt: preparationRetryAttempt
                ) {
-                log("[PLAYBACK_PREPARE_RETRY] attempt=\(preparationRetryAttempt + 1)")
+                log("[PLAYBACK_PREPARE_RETRY] attempt=\(preparationRetryAttempt + 1) errorType=\(String(describing: type(of: error)))")
                 recordPlaybackStartupStage("prepare-retry", generation: generation)
                 try? await Task.sleep(nanoseconds: delay)
-                guard !Task.isCancelled,
+                guard !Task.isCancelled, allowsAutomaticVodPlaybackActions,
                       playbackSessionState.generation == generation else { return }
                 await playEpisode(
                     episode,
@@ -3916,7 +4499,9 @@ final class AppState: ObservableObject {
                     lineFallbackApplied: lineFallbackApplied,
                     verificationResult: verificationResult,
                     preparationRetryAttempt: preparationRetryAttempt + 1,
-                    restartFromBeginning: restartFromBeginning
+                    restartFromBeginning: restartFromBeginning,
+                    resumeMagnetFile: resumeMagnetFile,
+                    startupStartedAt: transitionStartedAt
                 )
                 return
             }
@@ -4005,6 +4590,7 @@ final class AppState: ObservableObject {
         do {
             try await executePlaybackSessionCommand(transition.command)
         } catch {
+            releasePendingHostMagnet(generation: generation)
             let isCurrent = playbackSessionState.generation == generation
             playbackSessionState = PlaybackSessionCore.fail(
                 playbackSessionState,
@@ -4037,6 +4623,7 @@ final class AppState: ObservableObject {
 
     func dismissPlaybackSelection() {
         let generation = playbackSessionState.selection?.generation
+        if let generation { releasePendingHostMagnet(generation: generation) }
         playbackSessionState = PlaybackSessionCore.dismissSelection(playbackSessionState)
         if let generation {
             _ = finishPlaybackStartupTrace(stage: "selection-dismissed", generation: generation)
@@ -4045,6 +4632,35 @@ final class AppState: ObservableObject {
 
     func preferredPlaybackCandidateID(for _: PlaybackSelectionRequest) -> String? {
         nil
+    }
+
+    private func prepareHostMagnet(_ result: Result, resumeFile: MagnetFileIdentity?, generation: UInt64) async throws -> Result {
+        let resolver = hostMagnetResolver
+        let task = Task { try await resolver.prepare(result, resumeFile: resumeFile) }
+        hostMagnetPreparation = (generation, task)
+        defer { if hostMagnetPreparation?.generation == generation { hostMagnetPreparation = nil } }
+        let prepared = try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: { task.cancel() }
+        guard !Task.isCancelled, !task.isCancelled, playbackSessionState.generation == generation else {
+            if let host = prepared.hostMagnet { await resolver.release(host.leaseID) }
+            throw CancellationError()
+        }
+        if let host = prepared.hostMagnet { pendingHostMagnet = (generation, host) }
+        return prepared
+    }
+
+    private func cancelPendingHostMagnet() {
+        hostMagnetPreparation?.task.cancel()
+        hostMagnetPreparation = nil
+        if let generation = pendingHostMagnet?.generation { releasePendingHostMagnet(generation: generation) }
+    }
+
+    private func releasePendingHostMagnet(generation: UInt64) {
+        guard let pending = pendingHostMagnet, pending.generation == generation else { return }
+        pendingHostMagnet = nil
+        let resolver = hostMagnetResolver
+        Task { await resolver.release(pending.playback.leaseID) }
     }
 
     private func executePlaybackSessionCommand(
@@ -4056,7 +4672,7 @@ final class AppState: ObservableObject {
             case .none:
                 return
             case let .resolveCandidate(request, candidate, _):
-                let resolved = resolvedPlaybackCandidateResult(
+                let resolved = try resolvedPlaybackCandidateResult(
                     request.result,
                     candidate: candidate
                 )
@@ -4069,6 +4685,7 @@ final class AppState: ObservableObject {
                 guard transition.failure == nil else { return }
                 command = transition.command
             case let .startResolved(intent, result):
+                defer { releasePendingHostMagnet(generation: intent.generation) }
                 guard playbackSessionState.generation == intent.generation else { return }
                 let didStart = try await startResolvedPlayback(
                     result: result,
@@ -4102,9 +4719,17 @@ final class AppState: ObservableObject {
     private func resolvedPlaybackCandidateResult(
         _ result: Result,
         candidate: PlaybackCandidate
-    ) -> Result {
+    ) throws -> Result {
         var resolved = result
+        if let host = result.hostMagnet {
+            guard let selected = host.selecting(candidate), let file = selected.selectedFile else {
+                throw PlaybackSessionFailure.invalidCandidate
+            }
+            resolved.hostMagnet = selected
+            resolved.contentLength = file.identity.length
+        }
         resolved.url = candidate.url
+        resolved.externalAudioURL = candidate.externalAudioURL ?? result.externalAudioURL
         resolved.playUrl = ""
         resolved.parse = 0
         resolved.header = candidate.headers
@@ -4158,6 +4783,9 @@ final class AppState: ObservableObject {
     ) async throws -> PlaySpec? {
             var transferredFileLease = false
             defer {
+                if !transferredFileLease, let server = result.mediaServer {
+                    Task { await MediaServerRuntime.shared.release(server.leaseID) }
+                }
                 if !transferredFileLease, let value = result.fileResourceLeaseID, let id = UUID(uuidString: value) {
                     Task { await FileServiceRuntime.shared.releasePlayback(leaseID: id) }
                 }
@@ -4180,10 +4808,18 @@ final class AppState: ObservableObject {
                 artworkHeaders: site.header,
                 drm: result.drm,
                 subs: result.subs,
+                providerDanmaku: result.danmaku,
                 title: "\(vodName) - \(episode.name)",
                 flag: playFlag,
                 siteKey: site.key
             )
+            if let request = originalDetailRequest, request.siteKey == site.key, detailVod?.vodId == vodID {
+                finalSpec.metadata["vod.originalDetailRequestID"] = request.id
+                finalSpec.metadata["vod.originalEpisodeIdentitySHA256"] = OriginalAndroidPlaybackIdentity.episodeSHA256(for: episode.url)
+            }
+            if providerExecutionBackends[site.key] == .androidOriginal {
+                finalSpec.metadata["android.originalAttachments"] = "true"
+            }
             finalSpec.metadata["library.sourceFingerprint"] = librarySourceFingerprint(siteKey: site.key)
             finalSpec.metadata["library.configId"] = String(currentLibraryConfiguration?.id ?? 0)
             finalSpec.metadata["vod.name"] = vodName
@@ -4196,6 +4832,17 @@ final class AppState: ObservableObject {
             finalSpec.metadata["vod.episodeName"] = episode.name
             finalSpec.metadata["vod.episodeSeriesID"] = DriveEpisodeSeries.source(for: episode)?.id
             if let leaseID = result.fileResourceLeaseID { finalSpec.metadata["files.leaseID"] = leaseID }
+            finalSpec.mediaServer = result.mediaServer
+            finalSpec.disc = result.disc
+            finalSpec.hostMagnet = result.hostMagnet
+            if let file = result.hostMagnet?.selectedFile { finalSpec.mediaIdentity = file.identity.mediaIdentity }
+            if let disc = result.disc {
+                finalSpec.mediaIdentity = disc.selection.mediaIdentity
+                if let resume = currentDetailHistory()?.disc, resume.selection == disc.selection {
+                    if let audio = resume.audioTrackID { finalSpec.mpvOptions["aid"] = audio }
+                    if let subtitle = resume.subtitleTrackID { finalSpec.mpvOptions["sid"] = subtitle }
+                }
+            }
             finalSpec.metadata["playback.sessionGeneration"] = String(sessionGeneration)
             if enforcesSessionGeneration, vodLineFallbackGeneration == sessionGeneration {
                 finalSpec.metadata[VodLineFallbackPolicy.appliedMetadataKey] = "true"
@@ -4206,10 +4853,15 @@ final class AppState: ObservableObject {
             }
 
             var resolveResult = result
-            var sourceResolvedDirectMedia = result.playbackCandidates.contains {
-                $0.isPlayable && $0.url == finalSpec.url
+            let sourceURL = finalSpec.url
+            defer { refreshDriveTaskSummaries() }
+            let sourceResult = try await DriveTransferContext.$current.withValue(driveTransferContext()) {
+                try await DriveTransferCoordinator.$current.withValue(driveTransferCoordinator) {
+                    try await DriveRequestRecovery.withBudget(background: !enforcesSessionGeneration) {
+                        try await SourceManager.shared.fetchResult(url: sourceURL)
+                    }
+                }
             }
-            let sourceResult = try await SourceManager.shared.fetchResult(url: finalSpec.url)
             try Task.checkCancellation()
             guard !enforcesSessionGeneration || playbackSessionState.generation == sessionGeneration else { return nil }
             recordPlaybackStartupStage("source-resolve", generation: sessionGeneration)
@@ -4238,12 +4890,28 @@ final class AppState: ObservableObject {
                 self.log("[PLAY_EPISODE] Source 提供播放元数据: \(sourceResult.metadata.keys.sorted())")
             }
             finalSpec.drivePlaybackPlan = sourceResult.drivePlaybackPlan
-            sourceResolvedDirectMedia = sourceResult.isDirectMedia
+            var sourceResolvedDirectMedia = PlaybackProxyPolicy.sourceConfirmsDirectMedia(
+                for: result,
+                originalAndroidProvider: providerExecutionBackends[site.key] == .androidOriginal,
+                resolvedURL: sourceResult.url,
+                sourceIsDirectMedia: sourceResult.isDirectMedia,
+                sourceNeedsParse: sourceResult.needParse
+            )
             if sourceResult.needParse {
                 resolveResult.parse = 1
                 resolveResult.url = finalSpec.url
             }
             
+            // Carry the current original Spider and frozen configuration rules
+            // into both explicit parsing and the automatic page sniff path.
+            var webPolicy: WebMediaPolicy?
+            if result.needParse || sourceResult.needParse || PlaybackProxyPolicy.shouldAttemptWebSniff(
+                for: finalSpec, sourceResolvedDirectMedia: sourceResolvedDirectMedia
+            ) {
+                let originalSpider = await SpiderReplacementRegistry.shared.nativeProvider(for: site) as? DevelopmentAndroidSiteProvider
+                webPolicy = try await originalSpider?.webMediaPolicy(site: site, rules: VodConfig.shared.rules)
+            }
+
             // 判断是否需要二次解析/网页嗅探
             if result.needParse || sourceResult.needParse {
                 if resolveResult.url.isEmpty {
@@ -4251,7 +4919,7 @@ final class AppState: ObservableObject {
                 }
                 let parseConfig = VodConfig.shared.parses.first { $0.name == result.jxFrom } ?? VodConfig.shared.parses.first
                 self.log("[PLAY_EPISODE] 正在进行二次解析, 目标: \(redactedPlaybackURL(resolveResult.url))")
-                let parsedSpec = await ParseEngine.shared.resolve(result: resolveResult, parse: parseConfig)
+                let parsedSpec = await ParseEngine.shared.resolve(result: resolveResult, parse: parseConfig, webPolicy: webPolicy)
                 try Task.checkCancellation()
                 guard !enforcesSessionGeneration || playbackSessionState.generation == sessionGeneration else { return nil }
                 if parsedSpec.url == resolveResult.playUrl + resolveResult.url,
@@ -4259,6 +4927,11 @@ final class AppState: ObservableObject {
                     throw failure
                 }
                 finalSpec = finalSpec.merging(parsedSpec)
+                // A successful browser result may have no file extension. Do
+                // not load that media as another page in the automatic pass.
+                if parsedSpec.headerPolicy == .replace && parsedSpec.url != resolveResult.playUrl + resolveResult.url {
+                    sourceResolvedDirectMedia = true
+                }
                 recordPlaybackStartupStage("secondary-parse", generation: sessionGeneration)
             }
             
@@ -4272,7 +4945,7 @@ final class AppState: ObservableObject {
                 var resolveResult = result
                 resolveResult.url = sniffBaseURL
                 let parseConfig = VodConfig.shared.parses.first ?? Parse(name: L10n.text("默认嗅探"), type: 0)
-                let sniffedSpec = await ParseEngine.shared.resolve(result: resolveResult, parse: parseConfig)
+                let sniffedSpec = await ParseEngine.shared.resolve(result: resolveResult, parse: parseConfig, webPolicy: webPolicy)
                 try Task.checkCancellation()
                 guard !enforcesSessionGeneration || playbackSessionState.generation == sessionGeneration else { return nil }
                 if sniffedSpec.url == resolveResult.playUrl + resolveResult.url,
@@ -4297,6 +4970,8 @@ final class AppState: ObservableObject {
             if sourceResolvedDirectMedia {
                 self.log("[PLAY_EPISODE] Source 已解析为直连媒体，跳过网页嗅探")
             }
+            // The proxy layer must retain the same confirmed media decision as the parser.
+            finalSpec.metadata[PlaybackProxyPolicy.sourceResolvedDirectMediaMetadataKey] = sourceResolvedDirectMedia ? "true" : nil
             
             // Prepare the candidate without replacing the active video's route controller.
             finalSpec = DrivePlaybackRoutePolicy.preparedSpec(finalSpec)
@@ -4335,13 +5010,17 @@ final class AppState: ObservableObject {
     private func commitPreparedPlayback(
         _ preparedSpec: PlaySpec,
         episode: Episode,
-        site: Site,
+        site _: Site,
         resumePosition: Int64?,
         resumeDuration: Int64?,
         sessionGeneration: UInt64
     ) async throws -> Bool {
             guard playbackSessionState.generation == sessionGeneration else { return false }
             var finalSpec = preparedSpec
+            let serverResume = preparedSpec.mediaServer.flatMap { $0.resumeSeconds > 0 ? Int64($0.resumeSeconds * 1000) : nil }
+            let canResume = preparedSpec.hostMagnet.map(\.canResumeSelectedFile) ?? true
+            let resumePosition = canResume ? (resumePosition ?? (playbackSessionState.intent?.restartFromBeginning == true ? 0 : serverResume)) : 0
+            let resumeDuration = canResume ? resumeDuration : 0
             finalSpec.metadata["playback.sessionGeneration"] = String(sessionGeneration)
             finalSpec.metadata["playback.sourceFingerprint"] = playbackAuthorizationOrigin.sourceFingerprint
             if requiresBiliPlaybackMaterialization(finalSpec) {
@@ -4374,7 +5053,8 @@ final class AppState: ObservableObject {
                     flag: self.selectedPlayFlag,
                     episode: episode,
                     position: resumePosition ?? 0,
-                    duration: resumeDuration ?? 0
+                    duration: resumeDuration ?? 0,
+                    magnet: finalSpec.hostMagnet?.selectedFile?.identity
                 )
             }
             
@@ -4387,10 +5067,14 @@ final class AppState: ObservableObject {
                 openingSkipSeconds: playbackSessionState.intent?.restartFromBeginning == true ? 0 : skipSettings.openingSeconds
             )
             playerState.endDisposition = nil
+            finalSpec.playbackSummaryIdentity = playbackSummaryIdentity(
+                vodID: finalSpec.metadata["vod.id"] ?? "", line: finalSpec.flag, episodeURL: episode.url)
+            releaseLocalStreamRelayIfNeeded(spec: playerState.currentSpec, replacingWith: finalSpec, reason: "episode-replaced")
             MPVPlayerEngine.vod.speed = UserPreferences.shared.defaultPlaybackSpeed
             MPVPlayerEngine.vod.stop()
             recordPlaybackStartupStage("mpv-submit", generation: sessionGeneration)
             await play(spec: finalSpec)
+            if pendingHostMagnet?.playback.leaseID == finalSpec.hostMagnet?.leaseID { pendingHostMagnet = nil }
             return true
     }
 
@@ -4433,11 +5117,25 @@ final class AppState: ObservableObject {
         episode: Episode,
         preparationRetryAttempt: Int = 0
     ) {
-        let isSourceFailure = error is DriveEngineError || error is PlaybackInteractionRequiredError
+        if TaskDiagnosticIssue.isCancellation(error) || { if case DriveTaskRecoveryError.cancelled = error { return true }; return false }() {
+            clearPlaybackError()
+            return
+        }
+        playbackTaskAction = UserFacingErrorPresenter.playbackTaskAction(for: error)
+        taskRetryEpisode = episode
+        taskRetryOrigin = playbackAuthorizationOrigin
+        let isSourceFailure = error is DriveEngineError || error is DriveServiceFailure || error is PlaybackInteractionRequiredError
         lastFeedbackFailureStage = isSourceFailure ? "Source.resolve" : "Player.prepare"
         lastFeedbackFailureCategory = isSourceFailure ? .source : .player
         playbackErrorMessage = UserFacingErrorPresenter.message(for: error, context: .playback)
         playbackErrorAuthProvider = nil
+
+        if let failure = error as? DriveServiceFailure, failure.reason == .credentialExpired {
+            playbackErrorAuthProvider = failure.provider
+            pendingAuthEpisode = episode
+            isPlaybackErrorPresented = true
+            return
+        }
 
         if let interactionError = error as? PlaybackInteractionRequiredError {
             playbackVerificationRequest = PlaybackVerificationRequest(
@@ -4471,6 +5169,8 @@ final class AppState: ObservableObject {
 
     static func transientPreparationRetryDelayNanoseconds(for error: Error, attempt: Int) -> UInt64? {
         guard attempt == 0 else { return nil }
+        // Drive transport/confirmation already owns the complete read budget.
+        if error is DriveServiceFailure { return nil }
 
         if let processError = error as? ProviderProcessError, case .timedOut = processError {
             // ProviderManager retires the timed-out process before this retry.
@@ -4525,6 +5225,11 @@ final class AppState: ObservableObject {
         ]
         if error is SpiderEngineError {
             measurements["errorKind"] = 1
+            measurements["expected"] = 1
+        } else if let failure = error as? DriveServiceFailure {
+            measurements["errorKind"] = 2
+            measurements["provider"] = Self.driveProviderDiagnosticCode(failure.provider)
+            measurements["status"] = failure.statusCode
             measurements["expected"] = 1
         } else if let driveError = error as? DriveEngineError {
             measurements["errorKind"] = 2
@@ -4635,8 +5340,20 @@ final class AppState: ObservableObject {
         isPlaybackErrorPresented = false
         playbackErrorMessage = nil
         playbackErrorAuthProvider = nil
+        playbackTaskAction = nil
         if clearPendingEpisode {
             pendingAuthEpisode = nil
+            taskRetryEpisode = nil
+            taskRetryOrigin = nil
+        }
+    }
+
+    func retryTaskPlayback() {
+        guard let episode = taskRetryEpisode, let origin = taskRetryOrigin, origin == playbackAuthorizationOrigin else { return }
+        clearPlaybackError()
+        Task { [weak self] in
+            guard let self, origin == self.playbackAuthorizationOrigin else { return }
+            await self.playEpisode(episode)
         }
     }
 
@@ -4687,17 +5404,57 @@ final class AppState: ObservableObject {
         cloudAuthRequest = CloudAuthRequest(provider: provider)
     }
 
+    func driveTransferContext() -> DriveTransferContext {
+        let configuration = configurationLoadGeneration
+        let revision = catalogCacheRevision
+        let credential = userPreferences.searchCredentialRevision
+        let playback = playbackSessionState.generation
+        return DriveTransferContext(revision: "\(configuration)|\(revision)|\(credential)",
+                                    configurationIdentity: driveRecoveryConfigurationIdentity) { [weak self] in
+            await MainActor.run {
+                guard let self else { return false }
+                return self.configurationLoadGeneration == configuration
+                    && self.catalogCacheRevision == revision
+                    && self.userPreferences.searchCredentialRevision == credential
+                    && self.playbackSessionState.generation == playback
+            }
+        }
+    }
+
+    var onlineDetailInput: OnlineVodDetailInput? {
+        guard let detailVod, let activeSite else { return nil }
+        return OnlineVodDetailInput(vod: detailVod,
+            sourceFingerprint: playbackAuthorizationOrigin.sourceFingerprint, siteKey: activeSite.key)
+    }
+
     private var playbackAuthorizationOrigin: PlaybackAuthorizationOrigin {
         let siteKey = activeSite?.key ?? ""
         // Imported shares and unsaved sources still need a provider identity;
         // the empty fingerprint is reserved for legacy library migration only.
         let fingerprint = activeSite.map {
             LibrarySourceIdentity.fingerprint(configurationURL: libraryConfigurationURL.isEmpty
-                ? "netvplayer:transient" : libraryConfigurationURL, site: $0)
+                ? "netvplayer:transient" : libraryConfigurationURL, site: $0,
+                executionPreference: activeProviderExecutionPreference)
         } ?? ""
         return PlaybackAuthorizationOrigin(generation: playbackSessionState.generation,
             detailGeneration: detailLoadGeneration, sourceFingerprint: fingerprint,
             siteKey: siteKey, vodID: detailVod?.vodId ?? "", flag: selectedPlayFlag)
+    }
+
+    func playbackSummaryIdentity(vodID: String, line: String, episodeURL: String) -> PlaybackSummaryIdentity? {
+        guard let site = activeSite, !vodID.isEmpty, !episodeURL.isEmpty else { return nil }
+        let scope = [playbackAuthorizationOrigin.sourceFingerprint, String(configurationLoadGeneration),
+                     String(catalogCacheRevision), String(userPreferences.searchCredentialRevision)].joined(separator: "|")
+        return .init(scope: scope, site: site.key, vod: vodID, line: line, episode: episodeURL)
+    }
+
+    /// Exact selected-line episode only; a title/name match never supplies specs.
+    func detailSummaryEpisode(vodID: String) -> Episode? {
+        let current = playerState.currentSpec
+        let url = current?.metadata["vod.id"] == vodID && current?.flag == selectedPlayFlag
+            ? current?.metadata["vod.episodeURL"] : currentDetailHistory()?.episodeUrl
+        if let url, let exact = episodes.first(where: { $0.url == url }) { return exact }
+        return episodes.count == 1 ? episodes.first : nil
     }
 
     func cancelCloudAuthorization() {
@@ -4733,6 +5490,9 @@ final class AppState: ObservableObject {
                     resumingPlayback: request?.resume != nil, attempt: attempt)
             }
             try checkCloudAuthAttempt(attempt)
+            if completion.credentialsValidated {
+                userPreferences.markCloudAccountVerified(credential.provider)
+            }
             if completion.shouldDismiss, let request, cloudAuthRequest?.id == request.id {
                 let resume = request.resume.flatMap { candidate in
                     candidate.id == pendingAuthorization?.id && candidate.origin == playbackAuthorizationOrigin
@@ -4964,6 +5724,15 @@ final class AppState: ObservableObject {
         reason: String
     ) {
         guard let spec else { return }
+        if let host = spec.hostMagnet, host.leaseID != replacement?.hostMagnet?.leaseID {
+            if activeHostMagnetLeaseID == host.leaseID { activeHostMagnetLeaseID = nil }
+            let resolver = hostMagnetResolver
+            Task { await resolver.release(host.leaseID) }
+        }
+        if let server = spec.mediaServer, server.leaseID != replacement?.mediaServer?.leaseID {
+            let snapshot = playerState.currentSpec?.mediaServer?.leaseID == server.leaseID ? mediaServerSnapshot() : nil
+            Task { await MediaServerRuntime.shared.release(server.leaseID, snapshot: snapshot) }
+        }
         if let leaseID = spec.metadata["files.leaseID"], leaseID != replacement?.metadata["files.leaseID"], let id = UUID(uuidString: leaseID) {
             Task { await FileServiceRuntime.shared.releasePlayback(leaseID: id) }
         }
@@ -4976,6 +5745,9 @@ final class AppState: ObservableObject {
     }
 
     private func requiresBiliPlaybackMaterialization(_ spec: PlaySpec) -> Bool {
+        #if DEBUG
+        if spec.metadata["development.android.direct-dash-tracks"] == "true" { return false }
+        #endif
         let urls = [spec.url, spec.externalAudioURL].filter { !$0.isEmpty }
         return !spec.externalAudioURL.isEmpty && urls.allSatisfy { rawURL in
             guard let host = URL(string: rawURL)?.host?.lowercased() else { return false }
@@ -5179,7 +5951,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func proxiedPlaySpec(_ spec: PlaySpec, logContext: String, livePlayback: Bool = false) async -> PlaySpec {
+    func proxiedPlaySpec(_ spec: PlaySpec, logContext: String, livePlayback: Bool = false) async -> PlaySpec {
         guard spec.url.hasPrefix("http") else { return spec }
         if spec.format.lowercased() == ProviderPlaybackFormat.biliProgressiveMP4,
            var relaySpec = LiveHLSRelayPolicy.localStreamRelaySpec(
@@ -5241,8 +6013,11 @@ final class AppState: ObservableObject {
                 proxyOptions = PlaybackProxyPolicy.mpvOptionsForDirectPlayback(reason: reason, activeProxyPort: activeProxyPort)
             }
             directSpec.mpvOptions.merge(proxyOptions) { _, new in new }
+            directSpec.mpvOptions = PlaybackTransportOptions.resolved(
+                directSpec.mpvOptions, url: directSpec.url, direct: false
+            )
             let reasonLabel = livePlayback && reason == .directHLS ? "direct-live-hls" : reason.rawValue
-            if let httpProxy = proxyOptions["http-proxy"] {
+            if let httpProxy = directSpec.mpvOptions["http-proxy"], !httpProxy.isEmpty {
                 self.log("[\(logContext)] 跳过本地代理(\(reasonLabel))，交给 mpv 直连处理，并使用显式网络代理 \(httpProxy): \(redactedPlaybackURL(spec.url))")
             } else if livePlayback {
                 self.log("[\(logContext)] 跳过本地代理(\(reasonLabel))，直播默认直连 mpv，不使用自动探测代理: \(redactedPlaybackURL(spec.url))")
@@ -5294,6 +6069,7 @@ final class AppState: ObservableObject {
     /// 加载外层直播配置或单个 M3U/TXT，不改写配置内的源地址。
     @discardableResult
     func loadLiveConfiguration(url: String) async -> Bool {
+        guard !isTerminating, !Task.isCancelled else { return false }
         let url = url.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestID = UUID()
         liveConfigurationRequestID = requestID
@@ -5324,6 +6100,7 @@ final class AppState: ObservableObject {
 
     /// 切源时使旧列表请求、重试和节目单失效，避免晚到的响应覆盖新选择。
     private func resetLiveSource(_ live: Live?) {
+        liveSourceRevision = UUID()
         liveDataSource.contentRequests.cancelAll()
         cancelLivePlaybackAttempts()
         if livePlayerState.currentSpec != nil { MPVPlayerEngine.live.stop() }
@@ -5370,6 +6147,10 @@ final class AppState: ObservableObject {
     @discardableResult
     func loadLiveContent() async -> Bool {
         guard let live = activeLive, !isLoadingLive else { return false }
+        // Refresh is a new source revision even when its URL has not changed.
+        invalidateLiveCatchupForSourceRefresh()
+        liveSourceRevision = UUID()
+        invalidateLiveEpgScope()
         let requestID = UUID()
         liveContentRequestID = requestID
         self.isLoadingLive = true
@@ -5419,13 +6200,38 @@ final class AppState: ObservableObject {
         return true
     }
 
+    var liveXtreamConfigurations: [XtreamConfiguration] { userPreferences.xtreamConfigurations }
+
+    func invalidateLiveXtreamAccount(_ id: UUID) {
+        guard activeLive?.url == "netvplayer-xtream://" + id.uuidString.lowercased() else { return }
+        resetLiveSource(activeLive)
+    }
+
+    func liveXtreamCredentialIdentity(for account: XtreamConfiguration) -> String? {
+        (try? userPreferences.xtreamCredentials(for: account.id, server: account.server))?.runtimeIdentity(configuration: account)
+    }
+
     func makeLiveEpgLoader() -> LiveEPGLoader {
-        LiveEPGLoader(accounts: userPreferences.xtreamConfigurations)
+        LiveEPGLoader(accounts: userPreferences.xtreamConfigurations, sourceTimeZone: activeLive?.timeZone ?? "",
+            scope: liveSourceRevision.uuidString + ":" + liveEpgRevision.uuidString,
+            allowedChannels: Set(channelGroups.flatMap(\.channels).map(LiveCatchupPolicy.channelFingerprint)), repository: liveEpgRepository)
+    }
+
+    private func invalidateLiveEpgScope() {
+        liveEpgRevision = UUID()
+        liveEpgTask?.cancel()
+        liveEpgRequestID = UUID()
+        liveEpgRequestKey = ""
+        liveEpgData = nil
+        liveEpgError = nil
+        liveEpgAvailability = .unconfigured
+        isLoadingLiveEpg = false
     }
 
     /// EPG runs independently from playback and owns both a source key and a request generation.
     func loadLiveEpg(for channel: Channel, forceRefresh: Bool = false) async {
-        let requestKey = "\(activeLive?.url ?? "")|\(channel.epg)|\(liveEpgChannelKey(for: channel))|\(channel.urls)"
+        let revision = liveEpgRevision, sourceRevision = liveSourceRevision
+        let requestKey = "\(sourceRevision)|\(revision)|\(channel.epg)|\(liveEpgChannelKey(for: channel))|\(channel.urls)"
         let requestID = UUID()
         let sourceURL = activeLive?.url
         let keepExistingData = liveEpgRequestKey == requestKey
@@ -5444,16 +6250,18 @@ final class AppState: ObservableObject {
         liveEpgTask = task
         let result = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         guard !Task.isCancelled, liveEpgRequestID == requestID, activeLive?.url == sourceURL,
+              liveEpgRevision == revision, liveSourceRevision == sourceRevision,
               selectedChannel?.id == channel.id, selectedChannel?.urls == channel.urls else { return }
         liveEpgTask = nil
         isLoadingLiveEpg = false
-        if result.availability != .unavailable || !keepExistingData { liveEpgData = result.data }
+        if result.discardsPreviousData || result.availability != .unavailable || !keepExistingData { liveEpgData = result.data }
         liveEpgAvailability = result.availability
         liveEpgError = result.message
     }
 
     /// 播放直播频道
     func playChannel(_ channel: Channel) async {
+        guard !isTerminating, !Task.isCancelled else { return }
         self.selectedChannel = channel
         self.currentChannelUrlIndex = 0
         persistLiveSelection(channel: channel, urlIndex: 0)
@@ -5470,9 +6278,11 @@ final class AppState: ObservableObject {
         self.liveError = nil
         self.livePlayerState.errorMessage = nil
 
-        if await playNextLiveAttempt(sessionID: livePlaybackSessionID, logContext: "playChannel") {
+        let sessionID = livePlaybackSessionID
+        if await playNextLiveAttempt(sessionID: sessionID, logContext: "playChannel") {
             return
         }
+        guard sessionID == livePlaybackSessionID, isLivePlayerPresented, !Task.isCancelled else { return }
 
         let message = self.liveError ?? L10n.text("频道“{0}”没有可用线路。请切换直播源。", ["\(channel.name)"])
         self.liveError = message
@@ -5483,6 +6293,10 @@ final class AppState: ObservableObject {
     /// 直播换源播放
     func changeChannelUrlIndex(_ index: Int) async {
         guard let channel = selectedChannel, index >= 0 && index < channel.urls.count else { return }
+        if liveCatchupContext != nil {
+            await changeLiveCatchupLine(index)
+            return
+        }
         self.currentChannelUrlIndex = index
         persistLiveSelection(channel: channel, urlIndex: index)
         beginLivePlaybackSession(
@@ -5498,9 +6312,11 @@ final class AppState: ObservableObject {
         self.liveError = nil
         self.livePlayerState.errorMessage = nil
 
-        if await playNextLiveAttempt(sessionID: livePlaybackSessionID, logContext: "changeChannelUrlIndex") {
+        let sessionID = livePlaybackSessionID
+        if await playNextLiveAttempt(sessionID: sessionID, logContext: "changeChannelUrlIndex") {
             return
         }
+        guard sessionID == livePlaybackSessionID, isLivePlayerPresented, !Task.isCancelled else { return }
 
         let message = self.liveError ?? L10n.text("频道“{0}”的线路 {1} 不可用。请切换线路或直播源。", ["\(channel.name)", "\(index + 1)"])
         self.liveError = message
@@ -5511,6 +6327,8 @@ final class AppState: ObservableObject {
     /// 进入直播页时恢复上次选中的频道播放。配置加载只恢复 selection，不应让 UI 停在黑屏。
     func resumeSelectedLiveChannelIfNeeded() async {
         guard !isLoadingLive else { return }
+        // Showing an existing window must not replace an archive with live television.
+        if liveCatchupContext != nil { return }
 
         if LiveContentRefreshPolicy.shouldRefresh(
             sourceURL: activeLive?.url ?? "",
@@ -5582,7 +6400,14 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func beginLivePlaybackSession(attempts: [LivePlaybackAttempt]) {
+    func beginLivePlaybackSession(attempts: [LivePlaybackAttempt]) {
+        liveCatchupTask?.cancel()
+        liveCatchupTask = nil
+        liveCatchupContext = nil
+        liveCatchupPhase = .idle
+        liveCatchupPosition = 0
+        liveCatchupNotice = nil
+        liveCatchupNativeResume = false
         hlsRecoverySlots.invalidate(live: true)
         hlsRecoveryTasks.removeValue(forKey: true)?.cancel()
         liveFallbackTask?.cancel()
@@ -5724,6 +6549,11 @@ final class AppState: ObservableObject {
     }
 
     private func playLiveURL(channel: Channel, url: String, urlIndex: Int, sessionID: UUID, attemptIndex: Int, logContext: String) async -> LivePlaybackAttemptResult {
+        let previewHold = livePreviews.beginPlayback()
+        defer { livePreviews.endPlayback(previewHold) }
+        if livePreviews.activeCount > 0 { await livePreviews.drain() }
+        guard Self.shouldContinueLivePlayback(sessionID: sessionID, currentSessionID: livePlaybackSessionID,
+                                             isLivePlayerPresented: isLivePlayerPresented) else { return .failed }
         do {
             var spec = try await normalizedLivePlaySpec(channel: channel, url: url, logContext: logContext)
             guard Self.shouldContinueLivePlayback(
@@ -5842,9 +6672,18 @@ final class AppState: ObservableObject {
     }
 
     func handleMPVPlaybackFailure(spec: PlaySpec?, message: String, failure: MPVPlaybackFailure? = nil) {
+        if let spec, spec.liveCatchup != nil {
+            failLiveCatchup(spec: spec)
+            return
+        }
+        if let spec, spec.hostMagnet != nil {
+            guard ownsPlaybackFailure(spec, live: false) else { return }
+            releaseLocalStreamRelayIfNeeded(spec: spec, reason: "magnet-playback-failed")
+        }
         if let spec, spec.drivePlaybackPlan != nil,
            !drivePlaybackSessionController.acceptsAttempt(for: spec) { return }
-        if let spec, let failure, HLSMediaTypeRecovery.eligible(spec, failure: failure) {
+        let allowsRecovery = allowsAutomaticVodPlaybackActions || spec?.metadata["playback.kind"] == "live"
+        if allowsRecovery, let spec, let failure, HLSMediaTypeRecovery.eligible(spec, failure: failure) {
             let live = spec.metadata["playback.kind"] == "live"
             guard ownsPlaybackFailure(spec, live: live),
                   let requestID = hlsRecoverySlots.claim(live: live) else { return }
@@ -5865,7 +6704,7 @@ final class AppState: ObservableObject {
             }
             return
         }
-        if let spec, HLSRecovery.eligible(spec),
+        if allowsRecovery, let spec, HLSRecovery.eligible(spec),
            (spec.metadata["playback.kind"] == "live" ? livePlayerState.position : playerState.position) < 1 {
             let live = spec.metadata["playback.kind"] == "live"
             let state = live ? livePlayerState : playerState
@@ -5929,7 +6768,7 @@ final class AppState: ObservableObject {
             )
         }
 
-        if let spec,
+        if allowsRecovery, let spec,
            spec.metadata["playback.kind"] != "live",
            spec.drivePlaybackPlan != nil {
             handleDrivePlaybackFailure(spec: spec, message: message)
@@ -6091,7 +6930,12 @@ final class AppState: ObservableObject {
             if let drivePlaybackSourceRefreshHandler {
                 refreshed = try await drivePlaybackSourceRefreshHandler(spec, sourceURL)
             } else {
-                let result = try await SourceManager.shared.fetchResult(url: sourceURL)
+                defer { refreshDriveTaskSummaries() }
+                let result = try await DriveTransferContext.$current.withValue(driveTransferContext()) {
+                    try await DriveTransferCoordinator.$current.withValue(driveTransferCoordinator) {
+                        try await SourceManager.shared.fetchResult(url: sourceURL)
+                    }
+                }
                 refreshed = spec
                 refreshed.url = result.url
                 refreshed.headers = result.headers
@@ -6122,7 +6966,7 @@ final class AppState: ObservableObject {
     }
 
     private func switchToVodLineFallback(from spec: PlaySpec) -> Bool {
-        guard vodLineFallbackTask == nil,
+        guard allowsAutomaticVodPlaybackActions, vodLineFallbackTask == nil,
               let currentSpec = playerState.currentSpec,
               currentSpec.url == spec.url,
               let site = activeSite,
@@ -6158,7 +7002,7 @@ final class AppState: ObservableObject {
             processConfirmedMPVPlaybackFailure(spec: spec, message: "connection ended (cache stall)")
             return
         }
-        if let spec,
+        if allowsAutomaticVodPlaybackActions, let spec,
            spec.metadata["playback.kind"] != "live",
            let plan = spec.drivePlaybackPlan,
            !DrivePlaybackRoutePolicy.isManualSelection(spec) {
@@ -6190,7 +7034,7 @@ final class AppState: ObservableObject {
     }
 
     private func repairLiveConnectionIfNeeded(spec: PlaySpec?) {
-        guard let spec, isLivePlayerPresented, liveFallbackTask == nil,
+        guard let spec, spec.liveCatchup == nil, isLivePlayerPresented, liveFallbackTask == nil,
               isCurrentLivePlaybackSpec(spec, sessionID: livePlaybackSessionID),
               let repaired = LivePlaybackBufferPolicy.shortConnectionSpec(from: spec) else { return }
         let sessionID = livePlaybackSessionID
@@ -6213,6 +7057,7 @@ final class AppState: ObservableObject {
     }
 
     private func processConfirmedMPVPlaybackFailure(spec: PlaySpec, message: String) {
+        if spec.liveCatchup != nil { failLiveCatchup(spec: spec); return }
         let channelName = spec.metadata["live.channelName"] ?? selectedChannel?.name ?? L10n.text("直播频道")
         let diagnostic = liveMPVFailureMessage(channelName: channelName, message: message, spec: spec)
 
@@ -6299,12 +7144,17 @@ final class AppState: ObservableObject {
     }
 
     func handleMPVPlaybackStarted(spec: PlaySpec?) {
+        if let spec, spec.liveCatchup != nil {
+            confirmLiveCatchupStarted(spec: spec)
+            return
+        }
         if let spec, spec.metadata["playback.kind"] != "live" {
             if spec.drivePlaybackPlan != nil,
                !drivePlaybackSessionController.acceptsAttempt(for: spec) { return }
             let generation = spec.metadata["playback.sessionGeneration"].flatMap(UInt64.init)
             if let trace = playbackStartupTrace, generation != trace.generation { return }
             startedVodPlaybackSpec = spec
+            reportMediaServerPlayback(spec: spec, started: true)
             isPlayerLoading = false
             // libmpv reports its first valid time-pos here; this is playback progress,
             // not a renderer acknowledgement that a frame reached the display.
@@ -6323,10 +7173,7 @@ final class AppState: ObservableObject {
                 durationMs: startupDuration,
                 host: spec.url
             )
-            let restoredSubtitlePreference = restoreTrackPreferences(for: spec)
-            if !restoredSubtitlePreference {
-                autoSelectPreferredSubtitleTrack(for: spec)
-            }
+            restoreTrackPreferences(for: spec)
             attemptPendingPlaybackStart(for: spec)
         }
 
@@ -6531,7 +7378,17 @@ final class AppState: ObservableObject {
         log("[DRIVE_PLAYBACK_TERMINAL] provider=\(plan.provider.rawValue) route=\(route)")
     }
 
-    private func play(spec: PlaySpec) async {
+    func play(spec: PlaySpec) async {
+        guard !isTerminating, !Task.isCancelled else { return }
+        let previewHold = livePreviews.beginPlayback()
+        defer { livePreviews.endPlayback(previewHold) }
+        let previewGeneration = playbackSessionState.generation, previewLiveSession = livePlaybackSessionID
+        if livePreviews.activeCount > 0 { await livePreviews.drain() }
+        guard !isTerminating, !Task.isCancelled,
+              spec.metadata["playback.kind"] == "live"
+                ? previewLiveSession == livePlaybackSessionID
+                : previewGeneration == playbackSessionState.generation else { return }
+        if let context = spec.liveCatchup, !ownsLiveCatchup(context) { return }
         var spec = spec
         if UserPreferences.shared.proxyMode == 1 { spec.metadata["network.explicitDirect"] = "true" }
         let isLive = spec.metadata["playback.kind"] == "live"
@@ -6564,6 +7421,7 @@ final class AppState: ObservableObject {
             if spec.danmakuAttachment == nil { spec.danmakuAttachment = danmakuBindings.attachment(for: spec) }
             refreshDanmakuOverlay(for: spec)
         }
+        if !isLive { activeHostMagnetLeaseID = spec.hostMagnet?.leaseID }
         if let playSpecHandler {
             await playSpecHandler(spec)
         } else {
@@ -6572,6 +7430,77 @@ final class AppState: ObservableObject {
                 : MPVPlayerEngine.vod
             await engine.play(spec: spec)
         }
+        if spec.metadata["playback.kind"] != "live", !spec.providerDanmaku.isEmpty, spec.danmakuAttachment == nil,
+           userPreferences.danmakuEnabled {
+            providerDanmakuTask = Task { [weak self] in await self?.selectProviderDanmakuTrack(at: 0) }
+        }
+    }
+
+    func selectProviderDanmakuTrack(at index: Int) async {
+        guard userPreferences.danmakuEnabled, isPlayerPresented, let spec = playerState.currentSpec,
+              spec.providerDanmaku.indices.contains(index) else { return }
+        let requestID = UUID()
+        danmakuRequestID = requestID
+        selectedProviderDanmakuIndex = index
+        currentDanmakuCues = []
+        danmakuRenderRevision = UUID()
+        playerState.danmakuStatus = L10n.text("正在加载所选弹幕…")
+        do {
+            providerDanmakuFetchTask?.cancel()
+            let track = spec.providerDanmaku[index]
+            if let oldOwner = providerDanmakuMediaOwner { ProxyServer.shared.androidPlaybackMedia.end(oldOwner) }
+            providerDanmakuMediaOwner = nil
+            let mediaOwner: UUID?
+            if let site = VodConfig.shared.sites.first(where: { $0.key == spec.siteKey }) {
+                mediaOwner = ProxyServer.shared.androidPlaybackMedia.begin(
+                    sourceIdentity: DevelopmentAndroidSiteProvider.sourceIdentity(site: site),
+                    title: spec.metadata["vod.name"] ?? spec.title,
+                    episode: spec.metadata["vod.episodeName"] ?? "")
+            } else { mediaOwner = nil }
+            // The SDK also reads media while retiring its asynchronous writer.
+            // Keep real metadata until this selection is cancelled or replaced.
+            providerDanmakuMediaOwner = mediaOwner
+            let fetch = Task { try await DanmakuEngine.shared.loadProviderTrack(track) }
+            providerDanmakuFetchTask = fetch
+            let result = try await fetch.value
+            guard !Task.isCancelled, userPreferences.danmakuEnabled, isPlayerPresented,
+                  danmakuRequestID == requestID, let current = playerState.currentSpec,
+                  current.siteKey == spec.siteKey, current.url == spec.url,
+                  current.metadata["playback.sessionGeneration"] == spec.metadata["playback.sessionGeneration"] else { return }
+            currentDanmakuCues = result.cues
+            lastDanmakuParseDiagnostic = result.diagnostic
+            danmakuRenderRevision = UUID()
+            let status = L10n.text("弹幕已加载 {0} 条", ["\(result.cues.count)"])
+            lastDanmakuRenderStatus = status
+            playerState.danmakuStatus = status
+        } catch {
+            guard danmakuRequestID == requestID, !Task.isCancelled else { return }
+            if let failure = error as? ProviderDanmakuLoadError {
+                playerState.danmakuStatus = failure.localizedDescription
+                DiagnosticLog.write("[PROVIDER_DANMAKU_FAILURE] reason=\(failure.diagnosticCode)")
+            } else if (error as? URLError)?.code == .timedOut {
+                playerState.danmakuStatus = L10n.text("弹幕请求超时，请稍后重试。")
+                DiagnosticLog.write("[PROVIDER_DANMAKU_FAILURE] reason=timeout")
+            } else {
+                playerState.danmakuStatus = L10n.text("所选弹幕加载失败，请重试或选择其他候选。")
+                DiagnosticLog.write("[PROVIDER_DANMAKU_FAILURE] reason=transport")
+            }
+        }
+    }
+
+    func setDanmakuRenderingEnabled(_ enabled: Bool) {
+        userPreferences.danmakuEnabled = enabled
+        if !enabled {
+            let selected = selectedProviderDanmakuIndex
+            cancelDanmakuSelection()
+            selectedProviderDanmakuIndex = selected
+            currentDanmakuCues = []
+            danmakuRenderRevision = UUID()
+            playerState.danmakuStatus = L10n.text("弹幕已关闭")
+        } else if let spec = playerState.currentSpec, !spec.providerDanmaku.isEmpty, spec.danmakuAttachment == nil {
+            let selected = selectedProviderDanmakuIndex ?? 0
+            providerDanmakuTask = Task { [weak self] in await self?.selectProviderDanmakuTrack(at: selected) }
+        } else { refreshDanmakuOverlay(for: playerState.currentSpec) }
     }
 
     func refreshDanmakuOverlay(for spec: PlaySpec?) {
@@ -6700,6 +7629,13 @@ final class AppState: ObservableObject {
     }
 
     func cancelDanmakuSelection() {
+        if let owner = providerDanmakuMediaOwner { ProxyServer.shared.androidPlaybackMedia.end(owner) }
+        providerDanmakuMediaOwner = nil
+        providerDanmakuTask?.cancel()
+        providerDanmakuTask = nil
+        providerDanmakuFetchTask?.cancel()
+        providerDanmakuFetchTask = nil
+        selectedProviderDanmakuIndex = nil
         danmakuRequestID = UUID()
         danmakuCandidateOwner = nil
         danmakuCandidates = []
@@ -6767,10 +7703,6 @@ final class AppState: ObservableObject {
         }
         append("Relay", spec.metadata["stream.relayMode"])
         append("WebHome", spec.metadata["webhome.method"] ?? lastWebHomeBridgeMethod)
-        append(L10n.text("弹幕"), lastDanmakuRenderStatus ?? playerState.danmakuStatus)
-        if let diagnostic = lastDanmakuParseDiagnostic {
-            append(L10n.text("弹幕解析"), "format=\(diagnostic.format.rawValue) size=\(diagnostic.rawSizeBytes) parsed=\(diagnostic.parsedCount) returned=\(diagnostic.returnedCount) truncated=\(diagnostic.truncatedCount)")
-        }
         let fixture = [
             spec.metadata["drive.fixtureProvider"],
             spec.metadata["drive.fixtureScenario"]
@@ -6935,7 +7867,7 @@ final class AppState: ObservableObject {
         self.log("[LIVE_PROBE] source=\(source) channel=\(channel.name) urlIndex=\(urlIndex) status=\(result.statusCode) contentType=\(result.contentType) bodyPrefix=\(compactPrefix)")
     }
 
-    private func normalizedLivePlaySpec(channel: Channel, url: String, logContext: String) async throws -> PlaySpec {
+    func normalizedLivePlaySpec(channel: Channel, url: String, logContext: String) async throws -> PlaySpec {
         if url.hasPrefix("xtr1.") {
             let reference = try XtreamResource(url)
             guard let account = userPreferences.xtreamConfigurations.first(where: { $0.id == reference.accountID }),
@@ -7002,15 +7934,6 @@ final class AppState: ObservableObject {
         return channel.name
     }
 
-    private func liveEpgDateString() -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyyMMdd"
-        return formatter.string(from: Date())
-    }
-
     // MARK: - 收藏和历史记录持久化
 
     private func driveMetadata(for episodeURL: String) -> (provider: String, referenceURL: String) {
@@ -7058,7 +7981,13 @@ final class AppState: ObservableObject {
             driveRoute: driveMetadata.route,
             configId: spec.metadata["library.configId"].flatMap(Int.init) ?? currentLibraryConfiguration?.id ?? 0,
             sourceFingerprint: fingerprint,
-            createTime: Date()
+            createTime: Date(),
+            disc: spec.disc.map { .init(selection: $0.selection,
+                                       audioTrackID: playerState.selectedAudioTrackID ?? (playerState.audioTracks.isEmpty ? nil : "no"),
+                                       subtitleTrackID: playerState.selectedSubtitleTrackID ?? (playerState.subtitleTracks.isEmpty ? nil : "no")) },
+            magnet: spec.hostMagnet?.selectedFile?.identity,
+            originalDetailRequestID: spec.metadata["vod.originalDetailRequestID"],
+            originalEpisodeIdentitySHA256: spec.metadata["vod.originalEpisodeIdentitySHA256"]
         )
         applicationLibraryState = ApplicationLibraryCore.recordHistory(
             applicationLibraryState,
@@ -7092,7 +8021,12 @@ final class AppState: ObservableObject {
     }
 
     func handleMPVPlaybackPosition(spec: PlaySpec?, positionSeconds: Double) {
+        if let spec, spec.liveCatchup != nil {
+            updateLiveCatchupPosition(spec: spec, mediaPosition: positionSeconds)
+            return
+        }
         guard let spec, spec.metadata["playback.kind"] != "live" else { return }
+        reportMediaServerPlayback(spec: spec)
         evaluateNextEpisodePreload(spec: spec, positionSeconds: positionSeconds)
         let context = playbackEpisodeContext()
         let skipSettings = VodSkipSettingsStore.shared.settings(for: spec.metadata)
@@ -7195,13 +8129,21 @@ final class AppState: ObservableObject {
     }
 
     func handleMPVPlaybackEnded(spec: PlaySpec?) {
+        if let spec, spec.liveCatchup != nil {
+            endLiveCatchup(spec: spec)
+            return
+        }
         guard let spec, spec.metadata["playback.kind"] != "live" else { return }
+        if let server = spec.mediaServer {
+            let snapshot = playerState.currentSpec?.mediaServer?.leaseID == server.leaseID ? mediaServerSnapshot() : nil
+            Task { await MediaServerRuntime.shared.release(server.leaseID, snapshot: snapshot) }
+        }
         requestAutoAdvance(for: spec, trigger: "natural-eof")
     }
 
     private func requestAutoAdvance(for spec: PlaySpec, trigger: String) {
         let episodeURL = PlaybackResumePolicy.episodeURL(for: spec)
-        guard episodeListState == .ready, ownsPlaybackContext(spec),
+        guard allowsAutomaticVodPlaybackActions, episodeListState == .ready, ownsPlaybackContext(spec),
               playerState.currentSpec?.metadata["playback.sessionGeneration"] == spec.metadata["playback.sessionGeneration"] else { return }
         let context = playbackEpisodeContext()
         let transition = PlaybackSessionCore.requestAutoAdvance(
@@ -7286,21 +8228,8 @@ final class AppState: ObservableObject {
         return true
     }
 
-    private func autoSelectPreferredSubtitleTrack(for spec: PlaySpec) {
-        guard spec.metadata["playback.kind"] != "live" else { return }
-        guard spec.subs.isEmpty else { return }
-        guard let track = PlayerSubtitlePolicy.preferredInitialSubtitleTrack(
-            from: playerState.subtitleTracks,
-            selectedID: playerState.selectedSubtitleTrackID
-        ) else { return }
-
-        let currentID = playerState.selectedSubtitleTrackID ?? "-"
-        MPVPlayerEngine.vod.selectSubtitleTrack(id: track.id)
-        log("[SUBTITLE_AUTO_SELECT] from=\(currentID) to=\(track.id) name=\(track.displayName) reason=first-chinese-track")
-    }
-
     /// 追加或更新历史记录
-    func addHistory(vod: Vod, flag: String, episode: Episode, position: Int64, duration: Int64) {
+    func addHistory(vod: Vod, flag: String, episode: Episode, position: Int64, duration: Int64, magnet: MagnetFileIdentity? = nil) {
         let siteKey = vod.siteKey.isEmpty ? (activeSite?.key ?? "") : vod.siteKey
         let historyKey = PlaybackLinkage.vodKey(siteKey: siteKey, vodId: vod.vodId, sourceFingerprint: librarySourceFingerprint(siteKey: siteKey))
         guard canRecordHistory(key: historyKey, generation: playbackSessionState.generation) else { return }
@@ -7321,7 +8250,15 @@ final class AppState: ObservableObject {
             driveRoute: "",
             configId: currentLibraryConfiguration?.id ?? 0,
             sourceFingerprint: librarySourceFingerprint(siteKey: siteKey),
-            createTime: Date()
+            createTime: Date(),
+            disc: DiscSelection(locator: episode.url).map { selection in
+                let existing = historyItems.first { $0.key == historyKey }?.disc
+                if let existing, existing.selection == selection { return existing }
+                return DiscResume(selection: selection)
+            },
+            magnet: magnet,
+            originalDetailRequestID: originalDetailRequest?.siteKey == siteKey && detailVod?.vodId == vod.vodId ? originalDetailRequest?.id : nil,
+            originalEpisodeIdentitySHA256: originalDetailRequest?.siteKey == siteKey && detailVod?.vodId == vod.vodId ? OriginalAndroidPlaybackIdentity.episodeSHA256(for: episode.url) : nil
         )
         applicationLibraryState = ApplicationLibraryCore.recordHistory(
             applicationLibraryState,
@@ -7334,6 +8271,7 @@ final class AppState: ObservableObject {
     /// 从历史记录恢复到上次剧集与进度
     func playHistory(_ original: History) async {
         guard let context = await prepareLibraryNavigation(configID: original.configId, fingerprint: original.sourceFingerprint, siteKey: original.siteKey) else { return }
+        guard !Task.isCancelled else { return }
         let item = original.sourceFingerprint.isEmpty
             ? LibraryIdentityMigration.bind(original, configuration: context.config, site: context.site) : original
         if item.key != original.key {
@@ -7347,9 +8285,16 @@ final class AppState: ObservableObject {
             activateSiteForLibraryNavigation(matchingSite)
         }
 
-        await selectVod(intent.vod)
+        let expectedDetailGeneration = detailLoadGeneration &+ 1
+        var requestVod = intent.vod
+        requestVod.vodId = item.originalDetailRequestID ?? requestVod.vodId
+        await selectVod(requestVod)
 
-        guard detailVod?.vodId == item.vodId,
+        guard !Task.isCancelled,
+              isDetailPresented,
+              detailLoadGeneration == expectedDetailGeneration,
+              activeSite?.key == item.siteKey,
+              detailVod?.vodId == item.vodId,
               (detailVod?.siteKey.isEmpty == true ? activeSite?.key : detailVod?.siteKey) == item.siteKey,
               item.sourceFingerprint == librarySourceFingerprint(siteKey: item.siteKey) else { return }
 
@@ -7357,13 +8302,26 @@ final class AppState: ObservableObject {
             selectPlayFlag(preferredFlag)
         }
 
-        let episode = intent.episode(from: episodes, history: item)
+        var episode = intent.episode(from: episodes, history: item)
+        if let reference = MediaServerReference(locator: item.episodeUrl), reference.matchesItem(episode.url) {
+            episode.url = reference.locator
+        }
 
-        guard !episode.url.isEmpty else { return }
+        guard !episode.url.isEmpty else {
+            if PlaybackLinkage.hasStableDriveIdentity(item) {
+                _ = await AppDialogCenter.shared.present(
+                    title: L10n.text("无法确认上次播放的文件"),
+                    message: L10n.text("原文件暂时不可用或已经变化。请选择当前可用的文件，旧文件的播放进度不会自动套用。"),
+                    confirmTitle: L10n.text("知道了"), allowsCancel: false
+                )
+            }
+            return
+        }
         await playEpisode(
             episode,
             resumePosition: intent.resumePosition,
-            resumeDuration: intent.resumeDuration
+            resumeDuration: intent.resumeDuration,
+            resumeMagnetFile: item.magnet
         )
     }
 
@@ -7625,8 +8583,13 @@ final class AppState: ObservableObject {
         let material = [searchSessionNamespace, libraryConfigurationURL, String(catalogCacheRevision),
             String(userPreferences.searchCredentialRevision), sources]
             + selectedSearchSiteKeys.sorted() + runtimeVersions
+            + (allowsSearchFallbacks ? [] : ["strict-site-selection"])
         let data = (try? JSONEncoder().encode(material)) ?? Data()
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private var searchPerformanceRuntime: String {
+        providerRuntimeInstalled.map { $0.manifest.providerID + ":" + $0.manifest.version }.sorted().joined(separator: "\u{0}")
     }
 
     /// The app owns the operation so replacing a view's waiter does not cancel an identical query.
@@ -7659,7 +8622,7 @@ final class AppState: ObservableObject {
     private func performSearch(keyword: String, scope: String, forceRefresh: Bool) async {
         let searchStartedAt = ContinuousClock.now
         var loggedFirstUsefulResult = false
-        if let candidate = SourceManager.externalDriveCandidate(for: keyword) {
+        if allowsSearchFallbacks, let candidate = SourceManager.externalDriveCandidate(for: keyword) {
             contentSearchState = ContentSearchCore.resolved(contentSearchState, keyword: keyword,
                 results: [driveShareImportResult(for: candidate)])
             selectedTab = .search
@@ -7688,10 +8651,11 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled, contentSearchState.generation == generation, searchDataScope == scope else { return }
         working = ContentSearchCore.updateSiteOrder(working, generation: generation, siteOrder: searchableSites.map(\.key))
         let stream = searchEngine.search(keyword: keyword, sites: searchableSites,
-            cacheScope: scope, bypassCache: forceRefresh)
+            cacheScope: scope, bypassCache: forceRefresh, allowsQueryFallback: allowsSearchFallbacks,
+            performanceConfiguration: libraryConfigurationURL, performanceRuntime: searchPerformanceRuntime)
         for await result in stream {
             guard !Task.isCancelled, contentSearchState.generation == generation, searchDataScope == scope else { return }
-            if !result.isCached {
+            if !result.isCached, !result.isCancelled {
                 recordSiteHealth(eventType: .search, siteKey: result.siteKey, siteName: result.siteName,
                     success: result.error == nil, durationMs: result.durationMs, errorCategory: result.errorCategory)
             }
@@ -7707,11 +8671,36 @@ final class AppState: ObservableObject {
         }
     }
 
-    func loadMoreSearchResults(siteKey: String) {
+    /// Called only by a new downward user scroll, never by layout/result publication.
+    func appendSearchResultsAfterScroll(siteKey: String?, generation: UInt64) {
+        guard generation == contentSearchState.generation, !contentSearchState.isLoading,
+              contentSearchState.sourceScope == searchDataScope,
+              searchContinuationTasks.isEmpty,
+              contentSearchState.cursors.contains(where: { key, cursor in
+                  (siteKey == nil || siteKey == key) && (cursor.status == .ready || cursor.status == .budgeted)
+              }) else { return }
+        contentSearchState = ContentSearchCore.expandContinuationBudget(contentSearchState, siteKey: siteKey)
+        for key in ContentSearchCore.automaticContinuationSites(contentSearchState, siteKey: siteKey)
+            .prefix(searchEngine.maxConcurrentSites) {
+            loadMoreSearchResults(siteKey: key, expandBudget: false)
+        }
+    }
+
+    func cancelSearchContinuation(siteKey: String) {
+        searchContinuationTasks[siteKey]?.cancel()
+    }
+
+    func loadMoreSearchResults(siteKey: String, expandBudget: Bool = true) {
         guard !contentSearchState.isLoading,
               contentSearchState.sourceScope == searchDataScope,
-              let cursor = contentSearchState.cursors[siteKey], cursor.canRequest,
+              searchContinuationTasks[siteKey] == nil,
+              let existing = contentSearchState.cursors[siteKey], existing.canRequest || existing.status == .budgeted,
               let site = sites.first(where: { $0.key == siteKey }) else { return }
+        if expandBudget {
+            contentSearchState = ContentSearchCore.expandContinuationBudget(contentSearchState, siteKey: siteKey)
+        }
+        guard let cursor = contentSearchState.cursors[siteKey], cursor.canRequest,
+              ContentSearchCore.remainingBudget(contentSearchState, siteKey: siteKey) > 0 else { return }
         let generation = contentSearchState.generation
         let scope = searchDataScope
         contentSearchState = ContentSearchCore.beginContinuation(contentSearchState, siteKey: siteKey)
@@ -7721,14 +8710,19 @@ final class AppState: ObservableObject {
                 self.contentSearchState = ContentSearchCore.cancelContinuation(self.contentSearchState, generation: generation, siteKey: siteKey)
                 if self.contentSearchState.generation == generation { self.searchContinuationTasks[siteKey] = nil }
             }
-            for await result in searchEngine.search(keyword: cursor.keyword, sites: [site], page: String(cursor.nextPage), cacheScope: scope, bypassCache: cursor.status == .retryable) {
+            for await result in searchEngine.search(keyword: cursor.pageKeyword ?? cursor.keyword, sites: [site], page: String(cursor.nextPage), cacheScope: scope, bypassCache: cursor.status == .retryable,
+                allowsQueryFallback: allowsSearchFallbacks,
+                performanceConfiguration: libraryConfigurationURL, performanceRuntime: searchPerformanceRuntime) {
                 guard !Task.isCancelled, self.contentSearchState.generation == generation,
                       self.searchDataScope == scope else { return }
                 self.contentSearchState = ContentSearchCore.receivePage(self.contentSearchState, generation: generation, requestedPage: cursor.nextPage, result: result)
-                if !result.isCached {
+                if !result.isCached, !result.isCancelled {
                     self.recordSiteHealth(eventType: .search, siteKey: site.key, siteName: site.name,
                         success: result.error == nil, durationMs: result.durationMs, errorCategory: result.errorCategory)
                 }
+                // This one-source stream yields exactly one page. Retire its owner in
+                // the same MainActor turn that publishes the ready/exhausted cursor.
+                return
             }
         }
     }
@@ -7837,15 +8831,18 @@ final class AppState: ObservableObject {
             activeSiteKey: activeSite?.key,
             selectedKeys: selectedSearchSiteKeys,
             replacementSiteKeys: replacementKeys,
-            healthSummaries: siteHealthSummaries,
-            healthSortingEnabled: UserPreferences.shared.siteHealthSortingEnabled
+            performanceSummaries: searchEngine.performanceSummaries(sites: sites,
+                configuration: libraryConfigurationURL, runtime: searchPerformanceRuntime),
+            healthSortingEnabled: userPreferences.siteHealthSortingEnabled,
+            allowsSelectionFallback: allowsSearchFallbacks
         )
     }
 
     private func replacementSiteKeys(for sites: [Site]) async -> Set<String> {
         var keys = Set<String>()
         for site in sites {
-            if await SpiderReplacementRegistry.shared.hasReplacement(for: site) {
+            let backend = await SpiderReplacementRegistry.shared.executionBackend(for: site)
+            if backend != .androidUnavailable, await SpiderReplacementRegistry.shared.hasReplacement(for: site) {
                 keys.insert(site.key)
             }
         }
@@ -7890,11 +8887,15 @@ extension AppState {
 
     func librarySourceFingerprint(siteKey: String) -> String {
         guard let site = sites.first(where: { $0.key == siteKey }) ?? (activeSite?.key == siteKey ? activeSite : nil) else { return "" }
-        if site.api.hasPrefix("netvplayer-files://") { return LibrarySourceIdentity.fingerprint(configurationURL: site.api, site: site) }
-        return LibrarySourceIdentity.fingerprint(configurationURL: libraryConfigurationURL, site: site)
+        if site.api.hasPrefix("netvplayer-files://") || site.api.hasPrefix("netvplayer-server://") { return LibrarySourceIdentity.fingerprint(configurationURL: site.api, site: site) }
+        return LibrarySourceIdentity.fingerprint(configurationURL: libraryConfigurationURL, site: site,
+            executionPreference: activeProviderExecutionPreference)
     }
 
     private func migrateLibraryIdentityIfPossible() {
+        // Legacy records have no backend identity. Keep them on the original
+        // automatic route rather than assigning opaque IDs to a new backend.
+        guard activeProviderExecutionPreference == .automatic else { return }
         guard let configuration = currentLibraryConfiguration else { return }
         let migrated = LibraryIdentityMigration.migrate(applicationLibraryState, configuration: configuration, sites: sites)
         let changed = migrated.history != historyItems || zip(migrated.keeps, keepItems).contains { $0.key != $1.key }
@@ -7959,10 +8960,11 @@ extension AppState {
         }
         let resolvedKey = legacyKey.flatMap { LibrarySourceIdentity.legacyIdentity(key: $0, sites: sites)?.siteKey } ?? siteKey
         guard let site = sites.first(where: { $0.key == resolvedKey }),
+              !(site.isSpider && activeProviderExecutionPreference != .automatic && fingerprint.isEmpty),
               fingerprint.isEmpty || fingerprint == librarySourceFingerprint(siteKey: resolvedKey) else {
             _ = await AppDialogCenter.shared.present(
                 title: L10n.text("记录的原始来源已不可用"),
-                message: L10n.text("请恢复原始配置，或在当前来源重新选择影片。"),
+                message: L10n.text("请恢复原始配置与解析方式，或在当前来源重新选择影片。旧记录已保留。"),
                 confirmTitle: L10n.text("知道了"), allowsCancel: false
             )
             return nil

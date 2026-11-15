@@ -2,6 +2,68 @@ import Foundation
 import Testing
 import Storage
 
+@Test func auditSnapshotDoesNotRegisterFallbacksOrModifyLegacyDomains() throws {
+    let domain = "AuditSnapshotTests." + UUID().uuidString
+    let legacyDomain = domain + ".legacy"
+    let unrelatedDomain = domain + ".unrelated"
+    let defaults = try #require(UserDefaults(suiteName: domain))
+    let unrelated = try #require(UserDefaults(suiteName: unrelatedDomain))
+    let marker = domain + ".marker"
+    defer {
+        defaults.removePersistentDomain(forName: domain)
+        defaults.removePersistentDomain(forName: legacyDomain)
+        unrelated.removePersistentDomain(forName: unrelatedDomain)
+    }
+    defaults.set("snapshot-only", forKey: marker)
+    defaults.set("original-site", forKey: "currentVodSiteKey")
+    defaults.set("fixture-legacy-cookie", forKey: "quarkCookie")
+    defaults.set([legacyDomain], forKey: "credentialLegacyDomains.quarkCookie")
+    defaults.setPersistentDomain(["quarkCookie": "fixture-legacy-cookie"], forName: legacyDomain)
+    let source = UserPreferences(defaults: defaults)
+    let snapshot = source.makeIsolatedSnapshot()
+    defer { snapshot.discardIsolatedSnapshot() }
+
+    #expect(snapshot.currentVodSiteKey == "original-site")
+    #expect(snapshot.quarkCookie == "fixture-legacy-cookie")
+    snapshot.currentVodSiteKey = "audit-site"
+    snapshot.defaultPlaybackSpeed = 1.5
+    snapshot.subtitleFontSize = 36
+    #expect(snapshot.defaultPlaybackSpeed == 1.5)
+    #expect(snapshot.subtitleFontSize == 36)
+    #expect(source.currentVodSiteKey == "original-site")
+    #expect(defaults.string(forKey: "quarkCookie") == "fixture-legacy-cookie")
+    #expect(defaults.persistentDomain(forName: legacyDomain)?["quarkCookie"] as? String == "fixture-legacy-cookie")
+    #expect(unrelated.object(forKey: marker) == nil)
+    let empty = UserPreferences.makeEmptyIsolatedSession()
+    defer { empty.discardIsolatedSnapshot() }
+    #expect(empty.currentVodSiteKey.isEmpty)
+    #expect(empty.quarkCookie.isEmpty)
+    snapshot.discardIsolatedSnapshot()
+    #expect(snapshot.currentVodSiteKey.isEmpty)
+}
+
+@Test func accountFreeAuditPreferencesKeepAccountsAndSelectionsIndependent() throws {
+    let first = UserPreferences.makeEmptyIsolatedSession()
+    let second = UserPreferences.makeEmptyIsolatedSession()
+    let snapshot = second.makeIsolatedSnapshot()
+    defer {
+        first.discardIsolatedSnapshot()
+        second.discardIsolatedSnapshot()
+        snapshot.discardIsolatedSnapshot()
+    }
+    first.currentVodSiteKey = "saved-source"
+    first.quarkCookie = "fixture-only-private-cookie"
+    first.aliRefreshToken = "fixture-only-refresh-token"
+    #expect(second.currentVodSiteKey.isEmpty)
+    #expect(second.quarkCookie.isEmpty)
+    #expect(second.aliRefreshToken.isEmpty)
+    #expect(snapshot.quarkCookie.isEmpty)
+    #expect(snapshot.aliRefreshToken.isEmpty)
+    snapshot.quarkCookie = "different-session-cookie"
+    #expect(second.quarkCookie.isEmpty)
+    #expect(first.quarkCookie == "fixture-only-private-cookie")
+}
+
 @Test func legacyPreferenceMigrationRestoresMissingValuesWithoutOverwritingCurrentSettings() throws {
     let targetDomain = "UserPreferencesMigrationTests.target.\(UUID().uuidString)"
     let legacyPrimary = "UserPreferencesMigrationTests.primary.\(UUID().uuidString)"

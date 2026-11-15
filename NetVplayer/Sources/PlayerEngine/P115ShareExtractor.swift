@@ -8,13 +8,10 @@ import Networking
 import DriveEngine
 
 public final class P115ShareExtractor: SourceExtractorProtocol {
-    public static let cookieDefaultsKey = "p115Cookie"
-    public static let accessTokenDefaultsKey = "p115AccessToken"
-
     private let client: P115DriveClient
     private let cookieProvider: @Sendable () -> String?
     private let accessTokenProvider: @Sendable () -> String?
-    private let cookieUpdateHandler: @Sendable (String) -> Void
+    private let cookieUpdateHandler: (@Sendable (String) -> Void)?
 
     public init(
         httpClient: HTTPClient = .shared,
@@ -36,9 +33,7 @@ public final class P115ShareExtractor: SourceExtractorProtocol {
             ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
             return accessToken.isEmpty ? nil : accessToken
         },
-        cookieUpdateHandler: @escaping @Sendable (String) -> Void = {
-            UserPreferences.shared.p115Cookie = $0
-        }
+        cookieUpdateHandler: (@Sendable (String) -> Void)? = nil
     ) {
         self.client = P115DriveClient(httpClient: httpClient)
         self.cookieProvider = cookieProvider
@@ -64,8 +59,10 @@ public final class P115ShareExtractor: SourceExtractorProtocol {
         guard let cookie = normalizedCookie(cookieProvider()) else {
             throw DriveEngineError.loginRequired(.p115)
         }
-        cookieUpdateHandler(cookie)
         let accessToken = normalizedAccessToken(accessTokenProvider())
+        let original = CloudCredential(provider: .p115, kind: .cookie, secret: cookie,
+                                       metadata: ["access_token": accessToken ?? ""])
+        let refresh = cookieUpdateHandler == nil ? CloudDirectoryCredentialRefresh(original: original) : nil
 
         let link: CloudDriveLink
         if let reference = DriveFileReference.parse(url), reference.provider == .p115 {
@@ -79,6 +76,9 @@ public final class P115ShareExtractor: SourceExtractorProtocol {
             link = try await client.link(file: selected.file, share: share, cookie: cookie, accessToken: accessToken)
         }
 
+        try await DriveTransferContext.current.check()
+        if let cookieUpdateHandler { cookieUpdateHandler(cookie) }
+        else { refresh?.save(link.updatedCredential ?? original) }
         let headers = playbackHeaders(from: link.headers, cookie: cookie)
         let adapter = P115DrivePlaybackAdapter()
         return SourceFetchResult(

@@ -189,3 +189,31 @@ public final class MemoryCredentialStore: CredentialStore, @unchecked Sendable {
     public func write(_ value: String, for key: String) { lock.lock(); defer { lock.unlock() }; values[key] = value }
     public func remove(_ key: String) { lock.lock(); defer { lock.unlock() }; values.removeValue(forKey: key) }
 }
+
+/// An audit may read the existing account, but token refresh and logout remain
+/// local to that audit session. The backing store is never written or removed.
+final class SessionCredentialStore: CredentialStore, @unchecked Sendable {
+    private let source: any CredentialStore
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+
+    init(source: any CredentialStore) { self.source = source }
+
+    func read(_ key: String) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        if let value = values[key] { return value.isEmpty ? nil : value }
+        let value = try source.read(key)
+        values[key] = value ?? ""
+        return value
+    }
+
+    func write(_ value: String, for key: String) {
+        lock.lock(); defer { lock.unlock() }
+        values[key] = value
+    }
+
+    func remove(_ key: String) {
+        lock.lock(); defer { lock.unlock() }
+        values[key] = ""
+    }
+}

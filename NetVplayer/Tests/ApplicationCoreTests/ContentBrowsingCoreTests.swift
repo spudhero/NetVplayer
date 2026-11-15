@@ -1,9 +1,38 @@
 import ApplicationCore
+import Foundation
 import Models
 import Testing
 
 @Suite("Application core content browsing")
 struct ContentBrowsingCoreTests {
+    @Test func musicStartsUnfilteredAndCanReturnFromAWithoutLosingPagingState() throws {
+        let category = VodClass(typeId: "5", typeName: "音乐")
+        let filter = try JSONDecoder().decode(Filter.self, from: Data(
+            #"{"key":"5","name":"字母","value":[{"n":"A","v":"A"},{"n":"B","v":"B"}]}"#.utf8))
+        let home = ContentCatalogState(filtersByCategoryID: ["5": [filter]])
+        let start = ContentCatalogCore.beginCategory(home, category: category)
+        #expect(start.request?.selection.isEmpty == true)
+        #expect(ContentCatalogCore.selectedFilterName(in: start.state, filterKey: "5").isEmpty)
+
+        let a = ContentCatalogCore.selectOption(start.state, filterKey: "5", value: "A")
+        #expect(a.request?.selection == ["5": "A"])
+        let received = ContentCatalogCore.receiveCategory(a.state, request: try #require(a.request),
+            payload: ContentCatalogPayload(vods: [Vod(vodId: "a")], page: 1, pageCount: 2))
+        let next = ContentCatalogCore.beginNextPage(received, triggerVodID: "a")
+        #expect(next.request?.selection == ["5": "A"])
+        #expect(next.request?.page == 2)
+
+        let all = ContentCatalogCore.selectOption(received, filterKey: "5", value: "")
+        #expect(all.request?.selection == ["5": ""])
+        #expect(all.request?.page == 1)
+        #expect(ContentCatalogCore.beginCategory(all.state, category: category).request?.selection == ["5": ""])
+        let reset = ContentCatalogCore.beginCategory(
+            ContentCatalogCore.resetFilters(a.state, clearDefinitions: false), category: category)
+        #expect(reset.request?.selection.isEmpty == true)
+        let other = ContentCatalogCore.beginCategory(all.state, category: VodClass(typeId: "2", typeName: "剧集"))
+        #expect(ContentCatalogCore.beginCategory(other.state, category: category).request?.selection == ["5": ""])
+    }
+
     @Test func homeLifecycleResetsFiltersAndBuildsVisibleSnapshot() {
         let oldVod = Vod(vodId: "old", vodName: "Old")
         let current = ContentCatalogState(
@@ -183,7 +212,8 @@ struct ContentBrowsingCoreTests {
         let returnedFilter = Filter(
             key: "genre",
             name: "类型",
-            values: [FilterValue(name: "剧情", value: "drama")]
+            values: [FilterValue(name: "剧情", value: "drama")],
+            defaultValue: "drama"
         )
         let received = ContentCatalogCore.receiveCategory(
             started.state,

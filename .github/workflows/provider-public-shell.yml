@@ -6,8 +6,15 @@ on:
     branches:
       - main
     paths:
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "docs/releases/**"
+      - "script/runtime/README.md"
+      - "script/audit_provider_public_boundary.py"
+      - "script/test_audit_provider_public_boundary.py"
       - "provider-runners/**"
       - "provider-sdk/**"
+      - "android-presentation/**"
       - "docs/data/provider-public-boundary-v1.json"
       - "docs/data/torrent-bridge-license-audit-2026-08-18.json"
       - "NetVplayer/Package.swift"
@@ -18,11 +25,22 @@ on:
       - "script/build_provider_package.py"
       - "script/build_provider_sandbox_launcher.py"
       - "script/audit_provider_public_release.py"
+      - "script/public_release_policy.py"
+      - "script/android_presentation.py"
+      - "script/android_compatibility.py"
+      - "script/test_android_compatibility.py"
+      - "script/audit_public_links.py"
+      - "script/test_android_presentation_audit.py"
+      - "script/test_audit_public_links.py"
+      - "script/build_android_dialog_presentation.py"
+      - "script/fixtures/web-transport/**"
       - "script/audit_source_free_app.py"
       - "script/test_audit_source_free_app.py"
       - "NetVplayer/script/build_and_run.sh"
       - "script/export_provider_public_shell.py"
       - "script/package_libmpv_runtime_licenses.py"
+      - "script/package_file_transfer.py"
+      - "script/prepare_file_transfer_runtime.py"
       - "script/package_sentry_resources.py"
       - "script/test_package_sentry_resources.py"
       - "script/package_tmdb_credentials.py"
@@ -79,8 +97,10 @@ jobs:
       - name: Use OpenSSL 3 for Ed25519 fixtures
         run: echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
 
-      - name: Install libmpv development files
-        run: brew install mpv
+      - name: Install playback and file transfer development files
+        run: |
+          brew install mpv libssh2
+          echo "NETVPLAYER_FILE_TRANSFER_RUNTIME=$(brew --prefix libssh2)" >> "$GITHUB_ENV"
 
       - name: Fetch pinned Java fixture dependency
         shell: bash
@@ -114,6 +134,13 @@ jobs:
 
       - name: Run serial SwiftPM regression
         run: swift test --package-path NetVplayer --disable-sandbox --no-parallel
+
+      - name: Verify signed sandbox home isolation
+        env:
+          NETVPLAYER_RUN_SIGNED_SANDBOX_HOME_TEST: "1"
+        run: >-
+          swift test --package-path NetVplayer --skip-build --disable-sandbox --no-parallel
+          --filter signedSandboxAuditExecutesHomeWithoutReadingOrChangingOrdinaryState
 
       - name: Check patch formatting
         run: git diff --check

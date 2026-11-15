@@ -2,6 +2,7 @@
 // 系统设置视图
 
 import SwiftUI
+import DriveEngine
 import AppKit
 import UniformTypeIdentifiers
 import Models
@@ -32,53 +33,6 @@ struct SettingsView: View {
     @Environment(\.appThemePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private enum SettingsSection: String, CaseIterable, Identifiable {
-        case appearance
-        case dataSource
-        case providers
-        case playback
-        case network
-        case system
-        case feedback
-
-        var id: String { rawValue }
-        var title: String {
-            switch self {
-            case .appearance: L10n.text("外观")
-            case .dataSource: L10n.text("内容来源")
-            case .providers: L10n.text("扩展支持")
-            case .playback: L10n.text("播放偏好")
-            case .network: L10n.text("网络与代理")
-            case .system: L10n.text("缓存与系统")
-            case .feedback: L10n.text("问题反馈")
-            }
-        }
-
-        var icon: String {
-            switch self {
-            case .appearance: return "paintpalette"
-            case .dataSource: return "link"
-            case .providers: return "puzzlepiece.extension"
-            case .playback: return "play.circle"
-            case .network: return "network"
-            case .system: return "wrench"
-            case .feedback: return "exclamationmark.bubble"
-            }
-        }
-
-        var subtitle: String {
-            switch self {
-            case .appearance: return L10n.text("背景、主题与控件色彩")
-            case .dataSource: return L10n.text("按视频所在位置，选择适合你的接入方式")
-            case .providers: return L10n.text("自动维护播放兼容能力")
-            case .playback: return L10n.text("画面、字幕与播放行为")
-            case .network: return L10n.text("代理、端口与中继")
-            case .system: return L10n.text("缓存、备份与实验功能")
-            case .feedback: return L10n.text("复现资料、脱敏日志与 Issue")
-            }
-        }
-    }
-
     private enum CloudProvider: String, CaseIterable, Identifiable, Hashable {
         case quark = "夸克"
         case uc = "UC"
@@ -88,17 +42,6 @@ struct SettingsView: View {
         case pikpak = "PikPak"
 
         var id: String { rawValue }
-
-        var credentialKind: String {
-            switch self {
-            case .quark: return "Cookie / Token"
-            case .uc: return "Cookie"
-            case .ali: return "Refresh Token"
-            case .p115: return "Cookie / Access Token"
-            case .pikpak: return "Access / Refresh Token"
-            case .baidu: return "Cookie"
-            }
-        }
 
         var driveProvider: DriveProvider {
             switch self {
@@ -118,7 +61,13 @@ struct SettingsView: View {
 
     @EnvironmentObject var appState: AppState
 
-    @State private var selectedSection: SettingsSection = .appearance
+    @StateObject private var searchNavigation: SettingsSearchNavigation
+    @State private var providerDetailsExpanded = false
+    private var selectedSection: SettingsSection { searchNavigation.section }
+
+    init(searchNavigation: SettingsSearchNavigation = SettingsSearchNavigation()) {
+        _searchNavigation = StateObject(wrappedValue: searchNavigation)
+    }
     @State private var hoveredSection: SettingsSection?
     @State private var selectedCloudProvider: CloudProvider = .quark
     @State private var selectedSavedVodConfigURL: String = ""
@@ -143,9 +92,13 @@ struct SettingsView: View {
     @State private var pikpakDeviceID: String = ""
     @State private var cloudCookieSaved: Bool = false
     @State private var cloudCookieVerified = false
+    @State private var cloudAccountStatuses: [DriveProvider: CloudAccountStatus] = [:]
+    @State private var cloudCredentialLoadID = UUID()
+    @State private var editedCloudProviders: Set<CloudProvider> = []
     @State private var isValidatingCloudCookie: Bool = false
     @State private var cloudCookieStatus: String?
     @State private var isManualCloudAuthExpanded: Bool = false
+    @State private var showsCloudDirectory = false
     @State private var cloudAutoDeleteSavedFiles: [CloudProvider: Bool] = [:]
     @State private var backupStatus: String?
     @State private var backupStatusIsError: Bool = false
@@ -189,57 +142,106 @@ struct SettingsView: View {
     @State private var webHomeURL: String = ""
 
     var body: some View {
-        HStack(spacing: 0) {
-            settingsSectionSidebar
-                .background {
-                    AppGlassSurface(cornerRadius: 0, role: .chrome)
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                if geometry.size.width >= 760 {
+                    settingsSectionSidebar
+                        .background { AppGlassSurface(cornerRadius: 0, role: .chrome) }
+                    Rectangle()
+                        .fill(palette.foreground.opacity(0.08))
+                        .frame(width: 1)
                 }
 
-            Rectangle()
-                .fill(palette.foreground.opacity(0.08))
-                .frame(width: 1)
+                ScrollViewReader { proxy in
+                    VStack(spacing: 0) {
+                        if geometry.size.width < 760 {
+                            SettingsChoicePicker(title: L10n.text("设置分区"), selection: Binding(
+                                get: { selectedSection }, set: { searchNavigation.select(section: $0) }
+                            ), choices: SettingsSection.allCases) { $0.title }
+                            .padding(.horizontal, 24).padding(.top, 20)
+                        }
+                        settingsContentHeader
+                            .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                        SettingsSearchBar(navigate: searchNavigation.reveal, availability: searchAvailability, onSearch: searchNavigation.clearLocation)
+                            .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                            .padding(.bottom, 12)
+                        if let target = searchNavigation.target {
+                            searchLocationNotice(target)
+                                .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                                .padding(.bottom, 10)
+                        }
+                        if selectedSection == .playback {
+                            SettingsChoicePicker(title: L10n.text("播放设置页面"), selection: Binding(
+                                get: { searchNavigation.page },
+                                set: { searchNavigation.select(section: .playback, page: $0) }
+                            ), choices: SettingsPlaybackPage.allCases) { $0.title }
+                            .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                            .padding(.bottom, 12)
+                        }
 
-            ScrollViewReader { proxy in
-                VStack(spacing: 0) {
-                    settingsContentHeader
-                        .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                        if selectedSection == .dataSource {
+                            contentSourceNavigation { category in
+                                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                                    proxy.scrollTo(category, anchor: .top)
+                                }
+                            }
+                            .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                            .padding(.bottom, 16)
+                        }
 
-                    if selectedSection == .dataSource {
-                        contentSourceNavigation { category in
-                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                                proxy.scrollTo(category, anchor: .top)
+                        ThemedScrollView {
+                            selectedSectionContent
+                                .id(selectedSection)
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                                .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth, alignment: .topLeading)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                                .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
+                                .padding(.top, 4)
+                                .padding(.bottom, AppSurfaceVisualPolicy.settingsBottomPadding)
+                        }
+                        .id(selectedSection)
+                        .scrollContentBackground(.hidden)
+                        .background(Color.clear)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(key: SettingsSearchViewportKey.self, value: geometry.frame(in: .global))
                             }
                         }
-                        .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth, alignment: .leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
-                        .padding(.bottom, 16)
                     }
-
-                    ThemedScrollView {
-                        selectedSectionContent
-                            .id(selectedSection)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                            .frame(maxWidth: AppSurfaceVisualPolicy.settingsContentMaxWidth, alignment: .topLeading)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                            .padding(.horizontal, AppSurfaceVisualPolicy.pageHorizontalPadding)
-                            .padding(.top, 4)
-                            .padding(.bottom, AppSurfaceVisualPolicy.settingsBottomPadding)
-                    }
-                    .id(selectedSection)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.clear)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+        }
+        .environment(\.settingsSearchLocation, searchNavigation.target.map {
+            SettingsSearchLocation(target: effectiveSearchAnchor($0), request: searchNavigation.requestID,
+                                   highlighted: searchNavigation.isHighlighted)
+        })
+        .onChange(of: searchNavigation.requestID) { _, _ in revealSearchContent() }
+        .task(id: searchNavigation.requestID) {
+            let request = searchNavigation.requestID
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            searchNavigation.expireHighlight(request: request)
         }
         .foregroundStyle(palette.foreground)
         .tint(palette.accent)
         .groupBoxStyle(AppGroupBoxStyle())
+        .disclosureGroupStyle(FullRowDisclosureGroupStyle())
         .ignoresSafeArea(edges: .top)
         .onAppear {
             loadSettingsState()
             applySettingsNavigationDestination(appState.settingsNavigationDestination)
+            revealSearchContent()
+        }
+        .onDisappear { searchNavigation.clearLocation() }
+        .task(id: cloudCredentialLoadID) {
+            let snapshot = await Task.detached {
+                CloudAccountSettingsSnapshot(preferences: .shared)
+            }.value
+            guard !Task.isCancelled else { return }
+            applyCloudCredentialState(snapshot)
         }
         .onChange(of: appState.settingsNavigationDestination) { _, destination in
             applySettingsNavigationDestination(destination)
@@ -248,6 +250,7 @@ struct SettingsView: View {
             guard previousRequest != nil, request == nil else { return }
             loadCloudCredentialState()
         }
+        .sheet(isPresented: $showsCloudDirectory) { CloudDirectoryEditor(provider: selectedCloudProvider.driveProvider) }
         .onReceive(NotificationCenter.default.publisher(for: .contentSourceCloudAuthCompleted)) { notification in
             guard let result = notification.object as? ContentSourceCloudAuthResult,
                   result.provider == selectedCloudProvider.driveProvider else { return }
@@ -308,21 +311,106 @@ struct SettingsView: View {
         guard let destination else { return }
         switch destination {
         case .dataSource:
-            selectedSection = .dataSource
+            searchNavigation.select(section: .dataSource)
         case .providers:
-            selectedSection = .providers
+            searchNavigation.select(section: .providers)
         case .playback:
-            selectedSection = .playback
+            searchNavigation.select(section: .playback)
         case .network:
-            selectedSection = .network
+            searchNavigation.select(section: .network)
         case .system:
-            selectedSection = .system
+            searchNavigation.select(section: .system)
         case .appearance:
-            selectedSection = .appearance
+            searchNavigation.select(section: .appearance)
         case .feedback:
-            selectedSection = .feedback
+            searchNavigation.select(section: .feedback)
         }
         appState.consumeSettingsNavigationDestination(destination)
+    }
+
+    private var settingsPlayerState: PlayerState {
+        appState.isLivePlayerPresented ? appState.livePlayerState : appState.playerState
+    }
+
+    @ViewBuilder private var playbackPageContent: some View {
+        switch searchNavigation.page {
+        case .general: playbackSettings
+        case .video:
+            PlaybackColorSettingsContent(playerState: settingsPlayerState,
+                searchRequest: searchNavigation.requestID,
+                searchAdvanced: SettingsSearchIndex.entries.first { $0.id == searchNavigation.target }?.expansion == .videoAdvanced)
+        case .audio:
+            PlaybackAudioOutputSettingsContent(playerState: settingsPlayerState,
+                searchRequest: searchNavigation.requestID,
+                searchAdvanced: SettingsSearchIndex.entries.first { $0.id == searchNavigation.target }?.expansion == .audioAdvanced)
+        case .dialogue:
+            PlaybackDialogueSettingsView(playerState: settingsPlayerState, initiallyExpanded: true)
+                .settingsSearchAnchor(.dialogue)
+        }
+    }
+
+    private var selectedCloudSearchTarget: SettingsSearchTarget {
+        switch selectedCloudProvider {
+        case .quark: .quark
+        case .uc: .uc
+        case .ali: .ali
+        case .p115: .p115
+        case .pikpak: .pikpak
+        case .baidu: .baidu
+        }
+    }
+
+    private func revealSearchContent() {
+        guard let target = searchNavigation.target else { return }
+        switch target {
+        case .quark: selectedCloudProvider = .quark
+        case .uc: selectedCloudProvider = .uc
+        case .ali: selectedCloudProvider = .ali
+        case .p115: selectedCloudProvider = .p115
+        case .pikpak: selectedCloudProvider = .pikpak
+        case .baidu: selectedCloudProvider = .baidu
+        default: break
+        }
+        switch SettingsSearchIndex.entry(target).expansion {
+        case .formats: sourceFormatsExpanded = true
+        case .manualCloud: isManualCloudAuthExpanded = true
+        case .report: configReportExpanded = true
+        case .compatibility: configReportExpanded = true; compatibilityReportExpanded = true
+        case .hygiene: configReportExpanded = true; sourceHygieneExpanded = true
+        case .credentials: configReportExpanded = true; credentialRiskExpanded = true
+        case .resources: configReportExpanded = true; resourceDiagnosticsExpanded = true
+        case .liveQuality: configReportExpanded = true; liveLineQualityExpanded = true
+        case .providerDetails: providerDetailsExpanded = true
+        default: break
+        }
+    }
+
+    private var searchContext: SettingsSearchContext {
+        SettingsSearchContext(customProxy: proxyMode == 2, danmakuEnabled: danmakuEnabled,
+            webHomeEnabled: webHomeEnabled, hasExternalReports: !appState.externalSourceReports.isEmpty,
+            hasSearchSites: appState.sites.contains(where: \.isSearchable),
+            hasLiveChannels: !appState.channelGroups.isEmpty,
+            pcmControlsAvailable: settingsPlayerState.volumeControl == .player)
+    }
+    private func effectiveSearchAnchor(_ target: SettingsSearchTarget) -> SettingsSearchTarget {
+        searchContext.anchor(for: target)
+    }
+    private func searchAvailability(_ target: SettingsSearchTarget) -> String? { searchContext.reason(for: target) }
+
+    private func searchLocationNotice(_ target: SettingsSearchTarget) -> some View {
+        let entry = SettingsSearchIndex.entry(target)
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "location.magnifyingglass")
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.path + " › " + entry.title).font(.caption.weight(.semibold))
+                if let reason = searchAvailability(target) { Text(reason).font(.caption).foregroundStyle(.secondary) }
+            }.fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button { searchNavigation.clearLocation() } label: { Image(systemName: "xmark") }
+                .buttonStyle(.plain).accessibilityLabel(L10n.text("结束定位"))
+        }
+        .padding(10).background { AppGlassSurface(cornerRadius: 8, role: .control, usesSystemMaterial: false) }
+        .accessibilityIdentifier("settings-location-notice")
     }
 
     private var settingsSectionSidebar: some View {
@@ -357,7 +445,7 @@ struct SettingsView: View {
 
         return Button {
             withAnimation(.easeOut(duration: 0.18)) {
-                selectedSection = section
+                searchNavigation.select(section: section)
             }
         } label: {
             HStack(spacing: 10) {
@@ -449,13 +537,13 @@ struct SettingsView: View {
         case .providers:
             providerRuntimeSettings
         case .playback:
-            playbackSettings
+            playbackPageContent
         case .network:
             networkSettings
         case .system:
             cacheAndSystemSettings
         case .feedback:
-            FeedbackView()
+            FeedbackView().settingsSearchAnchor(.feedback)
         }
     }
 
@@ -465,7 +553,7 @@ struct SettingsView: View {
                 title: L10n.text("界面主题"),
                 subtitle: L10n.text("选择浏览界面的背景与强调色。"),
                 systemImage: "paintpalette"
-            )
+            ).settingsSearchAnchor(.theme)
 
             AppearanceThemePicker(selectedThemeID: appState.appearanceThemeID) { id in
                 if reduceMotion {
@@ -507,16 +595,19 @@ struct SettingsView: View {
                                 .textSelection(.enabled)
                                 .padding(.top, 8)
                         }
+                    .settingsSearchAnchor(.sourceFormats)
                         .padding(.vertical, 10)
                     }
                     .padding(.leading, 27)
                 }
-                XtreamAccountSettings()
+                XtreamAccountSettings().settingsSearchAnchor(.xtream)
+                MediaServerAccountSettings().settingsSearchAnchor(.mediaServer)
             }
             ContentSourceGroup(category: .cloud) { cloudDriveAuthSettings }
             ContentSourceGroup(category: .files) {
-                FileServiceSettings()
-                MetadataSettings()
+                FileServiceSettings().settingsSearchAnchor(.files)
+                MetadataSettings(searchRequest: searchNavigation.target == .tmdbCredential ? searchNavigation.requestID : nil)
+                    .settingsSearchAnchor(.metadata)
             }
             ContentSourceGroup(category: .search) {
                 searchSourceSettings
@@ -575,13 +666,14 @@ struct SettingsView: View {
 
     private var providerRuntimeSettings: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            ProviderExecutionSettingsView(appState: appState)
             GroupBox(label: SettingsPanelLabel(
                 title: L10n.text("播放扩展支持"),
                 subtitle: L10n.text("自动准备并更新播放所需组件，无需手动安装。"),
                 systemImage: "puzzlepiece.extension",
                 statusText: providerRuntimeSummaryStatus,
                 statusColor: providerRuntimeSummaryColor
-            )) {
+            ).settingsSearchAnchor(.providers)) {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(alignment: .center, spacing: 14) {
                         Image(systemName: providerRuntimeSummaryIcon)
@@ -653,10 +745,10 @@ struct SettingsView: View {
                     Divider()
 
                     DisclosureGroup(isExpanded: Binding(
-                        get: { appState.providerInstallation.detailsExpanded },
-                        set: { appState.setProviderRuntimeDetailsExpanded($0) }
+                        get: { providerDetailsExpanded || appState.providerInstallation.detailsExpanded },
+                        set: { providerDetailsExpanded = $0; appState.setProviderRuntimeDetailsExpanded($0) }
                     )) {
-                        providerRuntimeTechnicalDetails
+                        providerRuntimeTechnicalDetails.settingsSearchAnchor(.providerDetails)
                             .padding(.top, 10)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
@@ -732,7 +824,7 @@ struct SettingsView: View {
                 .padding(.leading, 27)
             }
 
-            Text(L10n.text("扩展只提供格式兼容能力，不包含视频源，也不会执行配置中的远程脚本。"))
+            Text(L10n.text("播放扩展不包含视频源。Android 原版组件会按您提供的配置执行原始 JAR。"))
                 .font(.caption)
                 .foregroundStyle(palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -985,7 +1077,7 @@ struct SettingsView: View {
                         }
                     }
                     .disabled(vodConfigUrl.isEmpty || isLoadingVod)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
                     .tint(palette.accent)
                 }
 
@@ -1014,6 +1106,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .settingsSearchAnchor(.vod)
     }
 
     private var savedVodConfigs: some View {
@@ -1060,6 +1153,7 @@ struct SettingsView: View {
                 syncSavedVodConfigSelection(urls)
             }
         }
+        .settingsSearchAnchor(.savedConfigs)
     }
 
     private var pendingSavedVodConfigRemovalName: String {
@@ -1090,6 +1184,7 @@ struct SettingsView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                 }
+                    .settingsSearchAnchor(.searchSorting)
 
             }
             .padding(.leading, 27)
@@ -1111,6 +1206,7 @@ struct SettingsView: View {
             }
             .padding(.leading, 27)
         }
+        .settingsSearchAnchor(.diagnostics)
     }
 
     private var compactDefaultSearchSites: some View {
@@ -1150,18 +1246,17 @@ struct SettingsView: View {
                 .disabled(sites.isEmpty || enabledCount == sites.count)
             }
         }
+        .settingsSearchAnchor(.searchScope)
     }
 
     private var configReportDisclosureRow: some View {
         let snapshot = appState.configAggregationSnapshot
         let hasScan = appState.isConfigLoaded || !appState.externalSourceReports.isEmpty
 
-        return SettingsControlRow(title: L10n.text("查看详细检查报告"), caption: L10n.text("配置兼容性、账号风险与资源状态")) {
-            Button {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    configReportExpanded.toggle()
-                }
-            } label: {
+        return Button {
+            withAnimation(.easeOut(duration: 0.18)) { configReportExpanded.toggle() }
+        } label: {
+            SettingsControlRow(title: L10n.text("查看详细检查报告"), caption: L10n.text("配置兼容性、账号风险与资源状态")) {
                 HStack(spacing: 8) {
                     SettingsStatusTag(
                         label: L10n.text("外部源"),
@@ -1176,10 +1271,12 @@ struct SettingsView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .rotationEffect(.degrees(configReportExpanded ? 90 : 0))
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityValue(configReportExpanded ? L10n.text("已展开") : L10n.text("已折叠"))
     }
 
     private var advancedConfigDiagnostics: some View {
@@ -1219,7 +1316,7 @@ struct SettingsView: View {
             if !appState.externalSourceReports.isEmpty {
                 Divider()
                 DisclosureGroup(isExpanded: $compatibilityReportExpanded) {
-                    externalSourceCompatibilityReport
+                    externalSourceCompatibilityReport.settingsSearchAnchor(.compatibility)
                         .padding(.top, 8)
                 } label: {
                     Label(L10n.text("外部源兼容状态"), systemImage: "checkmark.shield")
@@ -1444,6 +1541,7 @@ struct SettingsView: View {
                 .font(.subheadline)
                 .fontWeight(.semibold)
         }
+        .settingsSearchAnchor(.hygiene)
     }
 
     private var credentialRiskReport: some View {
@@ -1489,6 +1587,7 @@ struct SettingsView: View {
                 .font(.subheadline)
                 .fontWeight(.semibold)
         }
+        .settingsSearchAnchor(.credentials)
     }
 
     private var resourceDiagnosticsReport: some View {
@@ -1533,6 +1632,7 @@ struct SettingsView: View {
                 .font(.subheadline)
                 .fontWeight(.semibold)
         }
+        .settingsSearchAnchor(.resources)
     }
 
     private var liveLineQualityReport: some View {
@@ -1595,6 +1695,7 @@ struct SettingsView: View {
                 .font(.subheadline)
                 .fontWeight(.semibold)
         }
+        .settingsSearchAnchor(.liveQuality)
     }
 
     private var siteHealthDiagnostics: some View {
@@ -1793,14 +1894,22 @@ struct SettingsView: View {
                 }
             }
         }
+        .settingsSearchAnchor(.live)
     }
 
     private var cloudDriveAuthSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if PersonalCloudDirectoryClient.supportedProviders.contains(selectedCloudProvider.driveProvider) {
+                Button { showsCloudDirectory = true } label: {
+                    Label(L10n.text("添加网盘目录"), systemImage: "folder.badge.plus")
+                }.buttonStyle(.bordered)
+            }
+            Button(L10n.text("查看转存记录")) { appState.showsDriveTaskRecovery = true }
         GroupBox(label: SettingsPanelLabel(
             title: L10n.text("登录网盘"),
-            subtitle: L10n.text("播放需要网盘账号的视频时，在这里登录对应的网盘。"),
+            subtitle: L10n.text("此处账号用于原生实现和网盘目录。Android 原版在各视频源内扫码，授权单独保存。"),
             systemImage: "externaldrive.badge.person.crop"
-        )) {
+        ).settingsSearchAnchor(.cloudAccounts)) {
             VStack(alignment: .leading, spacing: 12) {
                 ViewThatFits(in: .horizontal) {
                     Picker(L10n.text("网盘服务"), selection: $selectedCloudProvider) {
@@ -1814,12 +1923,9 @@ struct SettingsView: View {
                     SettingsChoicePicker(title: L10n.text("网盘服务"), selection: $selectedCloudProvider, choices: CloudProvider.allCases) { L10n.text($0.rawValue) }
                 }
                 .onChange(of: selectedCloudProvider) { _, provider in
-                    cloudCookieSaved = false
-                    cloudCookieVerified = false
-                    cloudCookieStatus = nil
-                    isManualCloudAuthExpanded = !CloudAuthSettingsPolicy.supportsPrimaryQRCodeLogin(
-                        provider.driveProvider
-                    )
+                    refreshCloudAccountStatus()
+                    isManualCloudAuthExpanded = SettingsSearchIndex.entries.first { $0.id == searchNavigation.target }?.expansion == .manualCloud
+                        || !CloudAuthSettingsPolicy.supportsPrimaryQRCodeLogin(provider.driveProvider)
                 }
                 .disabled(isValidatingCloudCookie)
 
@@ -1846,7 +1952,7 @@ struct SettingsView: View {
                         } label: {
                             Label(L10n.text("扫码登录"), systemImage: "qrcode.viewfinder")
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
                         .disabled(isValidatingCloudCookie || appState.cloudAuthRequest != nil)
                     } else {
                         Label(L10n.text("暂不支持扫码授权"), systemImage: "key.horizontal")
@@ -1878,7 +1984,8 @@ struct SettingsView: View {
 
                 DisclosureGroup(isExpanded: $isManualCloudAuthExpanded) {
                     VStack(alignment: .leading, spacing: 10) {
-                        selectedCloudProviderFields
+                        VStack(alignment: .leading, spacing: 10) { selectedCloudProviderFields }
+                            .settingsSearchAnchor(selectedCloudSearchTarget)
 
                         Button {
                             saveCloudCookiesFromSettings()
@@ -1928,6 +2035,8 @@ struct SettingsView: View {
             .padding(.leading, 27)
             .padding(.vertical, 8)
         }
+    }
+
     }
 
     private var selectedCloudAutoDeleteBinding: Binding<Bool> {
@@ -1999,6 +2108,10 @@ struct SettingsView: View {
     }
 
     private var selectedCloudProviderHasCredential: Bool {
+        if !editedCloudProviders.contains(selectedCloudProvider),
+           let status = cloudAccountStatuses[selectedCloudProvider.driveProvider], status != .disconnected {
+            return true
+        }
         let values: [String]
         switch selectedCloudProvider {
         case .quark: values = [quarkCookie]
@@ -2015,9 +2128,14 @@ struct SettingsView: View {
         if let cloudCookieStatus, !cloudCookieStatus.isEmpty {
             return cloudCookieStatus
         }
+        let name = L10n.text(selectedCloudProvider.rawValue)
+        if editedCloudProviders.contains(selectedCloudProvider) {
+            return L10n.text("{0}凭据已修改，尚未保存", [name])
+        }
+        if cloudCookieVerified { return L10n.text("{0}账号已验证", [name]) }
         return selectedCloudProviderHasCredential
-            ? L10n.text("{0}账号信息已填写，尚未验证", [L10n.text(selectedCloudProvider.rawValue)])
-            : L10n.text("{0}未连接", [L10n.text(selectedCloudProvider.rawValue)])
+            ? L10n.text("{0}账号已保存，播放时自动校验", [name])
+            : L10n.text("{0}未连接", [name])
     }
 
     private var cloudCookieMessageRole: AppSemanticColorRole {
@@ -2026,9 +2144,17 @@ struct SettingsView: View {
     }
 
     private func markCloudCredentialsDirty() {
+        editedCloudProviders.insert(selectedCloudProvider)
         cloudCookieSaved = false
         cloudCookieVerified = false
         cloudCookieStatus = nil
+    }
+
+    private func refreshCloudAccountStatus(resetMessage: Bool = true) {
+        let status = cloudAccountStatuses[selectedCloudProvider.driveProvider] ?? .disconnected
+        cloudCookieSaved = !editedCloudProviders.contains(selectedCloudProvider) && status != .disconnected
+        cloudCookieVerified = cloudCookieSaved && status == .verified
+        if resetMessage { cloudCookieStatus = nil }
     }
 
     private var playbackSettings: some View {
@@ -2052,6 +2178,7 @@ struct SettingsView: View {
                             UserPreferences.shared.defaultDecodeMode = newValue
                         }
                     }
+                    .settingsSearchAnchor(.decode)
 
                     Divider()
 
@@ -2068,6 +2195,7 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.bordered)
                     }
+                    .settingsSearchAnchor(.playerWindow)
                 }
             }
 
@@ -2075,7 +2203,7 @@ struct SettingsView: View {
                 title: L10n.text("字幕"),
                 subtitle: L10n.text("播放器即时刷新字幕样式，不需要重启视频。"),
                 systemImage: "captions.bubble"
-            )) {
+            ).settingsSearchAnchor(.subtitle)) {
                 VStack(spacing: 0) {
                     HStack {
                         Spacer(minLength: 0)
@@ -2103,6 +2231,7 @@ struct SettingsView: View {
                                 refreshSubtitleStyle()
                             }
                     }
+                    .settingsSearchAnchor(.subtitleStyle)
 
                     Divider()
 
@@ -2116,6 +2245,7 @@ struct SettingsView: View {
                             }
                         ), range: 16...72, step: 1, valueText: "\(subtitleFontSize)")
                     }
+                    .settingsSearchAnchor(.subtitleSize)
 
                     Divider()
 
@@ -2129,6 +2259,7 @@ struct SettingsView: View {
                             }
                         ), range: 0...100, step: 1, valueText: "\(subtitlePosition)")
                     }
+                    .settingsSearchAnchor(.subtitlePosition)
                     Divider()
                     SubtitleAppearanceControls(appearance: $subtitleAppearance)
                         .padding(.vertical, 12)
@@ -2158,6 +2289,7 @@ struct SettingsView: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                     }
+                    .settingsSearchAnchor(.danmaku)
 
                     Divider()
 
@@ -2170,6 +2302,7 @@ struct SettingsView: View {
                             }
                         ), range: 0.2...1.0, step: 0.05, valueText: String(format: "%.0f%%", danmakuOpacity * 100))
                     }
+                    .settingsSearchAnchor(.danmakuOpacity)
                     .disabled(!danmakuEnabled)
                     .opacity(danmakuEnabled ? 1 : 0.48)
 
@@ -2184,6 +2317,7 @@ struct SettingsView: View {
                             }
                         ), range: 18...72, step: 1, valueText: "\(danmakuFontSize)")
                     }
+                    .settingsSearchAnchor(.danmakuSize)
                     .disabled(!danmakuEnabled)
                     .opacity(danmakuEnabled ? 1 : 0.48)
 
@@ -2198,6 +2332,7 @@ struct SettingsView: View {
                             }
                         ), range: -30...30, step: 0.5, valueText: String(format: "%.1fs", Double(danmakuOffsetMs) / 1000.0))
                     }
+                    .settingsSearchAnchor(.danmakuOffset)
                     .disabled(!danmakuEnabled)
                     .opacity(danmakuEnabled ? 1 : 0.48)
                 }
@@ -2207,6 +2342,7 @@ struct SettingsView: View {
 
     private var networkSettings: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
+            LocalAutomationSettingsView(controller: appState.localAutomation).settingsSearchAnchor(.automation)
             GroupBox(label: SettingsPanelLabel(
                 title: L10n.text("网络与代理"),
                 subtitle: L10n.text("自动探测适合多数环境，自定义模式可指定本机端口。"),
@@ -2227,6 +2363,7 @@ struct SettingsView: View {
                             applyProxyChange()
                         }
                     }
+                    .settingsSearchAnchor(.proxy)
 
                     Divider()
 
@@ -2250,6 +2387,7 @@ struct SettingsView: View {
                         }
                         .disabled(proxyMode != 2)
                     }
+                    .settingsSearchAnchor(.customProxy)
 
                     Divider()
 
@@ -2264,6 +2402,7 @@ struct SettingsView: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                     }
+                    .settingsSearchAnchor(.relay)
 
                     Divider()
 
@@ -2275,6 +2414,7 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.bordered)
                     }
+                    .settingsSearchAnchor(.networkCheck)
                 }
             }
 
@@ -2334,6 +2474,7 @@ struct SettingsView: View {
                     }
                 }
             }
+                    .settingsSearchAnchor(.language)
             CredentialPersistenceStatusView()
 
             GroupBox(label: SettingsPanelLabel(
@@ -2384,6 +2525,7 @@ struct SettingsView: View {
                     }
                 }
             }
+                    .settingsSearchAnchor(.cache)
 
             GroupBox(label: SettingsPanelLabel(
                 title: L10n.text("WebHome 实验入口"),
@@ -2405,6 +2547,7 @@ struct SettingsView: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                     }
+                    .settingsSearchAnchor(.webHome)
 
                     Divider()
 
@@ -2419,6 +2562,7 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .disabled(!webHomeEnabled)
                     }
+                    .settingsSearchAnchor(.webHomeURL)
                 }
             }
 
@@ -2442,6 +2586,7 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.bordered)
                     }
+                    .settingsSearchAnchor(.backup)
 
                     if let backupStatus {
                         Text(backupStatus)
@@ -2467,6 +2612,7 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.bordered)
                     }
+                    .settingsSearchAnchor(.progress)
 
                     if let progressSyncStatus {
                         Text(progressSyncStatus)
@@ -2492,6 +2638,7 @@ struct SettingsView: View {
                 }
                 MetadataAttributionView().padding(.top, 12)
             }
+                    .settingsSearchAnchor(.update)
         }
     }
 
@@ -2511,10 +2658,6 @@ struct SettingsView: View {
                 UserPreferences.shared.cloudDriveAutoDeleteSavedFiles(providerID: provider.driveProvider.rawValue)
             )
         })
-        cloudCookieSaved = false
-        cloudCookieVerified = false
-        cloudCookieStatus = nil
-
         decodeMode = UserPreferences.shared.defaultDecodeMode
         subtitleFontSize = UserPreferences.shared.subtitleFontSize
         subtitlePosition = UserPreferences.shared.subtitlePosition
@@ -2537,18 +2680,34 @@ struct SettingsView: View {
     }
 
     private func loadCloudCredentialState() {
-        quarkCookie = UserPreferences.shared.quarkCookie
-        ucCookie = UserPreferences.shared.ucCookie
-        baiduCookie = UserPreferences.shared.baiduCookie
-        aliRefreshToken = UserPreferences.shared.aliRefreshToken
-        aliAccessToken = UserPreferences.shared.aliAccessToken
-        aliOpenToken = UserPreferences.shared.aliOpenToken
-        aliDefaultDriveID = UserPreferences.shared.aliDefaultDriveID
-        p115Cookie = UserPreferences.shared.p115Cookie
-        p115AccessToken = UserPreferences.shared.p115AccessToken
-        pikpakAccessToken = UserPreferences.shared.pikpakAccessToken
-        pikpakRefreshToken = UserPreferences.shared.pikpakRefreshToken
-        pikpakDeviceID = UserPreferences.shared.pikpakDeviceID
+        editedCloudProviders.removeAll()
+        cloudCookieStatus = nil
+        cloudCredentialLoadID = UUID()
+    }
+
+    private func applyCloudCredentialState(_ snapshot: CloudAccountSettingsSnapshot) {
+        // An edit made while the background read was pending takes precedence.
+        let values = snapshot.values
+        if !editedCloudProviders.contains(.quark) { quarkCookie = values["quarkCookie"] ?? "" }
+        if !editedCloudProviders.contains(.uc) { ucCookie = values["ucCookie"] ?? "" }
+        if !editedCloudProviders.contains(.baidu) { baiduCookie = values["baiduCookie"] ?? "" }
+        if !editedCloudProviders.contains(.ali) {
+            aliRefreshToken = values["aliRefreshToken"] ?? ""
+            aliAccessToken = values["aliAccessToken"] ?? ""
+            aliOpenToken = values["aliOpenToken"] ?? ""
+            aliDefaultDriveID = values["aliDefaultDriveID"] ?? ""
+        }
+        if !editedCloudProviders.contains(.p115) {
+            p115Cookie = values["p115Cookie"] ?? ""
+            p115AccessToken = values["p115AccessToken"] ?? ""
+        }
+        if !editedCloudProviders.contains(.pikpak) {
+            pikpakAccessToken = values["pikpakAccessToken"] ?? ""
+            pikpakRefreshToken = values["pikpakRefreshToken"] ?? ""
+            pikpakDeviceID = values["pikpakDeviceID"] ?? ""
+        }
+        cloudAccountStatuses = snapshot.statuses
+        refreshCloudAccountStatus(resetMessage: false)
     }
 
     private var webHomeURLStatusText: String {
@@ -2787,18 +2946,7 @@ struct SettingsView: View {
                     cloudCookieStatus = cloudCookieVerified
                         ? L10n.text("{0}凭据已验证并保存", [L10n.text(provider.rawValue)])
                         : L10n.text("{0}凭据已保存，将在播放时校验", [L10n.text(provider.rawValue)])
-                    quarkCookie = UserPreferences.shared.quarkCookie
-                    ucCookie = UserPreferences.shared.ucCookie
-                    baiduCookie = UserPreferences.shared.baiduCookie
-                    aliRefreshToken = UserPreferences.shared.aliRefreshToken
-                    aliAccessToken = UserPreferences.shared.aliAccessToken
-                    aliOpenToken = UserPreferences.shared.aliOpenToken
-                    aliDefaultDriveID = UserPreferences.shared.aliDefaultDriveID
-                    p115Cookie = UserPreferences.shared.p115Cookie
-                    p115AccessToken = UserPreferences.shared.p115AccessToken
-                    pikpakAccessToken = UserPreferences.shared.pikpakAccessToken
-                    pikpakRefreshToken = UserPreferences.shared.pikpakRefreshToken
-                    pikpakDeviceID = UserPreferences.shared.pikpakDeviceID
+                    loadCloudCredentialState()
                     isValidatingCloudCookie = false
                 }
             } catch {
@@ -2869,6 +3017,7 @@ struct SettingsView: View {
         do { try UserPreferences.shared.checkCredentialPersistence() }
         catch { cloudCookieSaved = false; cloudCookieStatus = error.localizedDescription; return }
         cloudCookieSaved = true
+        editedCloudProviders.remove(selectedCloudProvider)
         cloudCookieStatus = L10n.text("已清空{0}授权", ["\(selectedCloudProvider.rawValue)"])
     }
 }

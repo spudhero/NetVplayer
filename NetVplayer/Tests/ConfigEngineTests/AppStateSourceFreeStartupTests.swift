@@ -1,12 +1,91 @@
 import Foundation
+import Models
 import Testing
 import ConfigEngine
 import Networking
 import Storage
+import CryptoKit
+@testable import SpiderEngine
 @testable import NetVplayerApp
 
 @Suite("Source-free startup", .serialized)
 struct AppStateSourceFreeStartupTests {
+    @MainActor
+    @Test func automaticMixedConfigurationCompletesRegistrationAndPublishesCapabilities() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mixed-default-" + UUID().uuidString)
+        let suite = "netvplayer-mixed-default-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let runtimeRoot = directory.appendingPathComponent("runtime")
+        for path in ["inputs", "converted", "lib", "jdk/bin"] {
+            try FileManager.default.createDirectory(at: runtimeRoot.appendingPathComponent(path), withIntermediateDirectories: true)
+        }
+        // ZIP metadata fixtures; no provider bytecode or external source runs.
+        let original = Data(base64Encoded: "UEsDBBQAAAAAAAAAWF2XnBGxCwAAAAsAAAALAAAAY2xhc3Nlcy5kZXhkZXgKMDM1AG5ld1BLAQIUAxQAAAAAAAAAWF2XnBGxCwAAAAsAAAALAAAAAAAAAAAAAACAAQAAAABjbGFzc2VzLmRleFBLBQYAAAAAAQABADkAAAA0AAAAAAA=")!
+        let converted = Data(base64Encoded: "UEsDBBQAAAAAAAAAWF00aLugCwAAAAsAAAArAAAAY29tL2dpdGh1Yi9jYXR2b2Qvc3BpZGVyL0ZpeHR1cmVHdWFyZC5jbGFzc8r+ur5maXh0dXJlUEsBAhQDFAAAAAAAAABYXTRou6ALAAAACwAAACsAAAAAAAAAAAAAAIABAAAAAGNvbS9naXRodWIvY2F0dm9kL3NwaWRlci9GaXh0dXJlR3VhcmQuY2xhc3NQSwUGAAAAAAEAAQBZAAAAVAAAAAAA")!
+        try original.write(to: runtimeRoot.appendingPathComponent("inputs/provider.jar"))
+        try converted.write(to: runtimeRoot.appendingPathComponent("converted/provider-jvm.jar"))
+        for file in ["lib/macapk-loader.jar", "lib/android-framework.jar", "jdk/bin/java"] {
+            try Data(file.utf8).write(to: runtimeRoot.appendingPathComponent(file))
+        }
+        let manifest = DevelopmentAndroidRuntimeManifest(schema: 2, providerID: "android-original-runtime", backend: "emulated",
+            providerSHA256: SHA256.hash(data: original).map { String(format: "%02x", $0) }.joined(),
+            hostSHA256: String(repeating: "a", count: 64), bindings: [], bootstrapClass: nil, package: nil)
+        let runtime = DevelopmentAndroidRuntimeLayout(root: runtimeRoot, manifest: manifest, classPath: [])
+        let store = DevelopmentAndroidArtifactStore(root: directory.appendingPathComponent("artifacts"),
+            fetch: { _, _ in original }, convert: { _, _, output in try converted.write(to: output) })
+        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: directory, registry: .shared, arguments: [], artifactStore: store)
+        let configURL = "https://mixed.example.test/config.json"
+        let json = #"{"spider":"https://mixed.example.test/provider.jar","sites":[{"key":"mixed-java","name":"Java","type":3,"api":"csp_FixtureGuard"},{"key":"mixed-script","name":"Script","type":3,"api":"https://mixed.example.test/drpy2.js"},{"key":"mixed-notice","name":"Notice","type":3,"api":"csp_XPathGuard"}]}"#
+        let preferences = UserPreferences(defaults: defaults)
+        #expect(preferences.providerExecutionPreference == .automatic)
+        let state = AppState(loadDefaultConfig: false, startProxyServer: false,
+            storageManager: StorageManager(storageDirectory: directory), userPreferences: preferences,
+            androidProviderRegistrationOverride: { sites in
+                try await registration.register(runtime: runtime, sites: sites)
+            })
+        let input = ResolvedVodInput(json: json, config: Config(type: .vod, url: configURL), kind: .configuration,
+            canonicalURL: configURL, initialResult: Models.Result())
+
+        await state.loadConfig(url: configURL, waitForProviderRuntime: false,
+            refreshCachedConfiguration: false, includeLiveContent: false, preparedInput: input)
+
+        #expect(state.isConfigLoaded)
+        #expect(state.configError == nil)
+        #expect(state.savedConfigStartupPhase == .ready)
+        #expect(state.nativeReplacementSiteKeys.isSuperset(of: ["mixed-java", "mixed-script", "mixed-notice"]))
+        for key in ["mixed-java", "mixed-script", "mixed-notice"] {
+            #expect(state.providerExecutionBackends[key] == .androidOriginal)
+        }
+        await registration.shutdownAll()
+    }
+
+    @MainActor
+    @Test func mediaServerSitesBelongToTheInjectedStorage() throws {
+        for name in ["Account A", "Account B"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let suite = "netvplayer-server-isolation-\(UUID().uuidString)"
+            let defaults = try #require(UserDefaults(suiteName: suite))
+            defer {
+                defaults.removePersistentDomain(forName: suite)
+                try? FileManager.default.removeItem(at: directory)
+            }
+            let storage = StorageManager(storageDirectory: directory)
+            let preferences = UserPreferences(defaults: defaults)
+            let account = MediaServerConfiguration(name: name, kind: .emby,
+                server: "https://isolated-media.example.test", serverID: name, userID: "test")
+            try MediaServerStore(storage: storage, preferences: preferences).save([account])
+            let state = AppState(loadDefaultConfig: false, startProxyServer: false,
+                storageManager: storage, userPreferences: preferences)
+              #expect(state.sites.isEmpty)
+            state.reloadFileServiceSites()
+            #expect(state.sites.map(\.key) == [account.siteKey])
+        }
+    }
+
     @MainActor
     @Test(arguments: ["", " \n\t "])
     func newInstallationDoesNotScheduleSourceLoading(savedURL: String) throws {
@@ -58,7 +137,8 @@ struct AppStateSourceFreeStartupTests {
             storageManager: StorageManager(storageDirectory: directory),
             userPreferences: preferences,
             providerRuntimeRegistrationOverride: { true },
-            providerRuntimeStartupOverride: { false }
+            providerRuntimeStartupOverride: { false },
+            androidProviderRegistrationOverride: { _ in }
         )
         let task = try #require(state.initialConfigTask)
         #expect(state.savedConfigStartupPhase == .preparingExtension)
@@ -96,7 +176,8 @@ struct AppStateSourceFreeStartupTests {
             providerRuntimeStartupOverride: {
                 await providerStartup.wait()
                 return false
-            }
+            },
+            androidProviderRegistrationOverride: { _ in }
         )
         let task = try #require(state.initialConfigTask)
 
@@ -140,7 +221,8 @@ struct AppStateSourceFreeStartupTests {
             providerRuntimeStartupOverride: {
                 await providerSynchronization.wait()
                 return false
-            }
+            },
+            androidProviderRegistrationOverride: { _ in }
         )
         let task = try #require(state.initialConfigTask)
 
@@ -187,7 +269,8 @@ struct AppStateSourceFreeStartupTests {
             providerRuntimeStartupOverride: {
                 await providerStartup.wait()
                 return true
-            }
+            },
+            androidProviderRegistrationOverride: { _ in }
         )
         let task = try #require(state.initialConfigTask)
         #expect(state.savedConfigStartupPhase == .preparingExtension)
@@ -222,7 +305,8 @@ struct AppStateSourceFreeStartupTests {
             startProxyServer: false,
             storageManager: StorageManager(storageDirectory: directory),
             userPreferences: preferences,
-            providerRuntimeStartupOverride: { false }
+            providerRuntimeStartupOverride: { false },
+            androidProviderRegistrationOverride: { _ in }
         )
         await state.initialConfigTask?.value
         #expect(!state.isConfigLoaded)
@@ -252,7 +336,8 @@ struct AppStateSourceFreeStartupTests {
             storageManager: StorageManager(storageDirectory: directory),
             userPreferences: preferences,
             providerRuntimeRegistrationOverride: { false },
-            providerRuntimeStartupOverride: { false }
+            providerRuntimeStartupOverride: { false },
+            androidProviderRegistrationOverride: { _ in }
         )
         await state.initialConfigTask?.value
         #expect(state.providerRuntimeLocalPackageInvalid)
@@ -278,7 +363,8 @@ struct AppStateSourceFreeStartupTests {
             storageManager: StorageManager(storageDirectory: directory),
             userPreferences: preferences,
             providerRuntimeRegistrationOverride: { true },
-            providerRuntimeStartupOverride: { false }
+            providerRuntimeStartupOverride: { false },
+            androidProviderRegistrationOverride: { _ in }
         )
         await state.initialConfigTask?.value
         #expect(state.providerRuntimeLocalPackageInvalid)
@@ -305,7 +391,8 @@ struct AppStateSourceFreeStartupTests {
             configResolver: ConfigResolver(httpClient: HTTPClient(session: URLSession(configuration: configuration))),
             storageManager: StorageManager(storageDirectory: directory),
             userPreferences: preferences,
-            providerRuntimeStartupOverride: { await attempts.nextSucceeds() }
+            providerRuntimeStartupOverride: { await attempts.nextSucceeds() },
+            androidProviderRegistrationOverride: { _ in }
         )
         await state.initialConfigTask?.value
         #expect(!state.isConfigLoaded)
@@ -353,39 +440,6 @@ private final class SavedSourceURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
             return
         }
-        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
-                                       headerFields: ["Content-Type": "application/json"])!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(#"{"sites":[{"key":"user-configured-fixture","name":"User fixture","type":3,"api":"csp_UserConfiguredFixture"}],"lives":[],"parses":[]}"#.utf8))
-        client?.urlProtocolDidFinishLoading(self)
-    }
-    override func stopLoading() {}
-}
-
-private final class RetryingSavedSourceURLProtocol: URLProtocol, @unchecked Sendable {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var attempts = 0
-
-    static var attemptCount: Int {
-        lock.withLock { attempts }
-    }
-
-    static func reset() {
-        lock.withLock { attempts = 0 }
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-        let attempt = Self.lock.withLock {
-            Self.attempts += 1
-            return Self.attempts
-        }
-        guard attempt > 1 else {
-            client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
-            return
-        }
-        let url = request.url!
         let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
                                        headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

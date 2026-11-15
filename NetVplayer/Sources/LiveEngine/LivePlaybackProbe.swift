@@ -45,6 +45,32 @@ public struct LivePlaybackProbe: Sendable {
         self.httpClient = httpClient
     }
 
+    /// Archives may be large or unending. Keep only a bounded prefix and retire the stream at the budget.
+    public func probeArchive(spec: PlaySpec, timeout: TimeInterval = 10) async -> LiveProbeResult {
+        let prefix = LiveArchiveProbePrefix()
+        var headers = spec.headers.filter { $0.key.caseInsensitiveCompare("Range") != .orderedSame }
+        headers["Range"] = "bytes=0-4095"
+        do {
+            _ = try await httpClient.stream(url: spec.url, headers: headers, timeout: timeout,
+                allowsProxyFallback: false, redactsURLInLogs: true, chunkSize: 1024,
+                shouldStream: { response in
+                    await prefix.setResponse(response)
+                    return (200..<300).contains(response.statusCode)
+                }, receive: { data in try await prefix.append(data) })
+        } catch LiveArchiveProbePrefix.Complete.budgetReached {
+            // Deliberate prefix completion, not a media failure.
+        } catch {
+            return LiveProbeResult(isPlayable: false, statusCode: 0, contentType: "", bodyPrefix: "", message: "probe unavailable")
+        }
+        let (response, data) = await prefix.snapshot()
+        guard let response else {
+            return LiveProbeResult(isPlayable: false, statusCode: 0, contentType: "", bodyPrefix: "", message: "probe unavailable")
+        }
+        return Self.evaluate(url: spec.url, statusCode: response.statusCode,
+            contentType: response.headers.first { $0.key.caseInsensitiveCompare("Content-Type") == .orderedSame }?.value ?? "",
+            data: data, finalURL: response.finalURL)
+    }
+
     public func probe(spec: PlaySpec, timeout: TimeInterval = 10) async -> LiveProbeResult {
         do {
             let response = try await httpClient.get(
@@ -130,4 +156,16 @@ public struct LivePlaybackProbe: Sendable {
             || lowerContentType.contains("mpegurl")
             || lowerContentType.contains("vnd.apple.mpegurl")
     }
+}
+
+private actor LiveArchiveProbePrefix {
+    enum Complete: Error { case budgetReached }
+    private var response: HTTPStreamResponse?
+    private var data = Data()
+    func setResponse(_ value: HTTPStreamResponse) { response = value }
+    func append(_ value: Data) throws {
+        data.append(value.prefix(max(0, 4096 - data.count)))
+        if data.count >= 4096 { throw Complete.budgetReached }
+    }
+    func snapshot() -> (HTTPStreamResponse?, Data) { (response, data) }
 }

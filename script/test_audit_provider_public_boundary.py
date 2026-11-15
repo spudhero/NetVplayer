@@ -72,7 +72,11 @@ class ProviderPublicBoundaryAuditTests(unittest.TestCase):
 
     def test_private_provider_detection_excludes_public_remote_adapter(self) -> None:
         self.assertTrue(is_private_provider_source("NetVplayer/Sources/SpiderEngine/ExampleNativeProvider.swift"))
+        self.assertTrue(is_private_provider_source("NetVplayer/Sources/SpiderEngine/DevelopmentAndroidSeedPageTransport.swift"))
+        for name in ("AliEpisode", "UCEpisode", "DoubaoPage", "DoubaoSignal", "SixVMagnet"):
+            self.assertTrue(is_private_provider_source(f"NetVplayer/Sources/SpiderEngine/DevelopmentAndroid{name}Adapter.swift"))
         self.assertFalse(is_private_provider_source("NetVplayer/Sources/SpiderEngine/FileServiceNativeProvider.swift"))
+        self.assertFalse(is_private_provider_source("NetVplayer/Sources/SpiderEngine/MediaServerNativeProvider.swift"))
         self.assertFalse(is_private_provider_source("NetVplayer/Sources/SpiderEngine/RemoteSiteContentProvider.swift"))
         self.assertFalse(is_private_provider_source("NetVplayer/Sources/ProviderRuntime/ProviderManager.swift"))
 

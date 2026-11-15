@@ -5,6 +5,16 @@ import Testing
 
 @Suite("Application core library and persistence")
 struct ApplicationLibraryCoreTests {
+    @Test func emptyDetailCannotReplayAnUnverifiedDriveFileButLegacyFallbackRemains() {
+        let drive = History(siteKey: "s", vodId: "v", episodeUrl: "netvplayer-drive://quark/file?fid=original", episodeName: "第1集", position: 42_000)
+        let driveIntent = ApplicationLibraryCore.historyPlaybackIntent(history: drive, sites: [])
+        #expect(driveIntent.episode(from: [], history: drive).url.isEmpty)
+        let legacy = History(siteKey: "s", vodId: "v", episodeUrl: "old-site-id", episodeName: "第1集", position: 42_000)
+        let legacyIntent = ApplicationLibraryCore.historyPlaybackIntent(history: legacy, sites: [])
+        #expect(legacyIntent.episode(from: [], history: legacy).url == "old-site-id")
+        #expect(legacyIntent.resumePosition == 42_000)
+    }
+
     @Test func sourceSelectionUsesConfiguredHomeAndFallbacks() {
         let regular = Site(key: "regular", name: "Regular", type: 1, api: "https://cms.example.test")
         let configured = Site(key: "configured", name: "Configured", type: 1, api: "https://configured.example.test")

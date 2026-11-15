@@ -27,7 +27,7 @@ public struct XtreamConfiguration: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
-public struct XtreamCredentials: Codable, Sendable {
+public struct XtreamCredentials: Codable, Sendable, Equatable {
     public let username: String
     public let password: String
     public init(username: String, password: String) { self.username = username; self.password = password }
@@ -44,6 +44,25 @@ public enum XtreamError: Error, LocalizedError, Sendable, Equatable {
         case .invalidReference: L10n.text("Xtream 资源引用无效，请刷新目录。")
         case .requestFailed: L10n.text("无法连接 Xtream 服务器，请检查地址、账号和网络。")
         }
+    }
+}
+
+/// A missing/zero limit is not evidence that an extra media connection is safe.
+/// Reserve one connection for primary playback, including when it has not started yet.
+public struct XtreamPreviewConnections: Sendable, Equatable {
+    public let maximum: Int?
+    public let active: Int?
+    public init(maximum: String?, active: String?) {
+        func count(_ value: String?) -> Int? {
+            guard let value, !value.isEmpty, value.utf8.count <= 9,
+                  value.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+            return Int(value)
+        }
+        self.maximum = count(maximum); self.active = count(active)
+    }
+    public var permitsPreview: Bool {
+        guard let maximum, let active, maximum > 1 else { return false }
+        return active < maximum - 1
     }
 }
 
@@ -113,7 +132,7 @@ public enum XtreamLogRedaction {
             separator: "/",
             omittingEmptySubsequences: false
         ).map(String.init)
-        let kinds: Set<String> = ["movie", "series", "live"]
+        let kinds: Set<String> = ["movie", "series", "live", "timeshift"]
         guard let kindIndex = segments.indices.reversed().first(where: { index in
             guard index + 3 < segments.count else { return false }
             let decoded = segments[index].removingPercentEncoding ?? segments[index]

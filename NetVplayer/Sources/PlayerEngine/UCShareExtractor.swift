@@ -10,20 +10,14 @@ import DriveEngine
 public final class UCShareExtractor: SourceExtractorProtocol {
     public static let cookieDefaultsKey = "ucCookie"
     public static let deviceIDDefaultsKey = "ucTVDeviceID"
-    public static let queryTokenDefaultsKey = "ucTVQueryToken"
-    public static let refreshTokenDefaultsKey = "ucTVRefreshToken"
-    public static let accessTokenDefaultsKey = "ucTVAccessToken"
-    public static let originalPlaybackTokenDefaultsKey = "ucOriginalPlaybackToken"
-    public static let fongMiPlaybackTokenDefaultsKey = "ucFongMiPlaybackToken"
     public static let fongMiPlaybackExpiresAtDefaultsKey = "ucFongMiPlaybackExpiresAt"
     public static let fongMiFixtureIDDefaultsKey = "ucFongMiFixtureID"
     public static let fongMiEvidenceStatusDefaultsKey = "ucFongMiEvidenceStatus"
 
-    private let client: UCDriveClient
     private let httpClient: HTTPClient
     private let cookieDriver: UCCookieDriver
     private let cookieProvider: @Sendable () -> String?
-    private let cookieUpdateHandler: @Sendable (String) -> Void
+    private let cookieUpdateHandler: (@Sendable (String) -> Void)?
     private let tokenProvider: @Sendable () -> CloudCredential?
     private let tokenUpdateHandler: @Sendable (CloudCredential) -> Void
     private let fongMiPlaybackTokenProvider: @Sendable () -> CloudCredential?
@@ -38,9 +32,7 @@ public final class UCShareExtractor: SourceExtractorProtocol {
             }
             return UserPreferences.shared.ucCookie
         },
-        cookieUpdateHandler: @escaping @Sendable (String) -> Void = {
-            UserPreferences.shared.ucCookie = $0
-        },
+        cookieUpdateHandler: (@Sendable (String) -> Void)? = nil,
         originalPlaybackTokenProvider: @escaping @Sendable () -> String? = {
             let envToken = ProcessInfo.processInfo.environment["NETVPLAYER_UC_ORIGINAL_UT"]
             if let envToken, !envToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -94,11 +86,6 @@ public final class UCShareExtractor: SourceExtractorProtocol {
         }
     ) {
         self.httpClient = httpClient
-        self.client = UCDriveClient(
-            httpClient: httpClient,
-            originalPlaybackTokenProvider: originalPlaybackTokenProvider,
-            originalPlaybackTokenUpdateHandler: originalPlaybackTokenUpdateHandler
-        )
         self.cookieDriver = UCCookieDriver(
             httpClient: httpClient,
             originalPlaybackTokenProvider: originalPlaybackTokenProvider,
@@ -126,14 +113,18 @@ public final class UCShareExtractor: SourceExtractorProtocol {
 
     public func fetchResult(url: String) async throws -> SourceFetchResult {
         if let cookie = Self.normalizedCookie(cookieProvider()) {
+            let refresh = cookieUpdateHandler == nil
+                ? CloudDirectoryCredentialRefresh(original: .cookie(provider: .uc, value: cookie)) : nil
             let link = try await cookieDriver.link(
                 rawURL: url,
                 credential: .cookie(provider: .uc, value: cookie)
             )
+            try await DriveTransferContext.current.check()
             if let updatedCookie = link.updatedCredential?.secret,
                updatedCookie != cookie,
                !updatedCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                cookieUpdateHandler(updatedCookie)
+                if let cookieUpdateHandler { cookieUpdateHandler(updatedCookie) }
+                else { refresh?.save(.cookie(provider: .uc, value: updatedCookie)) }
             }
             let preferredLink = await preferTVOriginalLinkIfAvailable(cookieLink: link)
             let fongMiPreferredLink = await preferFongMiOriginalLinkIfAvailable(cookieLink: preferredLink)

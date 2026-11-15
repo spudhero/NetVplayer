@@ -42,7 +42,7 @@ public enum HTTPRedirectPolicy {
             return nil // A one-shot stream cannot be safely replayed for 307/308.
         }
         if !sameOrigin(source, target) {
-            for field in ["Authorization", "Proxy-Authorization", "Cookie", "X-Api-Key", "X-Auth-Token", "X-Emby-Token", "X-MediaBrowser-Token"] {
+            for field in ["Authorization", "Proxy-Authorization", "Cookie", "X-Api-Key", "X-Auth-Token", "X-Emby-Authorization", "X-Emby-Token", "X-MediaBrowser-Token", "X-Plex-Token", "Authx"] {
                 result.setValue(nil, forHTTPHeaderField: field)
             }
         }
@@ -56,12 +56,14 @@ public enum HTTPRedirectPolicy {
 public final class HTTPRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private let allowedOrigin: URL?
+    private let sensitiveURLValues: [String]
     private var previous: URLRequest?
     private var hops = 0
 
-    public init(initialRequest: URLRequest? = nil, allowedOrigin: URL? = nil) {
+    public init(initialRequest: URLRequest? = nil, allowedOrigin: URL? = nil, sensitiveURLValues: [String] = []) {
         self.previous = initialRequest
         self.allowedOrigin = allowedOrigin
+        self.sensitiveURLValues = sensitiveURLValues.filter { !$0.isEmpty }
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask,
@@ -74,12 +76,24 @@ public final class HTTPRedirectDelegate: NSObject, URLSessionTaskDelegate, @unch
         lock.lock()
         defer { lock.unlock() }
         hops += 1
+        if let url = request.url, sensitiveURLValues.contains(where: { Self.url(url.absoluteString, contains: $0) }) { return nil }
         let previousRequest = previous ?? task.currentRequest ?? task.originalRequest
         let result = previousRequest.flatMap {
             HTTPRedirectPolicy.redirected($0, proposed: request, status: response.statusCode, allowedOrigin: allowedOrigin, hop: hops)
         }
         previous = result
         return result
+    }
+
+    public static func url(_ value: String, contains secret: String) -> Bool {
+        guard !secret.isEmpty else { return false }
+        var decoded = value
+        for _ in 0..<4 {
+            if decoded.contains(secret) { return true }
+            guard let next = decoded.removingPercentEncoding, next != decoded else { break }
+            decoded = next
+        }
+        return false
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {

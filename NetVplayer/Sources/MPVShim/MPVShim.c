@@ -1,4 +1,5 @@
 #include "MPVShim.h"
+#include "NVMPVColorProfile.h"
 
 #include <dlfcn.h>
 #include <limits.h>
@@ -7,6 +8,7 @@
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
+#include <libavutil/version.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +17,10 @@ struct NVMPVContext {
     void *library;
     mpv_handle *handle;
     mpv_render_context *render;
+    int dolby_renderer;
+    int last_render_target_format;
+    int observe_frame_info;
+    int64_t last_render_frame_flags;
     char last_error[512];
     char loaded_path[PATH_MAX];
 };
@@ -23,11 +29,12 @@ typedef struct NVJSONBuffer {
     char *data;
     size_t length;
     int failed;
+    size_t capacity;
 } NVJSONBuffer;
 
 static void json_append(NVJSONBuffer *buffer, const char *text, size_t length) {
     if (buffer->failed) { return; }
-    if (length > 1024 * 1024 - buffer->length) { buffer->failed = 1; return; }
+    if (length > buffer->capacity - buffer->length) { buffer->failed = 1; return; }
     memcpy(buffer->data + buffer->length, text, length);
     buffer->length += length;
     buffer->data[buffer->length] = 0;
@@ -87,6 +94,7 @@ typedef void (*mpv_terminate_destroy_fn)(mpv_handle *);
 typedef int (*mpv_set_option_fn)(mpv_handle *, const char *, mpv_format, void *);
 typedef int (*mpv_set_option_string_fn)(mpv_handle *, const char *, const char *);
 typedef int (*mpv_get_property_fn)(mpv_handle *, const char *, mpv_format, void *);
+typedef int (*mpv_get_property_async_fn)(mpv_handle *, uint64_t, const char *, mpv_format);
 typedef void (*mpv_free_node_contents_fn)(mpv_node *);
 typedef void (*mpv_free_fn)(void *);
 typedef int (*mpv_set_property_fn)(mpv_handle *, const char *, mpv_format, void *);
@@ -96,13 +104,16 @@ typedef int (*mpv_command_fn)(mpv_handle *, const char **);
 typedef int (*mpv_command_async_fn)(mpv_handle *, uint64_t, const char **);
 typedef int (*mpv_observe_property_fn)(mpv_handle *, uint64_t, const char *, mpv_format);
 typedef mpv_event *(*mpv_wait_event_fn)(mpv_handle *, double);
+typedef void (*mpv_set_wakeup_callback_fn)(mpv_handle *, NVMPVEventWakeupCallback, void *);
 typedef int (*mpv_request_log_messages_fn)(mpv_handle *, const char *);
 typedef const char *(*mpv_event_name_fn)(mpv_event_id);
 typedef const char *(*mpv_error_string_fn)(int);
 typedef int (*mpv_render_context_create_fn)(mpv_render_context **, mpv_handle *, mpv_render_param *);
+typedef int (*mpv_render_context_set_parameter_fn)(mpv_render_context *, mpv_render_param);
+typedef int (*mpv_render_context_get_info_fn)(mpv_render_context *, mpv_render_param);
 typedef void (*mpv_render_context_free_fn)(mpv_render_context *);
 typedef void (*mpv_render_context_set_update_callback_fn)(mpv_render_context *, mpv_render_update_fn, void *);
-typedef void (*mpv_render_context_render_fn)(mpv_render_context *, mpv_render_param *);
+typedef int (*mpv_render_context_render_fn)(mpv_render_context *, mpv_render_param *);
 typedef uint64_t (*mpv_render_context_update_fn)(mpv_render_context *);
 typedef void (*mpv_render_context_report_swap_fn)(mpv_render_context *);
 
@@ -112,6 +123,7 @@ static mpv_terminate_destroy_fn p_mpv_terminate_destroy = NULL;
 static mpv_set_option_fn p_mpv_set_option = NULL;
 static mpv_set_option_string_fn p_mpv_set_option_string = NULL;
 static mpv_get_property_fn p_mpv_get_property = NULL;
+static mpv_get_property_async_fn p_mpv_get_property_async = NULL;
 static mpv_free_node_contents_fn p_mpv_free_node_contents = NULL;
 static mpv_free_fn p_mpv_free = NULL;
 static mpv_set_property_fn p_mpv_set_property = NULL;
@@ -121,10 +133,13 @@ static mpv_command_fn p_mpv_command = NULL;
 static mpv_command_async_fn p_mpv_command_async = NULL;
 static mpv_observe_property_fn p_mpv_observe_property = NULL;
 static mpv_wait_event_fn p_mpv_wait_event = NULL;
+static mpv_set_wakeup_callback_fn p_mpv_set_wakeup_callback = NULL;
 static mpv_request_log_messages_fn p_mpv_request_log_messages = NULL;
 static mpv_event_name_fn p_mpv_event_name = NULL;
 static mpv_error_string_fn p_mpv_error_string = NULL;
 static mpv_render_context_create_fn p_mpv_render_context_create = NULL;
+static mpv_render_context_set_parameter_fn p_mpv_render_context_set_parameter = NULL;
+static mpv_render_context_get_info_fn p_mpv_render_context_get_info = NULL;
 static mpv_render_context_free_fn p_mpv_render_context_free = NULL;
 static mpv_render_context_set_update_callback_fn p_mpv_render_context_set_update_callback = NULL;
 static mpv_render_context_render_fn p_mpv_render_context_render = NULL;
@@ -203,6 +218,8 @@ static int load_symbols(void *library, NVMPVContext *context) {
     if (!load_symbol(library, "mpv_set_option", (void **)&p_mpv_set_option)) { set_error(context, "libmpv 缺少 mpv_set_option"); return 0; }
     if (!load_symbol(library, "mpv_set_option_string", (void **)&p_mpv_set_option_string)) { set_error(context, "libmpv 缺少 mpv_set_option_string"); return 0; }
     if (!load_symbol(library, "mpv_get_property", (void **)&p_mpv_get_property)) { set_error(context, "libmpv lacks mpv_get_property"); return 0; }
+    // Diagnostics are optional and must not prevent playback with an older shim fixture.
+    load_symbol(library, "mpv_get_property_async", (void **)&p_mpv_get_property_async);
     if (!load_symbol(library, "mpv_free_node_contents", (void **)&p_mpv_free_node_contents)) { set_error(context, "libmpv lacks mpv_free_node_contents"); return 0; }
     if (!load_symbol(library, "mpv_free", (void **)&p_mpv_free)) { set_error(context, "libmpv lacks mpv_free"); return 0; }
     if (!load_symbol(library, "mpv_set_property", (void **)&p_mpv_set_property)) { set_error(context, "libmpv 缺少 mpv_set_property"); return 0; }
@@ -212,10 +229,15 @@ static int load_symbols(void *library, NVMPVContext *context) {
     if (!load_symbol(library, "mpv_command_async", (void **)&p_mpv_command_async)) { set_error(context, "libmpv 缺少 mpv_command_async"); return 0; }
     if (!load_symbol(library, "mpv_observe_property", (void **)&p_mpv_observe_property)) { set_error(context, "libmpv 缺少 mpv_observe_property"); return 0; }
     if (!load_symbol(library, "mpv_wait_event", (void **)&p_mpv_wait_event)) { set_error(context, "libmpv 缺少 mpv_wait_event"); return 0; }
+    load_symbol(library, "mpv_set_wakeup_callback", (void **)&p_mpv_set_wakeup_callback);
     if (!load_symbol(library, "mpv_request_log_messages", (void **)&p_mpv_request_log_messages)) { set_error(context, "libmpv 缺少 mpv_request_log_messages"); return 0; }
     if (!load_symbol(library, "mpv_event_name", (void **)&p_mpv_event_name)) { set_error(context, "libmpv 缺少 mpv_event_name"); return 0; }
     if (!load_symbol(library, "mpv_error_string", (void **)&p_mpv_error_string)) { set_error(context, "libmpv 缺少 mpv_error_string"); return 0; }
     if (!load_symbol(library, "mpv_render_context_create", (void **)&p_mpv_render_context_create)) { set_error(context, "libmpv 缺少 mpv_render_context_create"); return 0; }
+    // Optional for compatibility with old diagnostic fixtures. An unavailable
+    // ICC interface is reported to the host, never silently claimed as active.
+    load_symbol(library, "mpv_render_context_set_parameter", (void **)&p_mpv_render_context_set_parameter);
+    load_symbol(library, "mpv_render_context_get_info", (void **)&p_mpv_render_context_get_info);
     if (!load_symbol(library, "mpv_render_context_free", (void **)&p_mpv_render_context_free)) { set_error(context, "libmpv 缺少 mpv_render_context_free"); return 0; }
     if (!load_symbol(library, "mpv_render_context_set_update_callback", (void **)&p_mpv_render_context_set_update_callback)) { set_error(context, "libmpv 缺少 mpv_render_context_set_update_callback"); return 0; }
     if (!load_symbol(library, "mpv_render_context_render", (void **)&p_mpv_render_context_render)) { set_error(context, "libmpv 缺少 mpv_render_context_render"); return 0; }
@@ -227,6 +249,7 @@ static int load_symbols(void *library, NVMPVContext *context) {
 NVMPVContext *nv_mpv_create(void) {
     NVMPVContext *context = calloc(1, sizeof(NVMPVContext));
     if (!context) { return NULL; }
+    context->last_render_frame_flags = -1;
 
     context->library = load_library(
         context->loaded_path,
@@ -253,6 +276,7 @@ NVMPVContext *nv_mpv_create(void) {
 
 void nv_mpv_destroy(NVMPVContext *context) {
     if (!context) { return; }
+    nv_mpv_set_wakeup_callback(context, NULL, NULL);
     if (context->render && p_mpv_render_context_free) {
         p_mpv_render_context_free(context->render);
     }
@@ -262,6 +286,12 @@ void nv_mpv_destroy(NVMPVContext *context) {
     }
     context->handle = NULL;
     free(context);
+}
+
+int nv_mpv_set_wakeup_callback(NVMPVContext *context, NVMPVEventWakeupCallback callback, void *userdata) {
+    if (!context || !context->handle || !p_mpv_set_wakeup_callback) { return -1; }
+    p_mpv_set_wakeup_callback(context->handle, callback, userdata);
+    return 0;
 }
 
 const char *nv_mpv_last_error(NVMPVContext *context) {
@@ -331,6 +361,15 @@ int nv_mpv_set_property_double_async(NVMPVContext *context, uint64_t reply_userd
 int nv_mpv_set_property_flag_async(NVMPVContext *context, uint64_t reply_userdata, const char *name, int value) {
     if (!context || !context->handle || !p_mpv_set_property_async) { return -1; }
     int code = p_mpv_set_property_async(context->handle, reply_userdata, name, MPV_FORMAT_FLAG, &value);
+    if (code < 0) { set_mpv_error(context, code); }
+    return code;
+}
+
+int nv_mpv_set_property_string_async(NVMPVContext *context, uint64_t reply_userdata, const char *name, const char *value) {
+    if (!context || !context->handle || !p_mpv_set_property_async || !value) { return -1; }
+    // libmpv copies the string before returning. STRING takes char **, not char *.
+    const char *copy = value;
+    int code = p_mpv_set_property_async(context->handle, reply_userdata, name, MPV_FORMAT_STRING, &copy);
     if (code < 0) { set_mpv_error(context, code); }
     return code;
 }
@@ -435,7 +474,7 @@ char *nv_mpv_copy_property_json(NVMPVContext *context, const char *name) {
     mpv_node value = {0};
     int code = p_mpv_get_property(context->handle, name, MPV_FORMAT_NODE, &value);
     if (code < 0) { set_mpv_error(context, code); return NULL; }
-    NVJSONBuffer buffer = {calloc(1024 * 1024 + 1, 1), 0, 0};
+    NVJSONBuffer buffer = {calloc(1024 * 1024 + 1, 1), 0, 0, 1024 * 1024};
     if (buffer.data) { json_node(&buffer, &value, 0); }
     p_mpv_free_node_contents(&value);
     if (!buffer.data || buffer.failed) { free(buffer.data); return NULL; }
@@ -443,6 +482,23 @@ char *nv_mpv_copy_property_json(NVMPVContext *context, const char *name) {
 }
 
 void nv_mpv_free_string(char *value) { free(value); }
+
+int nv_mpv_get_property_async(NVMPVContext *context, uint64_t reply_userdata, const char *name) {
+    if (!context || !context->handle || !p_mpv_get_property_async || !name) { return -1; }
+    return p_mpv_get_property_async(context->handle, reply_userdata, name, MPV_FORMAT_NODE);
+}
+
+char *nv_mpv_copy_event_property_json(const NVMPVEvent *event) {
+    if (!event || !event->node_value || event->error < 0) { return NULL; }
+    NVJSONBuffer buffer = {calloc(8192 + 1, 1), 0, 0, 8192};
+    if (buffer.data) { json_node(&buffer, (const mpv_node *)event->node_value, 0); }
+    if (!buffer.data || buffer.failed) { free(buffer.data); return NULL; }
+    return buffer.data;
+}
+
+int nv_mpv_render_target_format(NVMPVContext *context) {
+    return context && context->render ? context->last_render_target_format : 0;
+}
 
 char *nv_mpv_copy_property_string(NVMPVContext *context, const char *name) {
     if (!context || !context->handle || !p_mpv_get_property || !p_mpv_free) { return NULL; }
@@ -493,7 +549,7 @@ int nv_mpv_wait_event(NVMPVContext *context, double timeout, NVMPVEvent *out) {
         out->error_string = p_mpv_error_string(event->error);
     }
 
-    if (event->event_id == MPV_EVENT_PROPERTY_CHANGE && event->data) {
+    if ((event->event_id == MPV_EVENT_PROPERTY_CHANGE || event->event_id == MPV_EVENT_GET_PROPERTY_REPLY) && event->data) {
         mpv_event_property *property = (mpv_event_property *)event->data;
         out->property_name = property->name;
         out->format = property->format;
@@ -511,10 +567,16 @@ int nv_mpv_wait_event(NVMPVContext *context, double timeout, NVMPVEvent *out) {
             case MPV_FORMAT_STRING:
                 out->string_value = *(char **)property->data;
                 break;
+            case MPV_FORMAT_NODE:
+                out->node_value = property->data;
+                break;
             default:
                 break;
             }
         }
+    } else if (event->event_id == MPV_EVENT_COMMAND_REPLY && event->data) {
+        out->format = MPV_FORMAT_NODE;
+        out->node_value = &((mpv_event_command *)event->data)->result;
     } else if (event->event_id == MPV_EVENT_END_FILE && event->data) {
         mpv_event_end_file *end = (mpv_event_end_file *)event->data;
         out->end_file_error = end->error;
@@ -572,12 +634,25 @@ int nv_mpv_create_render_context(NVMPVContext *context, NVMPVRenderUpdateCallbac
         .get_proc_address_ctx = NULL
     };
     mpv_render_param params[] = {
-        { MPV_RENDER_PARAM_API_TYPE, (void *)MPV_RENDER_API_TYPE_OPENGL },
+        { MPV_RENDER_PARAM_API_TYPE, (void *)"opengl-placebo" },
         { MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init },
         { MPV_RENDER_PARAM_INVALID, NULL }
     };
 
     int code = p_mpv_render_context_create(&context->render, context->handle, params);
+    if (code >= 0) {
+        NVMPVDolbyRendererStatus status = nv_mpv_dolby_renderer_status(context);
+        context->dolby_renderer = (status.capabilities & 3) == 3;
+        if (!context->dolby_renderer) {
+            p_mpv_render_context_free(context->render);
+            context->render = NULL;
+            code = MPV_ERROR_NOT_IMPLEMENTED;
+        }
+    }
+    if (code == MPV_ERROR_NOT_IMPLEMENTED || code == MPV_ERROR_UNSUPPORTED) {
+        params[0].data = (void *)MPV_RENDER_API_TYPE_OPENGL;
+        code = p_mpv_render_context_create(&context->render, context->handle, params);
+    }
     if (code < 0) {
         set_mpv_error(context, code);
         return code;
@@ -589,6 +664,8 @@ int nv_mpv_create_render_context(NVMPVContext *context, NVMPVRenderUpdateCallbac
 }
 
 int nv_mpv_free_render_context(NVMPVContext *context) {
+    if (context) { context->dolby_renderer = 0; }
+    if (context) { context->last_render_target_format = 0; context->last_render_frame_flags = -1; }
     if (!context || !p_mpv_render_context_free) { return -1; }
     if (context->render) {
         p_mpv_render_context_free(context->render);
@@ -597,7 +674,54 @@ int nv_mpv_free_render_context(NVMPVContext *context) {
     return 0;
 }
 
-int nv_mpv_render(NVMPVContext *context, int fbo, int width, int height, int flip_y) {
+NVMPVDolbyRendererStatus nv_mpv_dolby_renderer_status(NVMPVContext *context) {
+    NVMPVDolbyRendererStatus status = {.size = sizeof(status), .version = 1};
+    if (!context || !context->render || !p_mpv_render_context_get_info ||
+        p_mpv_render_context_get_info(context->render,
+            (mpv_render_param){(mpv_render_param_type)10001, &status}) < 0 ||
+        status.size != sizeof(status) || status.version != 1) {
+        memset(&status, 0, sizeof(status));
+    }
+    return status;
+}
+
+uint64_t nv_mpv_runtime_capabilities(NVMPVContext *context) {
+    if (!context || !context->library) return 0;
+    uint64_t (*query)(void) = dlsym(context->library, "mpv_netvplayer_runtime_capabilities");
+    uint64_t value = query ? query() : 0;
+    return (value >> 32) == 1 ? (value & UINT64_C(0xffffffff)) : 0;
+}
+
+int nv_mpv_set_render_icc(NVMPVContext *context, const void *bytes, size_t length) {
+    if (!context || !context->render || !p_mpv_render_context_set_parameter) { return -1; }
+    if (length > 4 * 1024 * 1024 || (length && !bytes)) { return -1; }
+    CFDataRef profile = length ? nv_mpv_copy_render_profile(bytes, length) : NULL;
+    if (length && !profile) {
+        snprintf(context->last_error, sizeof(context->last_error), "ColorSync render profile unavailable");
+        return -1;
+    }
+    mpv_byte_array data = {
+        .data = profile ? (void *)CFDataGetBytePtr(profile) : NULL,
+        .size = profile ? (size_t)CFDataGetLength(profile) : 0
+    };
+    // The render API copies the bytes before returning. Call on the render
+    // context's thread with its GL context current, outside render callbacks.
+    int code = p_mpv_render_context_set_parameter(context->render,
+        (mpv_render_param){ MPV_RENDER_PARAM_ICC_PROFILE, &data });
+    if (profile) { CFRelease(profile); }
+    if (code < 0) { set_mpv_error(context, code); }
+    return code;
+}
+
+typedef struct NVSourceFrameCapture {
+    uint32_t size, version, avutil_major;
+    void *opaque;
+    NVMPVSourceFrameCapture capture;
+} NVSourceFrameCapture;
+
+static int render_target(NVMPVContext *context, int fbo, int width, int height, int flip_y,
+                         int target_format, int depth, NVSourceFrameCapture *source) {
+    if (context) { context->last_render_frame_flags = -1; }
     if (!context || !context->render || !p_mpv_render_context_render) { return -1; }
     if (width <= 0 || height <= 0) { return 0; }
 
@@ -607,20 +731,78 @@ int nv_mpv_render(NVMPVContext *context, int fbo, int width, int height, int fli
     }
     clear_opengl_errors();
 
+    mpv_render_frame_info frame_info = {0};
+    int info_valid = context->observe_frame_info && p_mpv_render_context_get_info &&
+        p_mpv_render_context_get_info(context->render,
+            (mpv_render_param){ MPV_RENDER_PARAM_NEXT_FRAME_INFO, &frame_info }) >= 0;
     mpv_opengl_fbo target = {
         .fbo = fbo,
         .w = width,
         .h = height,
-        .internal_format = 0x8058 /* GL_RGBA8 */
+        .internal_format = target_format
     };
     int flip = flip_y ? 1 : 0;
     mpv_render_param params[] = {
         { MPV_RENDER_PARAM_OPENGL_FBO, &target },
         { MPV_RENDER_PARAM_FLIP_Y, &flip },
+        { MPV_RENDER_PARAM_DEPTH, &depth },
+        { source ? (mpv_render_param_type)10002 : MPV_RENDER_PARAM_INVALID, source },
         { MPV_RENDER_PARAM_INVALID, NULL }
     };
-    p_mpv_render_context_render(context->render, params);
+    int code = p_mpv_render_context_render(context->render, params);
+    if (code < 0) { set_mpv_error(context, code); return code; }
+    context->last_render_target_format = target_format;
+    if (info_valid) { context->last_render_frame_flags = (int64_t)frame_info.flags; }
     return 0;
+}
+
+void nv_mpv_observe_render_frames(NVMPVContext *context, int enabled) {
+    if (!context) { return; }
+    context->observe_frame_info = enabled != 0;
+    context->last_render_frame_flags = -1;
+}
+
+int64_t nv_mpv_last_render_frame_flags(NVMPVContext *context) {
+    return context ? context->last_render_frame_flags : -1;
+}
+
+int nv_mpv_render(NVMPVContext *context, int fbo, int width, int height, int flip_y) {
+    return render_target(context, fbo, width, height, flip_y, 0x8058, 8, NULL); /* GL_RGBA8 */
+}
+
+int nv_mpv_render_suppressed(NVMPVContext *context, int fbo) {
+    if (!context || !context->render) return -1;
+    int skip = 1;
+    mpv_render_param params[] = {{MPV_RENDER_PARAM_SKIP_RENDERING,&skip},{MPV_RENDER_PARAM_INVALID,NULL}};
+    p_mpv_render_context_update(context->render);
+    int code = p_mpv_render_context_render(context->render,params);
+    void (*bind)(unsigned,int) = opengl_proc_address(NULL,"glBindFramebuffer");
+    void (*color)(float,float,float,float) = opengl_proc_address(NULL,"glClearColor");
+    void (*clear)(unsigned) = opengl_proc_address(NULL,"glClear");
+    void (*disable)(unsigned) = opengl_proc_address(NULL,"glDisable");
+    void (*mask)(unsigned char,unsigned char,unsigned char,unsigned char) = opengl_proc_address(NULL,"glColorMask");
+    if (!bind || !color || !clear || !disable || !mask) return -1;
+    bind(0x8D40,fbo); disable(0x0C11); mask(1,1,1,1); color(0,0,0,1); clear(0x4000);
+    context->last_render_target_format=0;
+    context->last_render_frame_flags=-1;
+    return code;
+}
+
+int nv_mpv_render_fp16(NVMPVContext *context, int fbo, int width, int height, int flip_y) {
+    // Experimental offscreen target only. Never describe the default 8-bit
+    // window framebuffer as FP16. The caller verifies its actual attachment.
+    if (fbo <= 0) {
+        if (context) { context->last_render_frame_flags = -1; }
+        return -1;
+    }
+    return render_target(context, fbo, width, height, flip_y, 0x881A, 16, NULL); /* GL_RGBA16F */
+}
+
+int nv_mpv_render_fp16_source(NVMPVContext *context, int fbo, int width, int height,
+                             NVMPVSourceFrameCapture capture, void *opaque) {
+    if (fbo <= 0 || !capture || !(nv_mpv_dolby_renderer_status(context).capabilities & 32)) return -1;
+    NVSourceFrameCapture source = {sizeof(source), 1, LIBAVUTIL_VERSION_MAJOR, opaque, capture};
+    return render_target(context, fbo, width, height, 0, 0x881A, 16, &source);
 }
 
 void nv_mpv_report_swap(NVMPVContext *context) {

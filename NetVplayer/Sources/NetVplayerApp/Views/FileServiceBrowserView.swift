@@ -73,7 +73,7 @@ struct FileServiceBrowserView: View {
         return state.path.split(separator: "/").map { name in path += "/" + name; return (String(name), path) }
     }
     private func open(_ entry: FileEntry) {
-        if entry.isDirectory { state.load(path: entry.path) }
+        if entry.isDirectory && !DiscMediaPolicy.isBDMV(entry) { state.load(path: entry.path) }
         else {
             Task {
                 do { try await appState.selectVod(FileServiceNativeProvider.vod(entry: entry, serviceID: service.id, site: service.site())) }

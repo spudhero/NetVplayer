@@ -78,7 +78,8 @@ public enum MPVTrackListParser {
                 name: title,
                 language: language,
                 format: format,
-                isExternal: boolValue(item["external"]) ?? false
+                isExternal: boolValue(item["external"]) ?? false,
+                sourceIndex: (boolValue(item["external"]) ?? false) ? nil : stringValue(item["ff-index"]).flatMap(Int.init)
             )
 
             if kind == .audio {

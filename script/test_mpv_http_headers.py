@@ -118,6 +118,8 @@ class MPVHTTPHeaderTests(unittest.TestCase):
             subprocess.run(
                 [
                     "cc", "-dynamiclib", "-o", str(shim_library), str(shim_root / "MPVShim.c"),
+                    str(shim_root / "NVMPVColorProfile.c"), "-framework", "ColorSync",
+                    "-framework", "CoreFoundation",
                     "-I" + str(shim_root / "include"), *include_flags,
                 ],
                 check=True,

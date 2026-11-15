@@ -223,6 +223,24 @@ def cyclonedx_license(value: str) -> list[dict[str, dict[str, str]]]:
     return [{"license": {"name": value}}]
 
 
+def file_transfer_components(receipt_path: Path) -> list[dict[str, str]]:
+    if not receipt_path.is_file():
+        return []
+    inputs = read_json(receipt_path)["inputs"]
+    version = inputs["version"]
+    source = f"https://www.libssh2.org/download/libssh2-{version}.tar.gz"
+    return [{
+        "key": component_key("file-transfer", "libssh2", version, source),
+        "kind": "library",
+        "name": "libssh2",
+        "version": version,
+        "purl": f"pkg:generic/libssh2@{version}",
+        "source": source,
+        "revision": inputs["sourceSHA256"],
+        "license": "BSD-3-Clause",
+    }]
+
+
 def create_documents(
     app_bundle: Path,
     package_resolved: Path | None,
@@ -242,6 +260,7 @@ def create_documents(
     node_runtime_manifest = app_bundle / "Contents/Resources/NodeRuntime/runtime-manifest.json"
     quickjs_runtime_manifest = app_bundle / "Contents/Resources/QuickJSRuntime/runtime-manifest.json"
     smb_manifest = app_bundle / "Contents/Resources/ThirdPartyLicenses/smb-runtime.json"
+    file_transfer_receipt = app_bundle / "Contents/Resources/ThirdPartyLicenses/FileTransfer/build-receipt.json"
     components = deduplicated_components(
         swift_components(package_resolved)
         + npm_components(torrent_lock)
@@ -249,6 +268,7 @@ def create_documents(
         + node_runtime_components(node_runtime_manifest)
         + quickjs_runtime_components(quickjs_runtime_manifest)
         + smb_components(smb_manifest)
+        + file_transfer_components(file_transfer_receipt)
     )
 
     evidence = {
@@ -262,6 +282,7 @@ def create_documents(
             "libmpv_runtime_manifest_sha256": sha256(libmpv_manifest) if libmpv_manifest.is_file() else None,
             "node_runtime_manifest_sha256": sha256(node_runtime_manifest) if node_runtime_manifest.is_file() else None,
             "quickjs_runtime_manifest_sha256": sha256(quickjs_runtime_manifest) if quickjs_runtime_manifest.is_file() else None,
+            "file_transfer_receipt_sha256": sha256(file_transfer_receipt) if file_transfer_receipt.is_file() else None,
         },
         "component_count": len(components),
     }

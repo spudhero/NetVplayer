@@ -115,7 +115,7 @@ final class PlayerWindowPreferenceStore {
             frame: frame,
             visibleFrame: visibleFrame,
             screenIdentifier: screenIdentifier
-        ), let data = try? JSONEncoder().encode(value) else { return }
+        ), value != preference, let data = try? JSONEncoder().encode(value) else { return }
         preference = value
         defaults.set(data, forKey: storageKey)
     }

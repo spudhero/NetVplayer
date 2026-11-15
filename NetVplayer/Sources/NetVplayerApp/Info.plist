@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleShortVersionString</key>
-    <string>1.1.4</string>
+    <string>2.0.0</string>
     <key>CFBundleVersion</key>
-    <string>18</string>
+	<string>49</string>
     <key>SUFeedURL</key>
     <string>https://github.com/spudhero/NetVplayer/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key>
@@ -33,5 +33,7 @@
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
     <string>NetVplayer connects to your NAS and media servers on the local network to browse and play videos and music.</string>
+    <key>NSMotionUsageDescription</key>
+    <string>NetVplayer uses headphone motion only when you enable head tracking, to keep spatial audio aligned with the screen.</string>
 </dict>
 </plist>

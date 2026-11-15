@@ -204,7 +204,7 @@ private final class ChapterPreviewImageResult {
 private final class ChapterPreviewDecodeProbe {
     var calls: [Double] = []
     private var waiting: [Double: CheckedContinuation<Data?, Never>] = [:]
-    func decode(spec: PlaySpec, seconds: Double) async -> Data? {
+    func decode(spec _: PlaySpec, seconds: Double) async -> Data? {
         calls.append(seconds)
         return await withCheckedContinuation { waiting[seconds] = $0 }
     }

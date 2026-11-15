@@ -84,8 +84,8 @@ jobs:
           NETVPLAYER_TMDB_API_KEY: ${{ secrets.NETVPLAYER_TMDB_API_KEY }}
         run: python3 script/package_tmdb_credentials.py --validate-only --require --verify-online
 
-      - name: Install libmpv development files
-        run: brew install mpv
+      - name: Install Dolby runtime build tools
+        run: brew install mpv meson ninja rustup
 
       - name: Validate release tag and public boundary
         shell: bash
@@ -163,6 +163,23 @@ jobs:
           python3 script/package_libmpv_runtime_licenses.py \
             --app-bundle "$runtime_bundle" \
             --audit-only
+          # The downloaded bundle supplies the audited FFmpeg dependency ABI.
+          # Rebuild the tagged Dolby overlay before selecting the shipping runtime.
+          export PATH="$(brew --prefix rustup)/bin:$PATH"
+          rustup toolchain install 1.98.1 --profile minimal --target aarch64-apple-darwin
+          dolby_root="$RUNNER_TEMP/netvplayer-dolby-runtime"
+          mkdir -p "$dolby_root"
+          git clone https://github.com/mpv-player/mpv.git "$dolby_root/mpv"
+          git -C "$dolby_root/mpv" checkout 99b4c12cccb4d8d3f72b41944cb6c640e2156650
+          git clone https://github.com/haasn/libplacebo.git "$dolby_root/libplacebo"
+          git -C "$dolby_root/libplacebo" checkout 0df80ae5229e8e520c0fa4e3d666098a3ffa1cbc
+          git -C "$dolby_root/libplacebo" submodule update --init --recursive
+          python3 script/build_dolby_runtime.py \
+            --base-runtime "$runtime_bundle" \
+            --work-dir "$dolby_root/build" \
+            --mpv-source "$dolby_root/mpv" \
+            --libplacebo-source "$dolby_root/libplacebo"
+          runtime_bundle="$dolby_root/build/runtime.app"
           echo "NETVPLAYER_LIBMPV_RUNTIME_BUNDLE=$runtime_bundle" >> "$GITHUB_ENV"
 
       - name: Build and verify release assets

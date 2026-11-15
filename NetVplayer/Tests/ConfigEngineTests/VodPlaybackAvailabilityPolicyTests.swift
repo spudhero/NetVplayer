@@ -112,6 +112,36 @@ import PlayerEngine
     }
 }
 
+@Test func playbackAvailabilityPreservesOpaqueIDsAndPendingReferences() {
+    for input in ["9783312385|||1", "netvplayer-pending://episode", "magnet:?xt=example", "https://example.test/a.mp3"] {
+        #expect(VodPlaybackAvailabilityPolicy.isVisibleEpisode(Episode(name: "episode", url: input)))
+    }
+    for input in ["", " \n", "  NeTvPlAyEr-UnAvAiLaBlE://episode?reason=expired\n"] {
+        #expect(!VodPlaybackAvailabilityPolicy.isVisibleEpisode(Episode(name: "episode", url: input)))
+    }
+}
+
+@Test func longLineAvailabilityStopsAtTheFirstPlayableEpisode() {
+    let episodes = (0..<10_000).map { Episode(name: "\($0)", url: "book|||\($0)") }
+    var inspected = 0
+    let reason = VodPlaybackAvailabilityPolicy.unsupportedReason(for: episodes) { _ in
+        inspected += 1
+        return SourceSupport(kind: "unknown", status: .passthrough)
+    }
+    #expect(reason == nil)
+    #expect(inspected == 1)
+}
+
+@Test func lineAvailabilityOnlyReportsAReasonWhenEveryEpisodeIsUnsupported() {
+    let episodes = [Episode(name: "first", url: "one"), Episode(name: "second", url: "two")]
+    let rejected = SourceSupport(kind: "unsupported", status: .unsupported, reason: "first reason")
+    #expect(VodPlaybackAvailabilityPolicy.unsupportedReason(for: []) { _ in rejected } == nil)
+    #expect(VodPlaybackAvailabilityPolicy.unsupportedReason(for: episodes) { _ in rejected } == "first reason")
+    #expect(VodPlaybackAvailabilityPolicy.unsupportedReason(for: episodes) { episode in
+        episode.url == "one" ? rejected : SourceSupport(kind: "direct", status: .supported)
+    } == nil)
+}
+
 private func driveEpisodeURL(provider: DriveProvider, fileName: String, index: Int) -> String {
     DriveFileReference(
         provider: provider,

@@ -25,7 +25,8 @@ struct DoubanVerificationView: View {
                 cookieStore?.getAllCookies { cookies in
                     Task { @MainActor in await resumeMatching(cookies: cookies) }
                 }
-            }.disabled(cookieStore == nil || resuming).keyboardShortcut(.defaultAction)
+            }.buttonStyle(ThemedDialogButtonStyle(isPrimary: true))
+            .disabled(cookieStore == nil || resuming).keyboardShortcut(.defaultAction)
         }.padding(20).frame(width: 780, height: 680)
         .themedPresentation()
     }

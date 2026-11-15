@@ -345,10 +345,6 @@ public enum DiagnosticLog {
     private static let store = DiagnosticLogStore()
     private static let remoteRelay = DiagnosticRecordRelay()
 
-    public static var currentLogURL: URL { store.currentLogURL }
-    public static var previousLogURL: URL { store.previousLogURL }
-    public static var path: String { currentLogURL.path }
-
     public static func beginSession() {
         store.beginSession()
     }

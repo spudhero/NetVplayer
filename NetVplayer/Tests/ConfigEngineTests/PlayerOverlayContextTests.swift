@@ -117,9 +117,11 @@ func testCloudSongPlaybackContextEnablesRelativeNavigation(provider: DriveProvid
     spec.metadata["drive.fixtureProvider"] = "uc"
     spec.metadata["drive.fixtureScenario"] = "high-bitrate-selection"
     spec.metadata[DrivePlaybackMetadataKey.fixtureStatus] = ExternalCaptureStatus.captured.rawValue
+    appState.playerState.danmakuStatus = "暂无弹幕附件"
 
     let lines = appState.playbackDiagnosticLines(for: spec)
 
     #expect(lines.contains("Fixture：uc / high-bitrate-selection"))
     #expect(lines.contains("样本状态：captured"))
+    #expect(!lines.contains(where: { $0.contains("弹幕") }))
 }

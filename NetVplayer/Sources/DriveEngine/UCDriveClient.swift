@@ -190,7 +190,7 @@ public final class UCDriveClient: @unchecked Sendable {
     private static let originalProbeRange = "bytes=0-0"
     private static let originalPlaybackBootstrapPwdID = "d0d8d587c9e94"
 
-    private let httpClient: HTTPClient
+    private let httpClient: DriveHTTPClient
     private let pendingPlayPolls: Int
     private let pendingPlayIntervalMilliseconds: Int
     private let originalPlaybackTokenProvider: @Sendable () -> String?
@@ -205,7 +205,7 @@ public final class UCDriveClient: @unchecked Sendable {
         originalPlaybackTokenProvider: @escaping @Sendable () -> String? = { nil },
         originalPlaybackTokenUpdateHandler: @escaping @Sendable (String) -> Void = { _ in }
     ) {
-        self.httpClient = httpClient
+        self.httpClient = DriveHTTPClient(httpClient, provider: .uc)
         self.pendingPlayPolls = max(1, pendingPlayPolls)
         self.pendingPlayIntervalMilliseconds = max(0, pendingPlayIntervalMilliseconds)
         self.originalPlaybackTokenProvider = originalPlaybackTokenProvider
@@ -326,99 +326,101 @@ public final class UCDriveClient: @unchecked Sendable {
     }
 
     public func fetchSavedDownloadURLResult(for playable: UCPlayableFile, share: UCShareRequest, cookie: String) async throws -> UCDownloadResult {
+        if DriveRequestRecovery.budget == nil {
+            return try await DriveRequestRecovery.withBudget { try await self.fetchSavedDownloadURLResult(for: playable, share: share, cookie: cookie) }
+        }
         var activeCookie = cookie
-        let identity = DriveSavedFileNaming.identity(provider: .uc, pwdID: share.pwdID, file: playable.file)
-        let folder = try await ensureTransferFolder(for: share, cookie: activeCookie)
+        let baseIdentity = DriveSavedFileNaming.identity(provider: .uc, pwdID: share.pwdID, file: playable.file)
+        let account = DriveTransferContext.account(provider: .uc, cookie: cookie)
+        try await DriveTransferCoordinator.current.checkRecovery(sourceKey: baseIdentity.cacheKey, account: account)
+        let cached = try await DriveSavedFileStore.shared.verificationRecord(for: baseIdentity, account: account,
+            allowUnscopedCandidate: true)
+        let legacy = try DriveMappingVerification.legacyCandidate(cached, for: baseIdentity,
+            shareID: share.pwdID, sourceID: playable.file.fid, size: playable.file.size)
+        let folder = try await DriveMappingVerification.target(record: cached, provider: .uc, legacy: legacy) {
+            try await ensureTransferFolder(for: share, cookie: cookie)
+        }
         activeCookie = folder.updatedCookie
+        let identity = baseIdentity.scoped(account: account, target: folder.fid)
 
-        if let cached = await DriveSavedFileStore.shared.record(for: identity) {
-            let matchesTargetFolder = cached.provider == .uc
-                && cached.parentFID == folder.fid
-            if !matchesTargetFolder {
-                try? await DriveSavedFileStore.shared.remove(cacheKey: identity.cacheKey)
-                DiagnosticLog.write("[UC_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(cached.savedFID) reason=transfer-folder-mismatch")
-            } else {
-                do {
-                    return try await personalDownloadResultWaitingIfNeeded(for: cached, cookie: activeCookie)
-                } catch {
-                    if Self.shouldInvalidateSavedRecord(error) {
-                        try? await DriveSavedFileStore.shared.invalidate(cached)
-                        DiagnosticLog.write("[UC_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(cached.savedFID) reason=\(error.localizedDescription)")
-                    } else if Self.shouldWaitForPersonalPlayback(error) {
-                        throw DriveEngineError.officialPlayURLPending(cached.originalName)
-                    } else {
-                        throw error
+        if let cached {
+            var verifiedRecord = cached
+            do {
+                guard (cached.targetRootFID ?? cached.parentFID) == folder.fid else {
+                    try await DriveMappingVerification.invalidate(cached, provider: .uc, legacy: legacy)
+                }
+                // A returned transfer container is allowed only while it still
+                // belongs to the configured target. Never search its siblings.
+                if cached.parentFID != folder.fid {
+                    let parents = try await listPersonalFiles(parentFID: folder.fid, cookie: activeCookie)
+                    activeCookie = parents.updatedCookie
+                    guard parents.files.contains(where: { $0.fid == cached.parentFID && $0.isDirectory }) else {
+                        if parents.complete { try await DriveMappingVerification.invalidate(cached, provider: .uc, legacy: legacy) }
+                        throw DriveMappingVerification.unconfirmed(.uc)
                     }
                 }
+                let listed = try await listPersonalFiles(parentFID: cached.parentFID, cookie: activeCookie)
+                activeCookie = listed.updatedCookie
+                let matches = listed.files.filter { $0.fid == cached.savedFID }
+                guard matches.count <= 1 else { throw DriveMappingVerification.unconfirmed(.uc) }
+                verifiedRecord = try await DriveMappingVerification.verified(cached, identity: identity, legacy: legacy,
+                    file: matches.first.map { .init(id: $0.fid,
+                        parent: $0.pdirFID.isEmpty ? cached.parentFID : $0.pdirFID,
+                        size: $0.size, isDirectory: $0.isDirectory) }, listingComplete: listed.complete)
+                return try await personalDownloadResultWaitingIfNeeded(for: verifiedRecord, cookie: activeCookie)
+            } catch {
+                try await DriveMappingVerification.handle(error, record: verifiedRecord, provider: .uc, legacy: legacy)
+                if Self.shouldWaitForPersonalPlayback(error) { throw DriveEngineError.officialPlayURLPending(cached.originalName) }
+                throw error
             }
         }
 
         let transferStartCookie = activeCookie
-        let transferResult = try await DriveTransferCoordinator.shared.transfer(cacheKey: identity.cacheKey) {
+        let transferResult = try await DriveTransferCoordinator.current.confirmedTransfer(cacheKey: identity.cacheKey,
+            scope: .make(identity: identity, account: account, target: folder.fid,
+                         shareID: share.pwdID, sourceFileID: playable.file.fid,
+                         name: playable.file.name, size: playable.file.size, collectionName: share.collectionName)) { attempt in
             var transferCookie = transferStartCookie
             let rejectedFIDs = await DriveSavedFileStore.shared.rejectedFileIDs(cacheKey: identity.cacheKey)
-            let existing = try await self.findPersonalFileRecursively(
-                fileName: identity.targetFileName,
-                size: playable.file.size,
-                rootFID: folder.fid,
-                cookie: transferCookie,
-                excludingFIDs: rejectedFIDs
-            )
-            transferCookie = existing.updatedCookie
-            if let file = existing.file {
-                let record = DriveSavedFileRecord(
-                    provider: .uc,
-                    cacheKey: identity.cacheKey,
-                    pwdID: share.pwdID,
-                    shareFID: playable.file.fid,
-                    fidToken: playable.file.shareFIDToken,
-                    size: playable.file.size,
-                    originalName: playable.file.name,
-                    savedFID: file.fid,
-                    savedFileName: file.name,
-                    parentFID: file.pdirFID.isEmpty ? folder.fid : file.pdirFID
-                )
-                try await DriveSavedFileStore.shared.save(record)
-                DiagnosticLog.write("[UC_SAVED_CACHE] reused hash-file cacheKey=\(identity.cacheKey) fid=\(file.fid) file=\(file.name)")
-                return DriveSavedFileTransferResult(record: record, updatedCookie: transferCookie)
+            // Names (including the historical hash suffix) are not file identity.
+            let before = await attempt.needsSubmission
+                ? try await self.listPersonalFiles(parentFID: folder.fid, cookie: transferCookie) : nil
+            if let before { transferCookie = before.updatedCookie }
+            if await attempt.needsSubmission {
+                let submitCookie = transferCookie
+                let submitted = try await attempt.submit(previousIDs: Set(before?.files.map(\.fid) ?? [])) {
+                    let save = try await self.saveShareFileToPersonalDrive(
+                        playable: playable, share: share, targetPdirFID: folder.fid, cookie: submitCookie)
+                    return DriveTransferSubmission(fileID: save.savedFID, taskID: save.taskID, updatedCookie: save.updatedCookie)
+                }
+                if let submitted, !submitted.updatedCookie.isEmpty { transferCookie = submitted.updatedCookie }
             }
-
-            let save = try await self.saveShareFileToPersonalDrive(
-                playable: playable,
-                share: share,
-                targetPdirFID: folder.fid,
-                cookie: transferCookie
-            )
-            transferCookie = save.updatedCookie
-
-            var savedFID = save.savedFID
-            if let taskID = save.taskID {
-                let task = try await self.waitForSaveTask(
-                    taskID: taskID,
-                    originalFID: playable.file.fid,
-                    fileName: playable.file.name,
-                    intervalMilliseconds: save.intervalMilliseconds,
-                    cookie: transferCookie
-                )
-                transferCookie = task.updatedCookie
-                savedFID = task.savedFID ?? savedFID
+            if let taskID = await attempt.taskID, await attempt.fileID == nil {
+                do {
+                    let task = try await self.waitForSaveTask(taskID: taskID, originalFID: playable.file.fid,
+                        fileName: playable.file.name, intervalMilliseconds: 500, cookie: transferCookie)
+                    transferCookie = task.updatedCookie
+                    try await attempt.update(fileID: task.savedFID)
+                } catch is CancellationError { throw CancellationError() } catch {
+                    // A task read failure says nothing about whether the write ran.
+                }
             }
-
-            let resolved = try await self.waitForResolvedSavedPersonalFile(
-                candidateFID: savedFID?.isEmpty == false ? savedFID : nil,
-                originalFileName: playable.file.name,
-                size: playable.file.size,
-                appFolderFID: folder.fid,
-                cookie: transferCookie,
-                excludingFIDs: rejectedFIDs
-            )
+            let resolved = try await self.confirmTransferredFile(
+                attempt: attempt, originalFileName: playable.file.name, size: playable.file.size,
+                folderFID: folder.fid, cookie: transferCookie, excludingFIDs: rejectedFIDs)
             transferCookie = resolved.updatedCookie
-            guard let savedFile = resolved.file else {
-                throw DriveEngineError.noDownloadURL(playable.file.name)
-            }
-
-            let rename = try await self.renamePersonalFile(fid: savedFile.fid, fileName: identity.targetFileName, cookie: transferCookie)
-            transferCookie = rename.updatedCookie
+            guard let savedFile = resolved.file else { throw DriveEngineError.transferConfirmationPending() }
+            try await attempt.confirmed(savedFile.fid, parent: savedFile.pdirFID.isEmpty ? folder.fid : savedFile.pdirFID)
+            try await DriveTransferContext.current.check()
+            // Retain the confirmed ID before optional renaming. A rename failure
+            // must never cause another copy on the next click.
+            var savedName = savedFile.name
+            do {
+                let renamed = try await self.renamePersonalFile(fid: savedFile.fid, fileName: identity.targetFileName, cookie: transferCookie)
+                transferCookie = renamed.updatedCookie
+                savedName = identity.targetFileName
+            } catch is CancellationError { throw CancellationError() } catch { }
+            try await DriveTransferContext.current.check()
             let record = DriveSavedFileRecord(
                 provider: .uc,
                 cacheKey: identity.cacheKey,
@@ -428,8 +430,9 @@ public final class UCDriveClient: @unchecked Sendable {
                 size: playable.file.size,
                 originalName: playable.file.name,
                 savedFID: savedFile.fid,
-                savedFileName: identity.targetFileName,
-                parentFID: savedFile.pdirFID.isEmpty ? folder.fid : savedFile.pdirFID
+                savedFileName: savedName,
+                parentFID: savedFile.pdirFID.isEmpty ? folder.fid : savedFile.pdirFID,
+                targetRootFID: folder.fid
             )
             try await DriveSavedFileStore.shared.save(record)
             DiagnosticLog.write("[UC_SAVED_CACHE] saved cacheKey=\(identity.cacheKey) fid=\(savedFile.fid) file=\(identity.targetFileName)")
@@ -440,30 +443,13 @@ public final class UCDriveClient: @unchecked Sendable {
         do {
             return try await personalDownloadResultWaitingIfNeeded(for: transferResult.record, cookie: activeCookie)
         } catch {
-            if Self.shouldInvalidateSavedRecord(error) {
-                try? await DriveSavedFileStore.shared.invalidate(transferResult.record)
-                DiagnosticLog.write("[UC_SAVED_CACHE] invalidated cacheKey=\(identity.cacheKey) fid=\(transferResult.record.savedFID) reason=\(error.localizedDescription)")
-            }
+            try await DriveMappingVerification.handle(error, record: transferResult.record, provider: .uc)
             if Self.shouldWaitForPersonalPlayback(error) {
                 DiagnosticLog.write("[UC_LINK_SELECT] type=rejected-pds-download context=personal-play-error file=\(playable.file.name), reason=\(error.localizedDescription)")
                 throw DriveEngineError.officialPlayURLPending(playable.file.name)
             }
             throw error
         }
-    }
-
-    func fetchSavedPersonalPlayURLResult(for playable: UCPlayableFile, share: UCShareRequest, cookie: String) async throws -> UCDownloadResult {
-        let savedResult = try await fetchSavedDownloadURLResult(for: playable, share: share, cookie: cookie)
-        if savedResult.playbackRoute == DrivePlaybackRoute.ucSmartPlay {
-            return savedResult
-        }
-        guard let savedFile = savedResult.savedFile else {
-            throw DriveEngineError.noDownloadURL(playable.file.name)
-        }
-        return try await fetchSavedPersonalPlayURLResult(
-            for: savedFile,
-            cookie: savedResult.updatedCookie
-        )
     }
 
     func fetchSavedPersonalPlayURLResult(
@@ -582,7 +568,6 @@ private extension UCDriveClient {
         let pdirFID: String
         let size: Int64
         let fileType: Int
-        let category: Int
         let isDirectory: Bool
         let isFile: Bool
 
@@ -604,7 +589,6 @@ private extension UCDriveClient {
     struct SaveStartResult: Sendable {
         let taskID: String?
         let savedFID: String?
-        let intervalMilliseconds: Int
         let updatedCookie: String
     }
 
@@ -671,6 +655,9 @@ private extension UCDriveClient {
             return AppFolderResult(fid: existing.fid, updatedCookie: root.updatedCookie)
         }
 
+        guard root.complete else { throw DriveMappingVerification.unconfirmed(.uc) }
+        if DriveMappingVerification.readOnly { throw DriveMappingVerification.changed(.uc) }
+
         let result = try await postJSONResult(
             url: Self.apiURL(path: "/1/clouddrive/file"),
             headers: accountHeaders(cookie: root.updatedCookie),
@@ -715,6 +702,9 @@ private extension UCDriveClient {
         if let existing = listed.files.first(where: { $0.isDirectory && $0.name == name }) {
             return AppFolderResult(fid: existing.fid, updatedCookie: listed.updatedCookie)
         }
+
+        guard listed.complete else { throw DriveMappingVerification.unconfirmed(.uc) }
+        if DriveMappingVerification.readOnly { throw DriveMappingVerification.changed(.uc) }
 
         let result = try await postJSONResult(
             url: Self.apiURL(path: "/1/clouddrive/file"),
@@ -763,14 +753,13 @@ private extension UCDriveClient {
         let result = try await postJSONResult(
             url: Self.apiURL(path: "/1/clouddrive/share/sharepage/save"),
             headers: requestHeaders(share: share, cookie: cookie, stoken: playable.stoken),
-            body: body
+            body: body,
+            allowsProxyFallback: false
         )
         let data = result.json["data"] as? [String: Any] ?? result.json
-        let metadata = result.json["metadata"] as? [String: Any]
         return SaveStartResult(
             taskID: Self.firstString(in: data, keys: ["task_id", "taskId"]),
             savedFID: Self.savedFID(in: data, excluding: file.fid, matching: file.name),
-            intervalMilliseconds: max(300, Self.intValue(metadata?["tq_gap"]) ?? Self.intValue(metadata?["task_gap"]) ?? 500),
             updatedCookie: result.updatedCookie
         )
     }
@@ -785,7 +774,9 @@ private extension UCDriveClient {
         var activeCookie = cookie
         var lastJSON: [String: Any] = [:]
 
-        for _ in 0..<Self.maxTaskPolls {
+        for _ in 0..<min(6, Self.maxTaskPolls) {
+            try await DriveTransferContext.current.check()
+            _ = try DriveTransferContext.readTimeout(30)
             let result = try await getJSONResult(
                 url: Self.apiURL(path: "/1/clouddrive/task", queryItems: [
                     URLQueryItem(name: "task_id", value: taskID)
@@ -810,137 +801,40 @@ private extension UCDriveClient {
         throw DriveEngineError.api(provider: .uc, statusCode: 200, code: nil, message: message)
     }
 
-    func findPersonalFileRecursively(
-        fileName: String, size: Int64?, rootFID: String, cookie: String,
-        excludingFIDs: Set<String>
+    private func confirmTransferredFile(
+        attempt: DriveTransferAttempt, originalFileName: String, size: Int64,
+        folderFID: String, cookie: String, excludingFIDs: Set<String>
     ) async throws -> PersonalFileLookupResult {
         var activeCookie = cookie
-        var queue = [rootFID]
-        var visited = Set<String>()
-
-        while !queue.isEmpty && visited.count < Self.maxDirectories {
-            let parentFID = queue.removeFirst()
-            guard visited.insert(parentFID).inserted else { continue }
-
-            let listed = try await listPersonalFiles(parentFID: parentFID, cookie: activeCookie)
+        let previous = await attempt.previousIDs
+        let knownID = await attempt.fileID
+        for poll in 0..<min(6, max(1, pendingPlayPolls)) {
+            try await DriveTransferContext.current.check()
+            let listed = try await listPersonalFiles(parentFID: folderFID, cookie: activeCookie)
             activeCookie = listed.updatedCookie
-
-            let candidates = listed.files.filter { $0.isPlayableMediaObject && !excludingFIDs.contains($0.fid) }
-            let exactMatches = candidates.filter { $0.name == fileName }
-            if let size,
-               let exact = exactMatches.first(where: { $0.size == size }) {
-                return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
+            let matches = listed.files.filter {
+                !$0.isDirectory && $0.fileType != 0 && $0.isPlayableMediaObject && !excludingFIDs.contains($0.fid)
+                    && (size <= 0 || $0.size == size)
+                    && ($0.pdirFID.isEmpty || $0.pdirFID == folderFID)
+            }.filter { file in
+                if let knownID { return file.fid == knownID }
+                return listed.complete && size > 0 && file.name == originalFileName && !previous.contains(file.fid)
             }
-            if let exact = exactMatches.first {
-                return PersonalFileLookupResult(file: exact, updatedCookie: activeCookie)
+            if matches.count == 1 { return PersonalFileLookupResult(file: matches[0], updatedCookie: activeCookie) }
+            // Some services return a container ID. Only descend into that exact,
+            // observed directory; never fall back to its siblings or another name.
+            if let knownID, listed.files.contains(where: { $0.fid == knownID && ($0.isDirectory || $0.fileType == 0) }) {
+                let nested = try await listPersonalFiles(parentFID: knownID, cookie: activeCookie)
+                activeCookie = nested.updatedCookie
+                let children = nested.files.filter {
+                    !$0.isDirectory && $0.isPlayableMediaObject && $0.name == originalFileName
+                        && size > 0 && $0.size == size && !excludingFIDs.contains($0.fid)
+                }
+                if nested.complete && children.count == 1 { return PersonalFileLookupResult(file: children[0], updatedCookie: activeCookie) }
             }
-            if let folded = candidates.first(where: { $0.name.localizedStandardCompare(fileName) == .orderedSame }) {
-                return PersonalFileLookupResult(file: folded, updatedCookie: activeCookie)
-            }
-
-            queue.append(contentsOf: listed.files.filter(\.isDirectory).map(\.fid))
+            if poll + 1 < min(6, max(1, pendingPlayPolls)) { try await sleepForPendingPlayback() }
         }
-
         return PersonalFileLookupResult(file: nil, updatedCookie: activeCookie)
-    }
-
-    func resolveSavedPersonalFile(
-        candidateFID: String, originalFileName: String, size: Int64, appFolderFID: String, cookie: String,
-        excludingFIDs: Set<String>
-    ) async throws -> PersonalFileLookupResult {
-        var activeCookie = cookie
-        let appFolder = try await listPersonalFiles(parentFID: appFolderFID, cookie: activeCookie)
-        activeCookie = appFolder.updatedCookie
-
-        if let candidate = appFolder.files.first(where: { $0.fid == candidateFID }), !excludingFIDs.contains(candidateFID) {
-            DiagnosticLog.write("[UC_SAVED_CACHE] save candidate fid=\(candidateFID) name=\(candidate.name) dir=\(candidate.isDirectory) fileType=\(candidate.fileType) category=\(candidate.category) size=\(candidate.size)")
-
-            let nested = try? await findPersonalFileRecursively(
-                fileName: originalFileName,
-                size: size,
-                rootFID: candidate.fid,
-                cookie: activeCookie,
-                excludingFIDs: excludingFIDs
-            )
-            if let nested {
-                activeCookie = nested.updatedCookie
-                if let file = nested.file {
-                    let containerType = candidate.isDirectory ? "folder" : "container"
-                    DiagnosticLog.write("[UC_SAVED_CACHE] save task returned \(containerType) fid=\(candidateFID); resolved nested video fid=\(file.fid) file=\(file.name)")
-                    return PersonalFileLookupResult(file: file, updatedCookie: activeCookie)
-                }
-            }
-
-            if candidate.isPlayableMediaObject {
-                return PersonalFileLookupResult(file: candidate, updatedCookie: activeCookie)
-            }
-
-            DiagnosticLog.write("[UC_SAVED_CACHE] save task returned non-video fid=\(candidateFID); resolving under app folder file=\(originalFileName)")
-        } else if !excludingFIDs.contains(candidateFID) {
-            let nested = try? await findPersonalFileRecursively(
-                fileName: originalFileName,
-                size: size,
-                rootFID: candidateFID,
-                cookie: activeCookie,
-                excludingFIDs: excludingFIDs
-            )
-            if let nested {
-                activeCookie = nested.updatedCookie
-                if let file = nested.file {
-                    DiagnosticLog.write("[UC_SAVED_CACHE] save task returned external container fid=\(candidateFID); resolved nested video fid=\(file.fid) file=\(file.name)")
-                    return PersonalFileLookupResult(file: file, updatedCookie: activeCookie)
-                }
-            }
-        }
-
-        return try await findPersonalFileRecursively(
-            fileName: originalFileName,
-            size: size,
-            rootFID: appFolderFID,
-            cookie: activeCookie,
-            excludingFIDs: excludingFIDs
-        )
-    }
-
-    func waitForResolvedSavedPersonalFile(
-        candidateFID: String?, originalFileName: String, size: Int64, appFolderFID: String, cookie: String,
-        excludingFIDs: Set<String>
-    ) async throws -> PersonalFileLookupResult {
-        var activeCookie = cookie
-        var latest = PersonalFileLookupResult(file: nil, updatedCookie: activeCookie)
-
-        for attempt in 0..<pendingPlayPolls {
-            if let candidateFID, !candidateFID.isEmpty {
-                latest = try await resolveSavedPersonalFile(
-                    candidateFID: candidateFID,
-                    originalFileName: originalFileName,
-                    size: size,
-                    appFolderFID: appFolderFID,
-                    cookie: activeCookie,
-                    excludingFIDs: excludingFIDs
-                )
-            } else {
-                latest = try await findPersonalFileRecursively(
-                    fileName: originalFileName,
-                    size: size,
-                    rootFID: appFolderFID,
-                    cookie: activeCookie,
-                    excludingFIDs: excludingFIDs
-                )
-            }
-
-            activeCookie = latest.updatedCookie
-            if latest.file != nil {
-                return latest
-            }
-
-            DiagnosticLog.write("[UC_SAVE_PENDING] file=\(originalFileName) attempt=\(attempt + 1)/\(pendingPlayPolls)")
-            if attempt < pendingPlayPolls - 1 {
-                try await sleepForPendingPlayback()
-            }
-        }
-
-        return latest
     }
 
     func personalPlayResult(for record: DriveSavedFileRecord, cookie: String) async throws -> UCDownloadResult {
@@ -1103,7 +997,10 @@ extension UCDriveClient {
         let session: OriginalPlaybackSession?
         do {
             session = try await originalPlaybackSession(cookie: cookie, forceRefresh: forceRefreshToken)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
             session = nil
             DiagnosticLog.write("[UC_ORIGINAL_AUTH] ut-bootstrap-failed context=legacy-download-fallback reason=\(error.localizedDescription)")
         }
@@ -1121,6 +1018,7 @@ extension UCDriveClient {
                 throw DriveEngineError.noDownloadURL(fileName)
             }
         } catch {
+            if error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
             guard session?.reusedToken == true else { throw error }
         }
 
@@ -1226,7 +1124,7 @@ private extension UCDriveClient {
         return UCPlayResult(url: selection?.url, updatedCookie: result.updatedCookie, selection: selection)
     }
 
-    func listPersonalFiles(parentFID: String, cookie: String) async throws -> (files: [PersonalFile], updatedCookie: String) {
+    func listPersonalFiles(parentFID: String, cookie: String) async throws -> (files: [PersonalFile], updatedCookie: String, complete: Bool) {
         let result = try await getJSONResult(
             url: Self.apiURL(path: "/1/clouddrive/file/sort", queryItems: [
                 URLQueryItem(name: "pdir_fid", value: parentFID),
@@ -1240,10 +1138,13 @@ private extension UCDriveClient {
             headers: accountHeaders(cookie: cookie)
         )
         let data = result.json["data"] as? [String: Any]
-        let rawList = data?["list"] as? [[String: Any]]
-            ?? data?["file_list"] as? [[String: Any]]
-            ?? []
-        return (rawList.compactMap(Self.parsePersonalFile), result.updatedCookie)
+        guard let rawList = data?["list"] as? [[String: Any]]
+            ?? data?["file_list"] as? [[String: Any]] else { throw DriveMappingVerification.unconfirmed(.uc) }
+        let files = rawList.compactMap(Self.parsePersonalFile)
+        let metadata = result.json["metadata"] as? [String: Any]
+        let total = Self.intValue(metadata?["_total"]) ?? Self.intValue(data?["total"])
+        let complete = files.count == rawList.count && (total.map { $0 == rawList.count } ?? (rawList.count < 100))
+        return (files, result.updatedCookie, complete)
     }
 
     func requestHeaders(
@@ -1316,13 +1217,13 @@ private extension UCDriveClient {
     }
 
     func getJSONResult(url: String, headers: [String: String]) async throws -> JSONRequestResult {
-        let response = try await httpClient.get(url: url, headers: headers, timeout: 20)
+        let response = try await httpClient.get(url: url, headers: headers, timeout: try DriveTransferContext.readTimeout(20), allowsProxyFallback: DriveTransferContext.confirmationDeadline == nil, redactsURLInLogs: true)
         return try decodeJSONResponse(response, fallbackCookie: headers["Cookie"] ?? "")
     }
 
-    func postJSONResult(url: String, headers: [String: String], body: [String: Any]) async throws -> JSONRequestResult {
+    func postJSONResult(url: String, headers: [String: String], body: [String: Any], allowsProxyFallback: Bool = true) async throws -> JSONRequestResult {
         let data = try JSONSerialization.data(withJSONObject: body)
-        let response = try await httpClient.post(url: url, headers: headers, body: data, timeout: 20)
+        let response = try await httpClient.post(url: url, headers: headers, body: data, timeout: 20, allowsProxyFallback: allowsProxyFallback && DriveTransferContext.confirmationDeadline == nil, redactsURLInLogs: true)
         return try decodeJSONResponse(response, fallbackCookie: headers["Cookie"] ?? "")
     }
 
@@ -1396,7 +1297,6 @@ private extension UCDriveClient {
             pdirFID: stringValue(raw["pdir_fid"]) ?? stringValue(raw["parent_fid"]) ?? "",
             size: int64Value(raw["size"]) ?? 0,
             fileType: fileType,
-            category: category,
             isDirectory: isDirectory,
             isFile: isFile
         )
@@ -1659,6 +1559,8 @@ private extension UCDriveClient {
             return false
         case .api:
             return shouldFallbackFromPersonalPlayToDownload(error)
+        case .transferConfirmationPending:
+            return false
         case .invalidShareURL, .unsupported, .loginRequired, .noPlayableFile:
             return false
         }
@@ -1904,5 +1806,74 @@ private extension UCDriveClient {
             if ["false", "0"].contains(string.lowercased()) { return false }
         }
         return nil
+    }
+}
+
+extension UCDriveClient {
+    func recoverTransfer(_ record: DriveTransferTask, attempt: DriveTransferAttempt, cookie: String) async throws -> DriveRecoveredFile? {
+        let scope = record.scope
+        let target = try await ensureTransferFolder(for: .init(originalURL: "", pwdID: scope.shareID,
+            collectionName: scope.collectionName), cookie: cookie)
+        guard target.fid == scope.target else { throw DriveTaskRecoveryError.scopeChanged }
+        if !record.submitted || record.phase == .failed { return nil }
+        var activeCookie = target.updatedCookie
+        if let taskID = await attempt.taskID, await attempt.fileID == nil {
+            let result = try await waitForSaveTask(taskID: taskID, originalFID: scope.sourceFileID,
+                fileName: scope.name, intervalMilliseconds: 500, cookie: activeCookie)
+            activeCookie = result.updatedCookie
+            try await attempt.update(fileID: result.savedFID)
+        }
+        let parent = record.confirmedParentID ?? scope.target
+        if parent != scope.target {
+            let parents = try await listPersonalFiles(parentFID: scope.target, cookie: activeCookie)
+            guard parents.files.contains(where: { $0.fid == parent && $0.isDirectory }) else {
+                throw DriveTaskRecoveryError.requiresReview
+            }
+        }
+        guard let file = try await confirmTransferredFile(attempt: attempt, originalFileName: scope.name,
+            size: scope.size, folderFID: parent, cookie: activeCookie, excludingFIDs: []).file else {
+            throw DriveTaskRecoveryError.requiresReview
+        }
+        return .init(id: file.fid, name: file.name, parent: file.pdirFID.isEmpty ? parent : file.pdirFID, size: file.size)
+    }
+}
+
+
+// Personal-directory browsing never invokes the share-save or cleanup paths.
+extension UCDriveClient {
+    func personalDirectory(folderID: String, cursor: String?, credential: CloudCredential) async throws -> CloudDirectoryPage {
+        let page = try CloudDirectoryPaging.integer(cursor, first: 1, provider: .uc)
+        let result = try await getJSONResult(
+            url: Self.apiURL(path: "/1/clouddrive/file/sort", queryItems: [
+                URLQueryItem(name: "pdir_fid", value: folderID),
+                URLQueryItem(name: "_page", value: String(page)),
+                URLQueryItem(name: "_size", value: "100"),
+                URLQueryItem(name: "_fetch_total", value: "1"),
+                URLQueryItem(name: "fetch_all_file", value: "1"),
+                URLQueryItem(name: "fetch_risk_file_name", value: "1"),
+                URLQueryItem(name: "_sort", value: "file_type:asc,file_name:asc")
+            ]), headers: accountHeaders(cookie: credential.secret))
+        guard let data = result.json["data"] as? [String: Any],
+              let raw = (data["list"] as? [[String: Any]]) ?? (data["file_list"] as? [[String: Any]]) else {
+            throw DriveMappingVerification.unconfirmed(.uc)
+        }
+        let files = raw.compactMap(Self.parsePersonalFile)
+        guard files.count == raw.count else { throw DriveMappingVerification.unconfirmed(.uc) }
+        let metadata = result.json["metadata"] as? [String: Any]
+        let total = Self.intValue(metadata?["_total"]) ?? Self.intValue(data["total"])
+        let more = try CloudDirectoryPaging.hasNext(count: files.count, offset: (page - 1) * 100, limit: 100,
+            total: total, hasMore: Self.boolValue(data["has_more"]) ?? false, provider: .uc)
+        return CloudDirectoryPage(entries: files.map {
+            .init(id: $0.fid, name: $0.name, parentID: folderID, size: $0.size, isDirectory: $0.isDirectory)
+        }, nextCursor: more ? String(page + 1) : nil,
+           updatedCredential: CloudDirectoryPaging.updatedCookie(result.updatedCookie, credential: credential))
+    }
+
+    func personalDirectoryDownload(entry: CloudDirectoryEntry, credential: CloudCredential) async throws -> CloudDriveLink {
+        let result = try await fetchPersonalDownloadURLResult(fid: entry.id, fileName: entry.name, cookie: credential.secret)
+        guard let url = result.url, !url.isEmpty else { throw DriveEngineError.noDownloadURL(entry.name) }
+        let updated = CloudDirectoryPaging.updatedCookie(result.updatedCookie, credential: credential)
+        return CloudDriveLink(url: url, headers: ["Referer": "https://drive.uc.cn/", "Origin": "https://drive.uc.cn", "Cookie": updated.secret, "User-Agent": Self.accountPlaybackUserAgent],
+            metadata: CloudDirectoryPaging.metadata(entry, provider: .uc), updatedCredential: updated)
     }
 }
