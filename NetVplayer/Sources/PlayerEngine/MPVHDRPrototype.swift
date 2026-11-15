@@ -1,6 +1,8 @@
 #if DEBUG
 import AppKit
-import AVFoundation
+// Older SDKs lack Sendable annotations on AVAssetTrack; this diagnostic keeps
+// asset and track use on MainActor across the asynchronous AVFoundation loads.
+@preconcurrency import AVFoundation
 import Foundation
 import Models
 import MPVShim
