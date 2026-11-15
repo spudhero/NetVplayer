@@ -191,7 +191,7 @@ private final class SnifferLoopbackServer {
     }
 
     func url(_ path: String) -> String { "http://127.0.0.1:\(port)" + path }
-    func stop() { if process.isRunning { process.terminate(); process.waitUntilExit() } }
+    func stop() { #expect(stopOwnedFixtureProcess(process)) }
 
     private static let script = #"""
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler

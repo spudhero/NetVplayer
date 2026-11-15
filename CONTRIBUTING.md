@@ -103,3 +103,9 @@ Public issues must not include cookies, authorization headers, signed media
 URLs, private endpoints, account data, raw configuration contents, or private
 Provider source. Attach only the minimum redacted diagnostic needed to reproduce
 the problem.
+
+Loopback tests stop their own child processes with bounded termination and a
+verified exit. Use `stopOwnedFixtureProcess` for these fixtures; unbounded
+`Process.waitUntilExit()` can pump a nested run loop and stall the main actor.
+The real-process contracts cover graceful exit, ignored SIGTERM, isolation of
+a separate child and repeated cleanup.

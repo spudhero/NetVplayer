@@ -206,7 +206,7 @@ final class SeedScopeFixture {
         proxy.allowFailover = false
         store.proxyConfigurations = [proxy]
     }
-    func stop() { if process.isRunning { process.terminate();process.waitUntilExit() } }
+    func stop() { #expect(stopOwnedFixtureProcess(process)) }
     fileprivate func rows() async throws -> [SeedRow] {
         let (data,_)=try await URLSession.shared.data(from:URL(string:"http://127.0.0.1:\(port)/records")!)
         return try JSONDecoder().decode([SeedRow].self,from:data)

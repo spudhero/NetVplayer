@@ -183,8 +183,9 @@ private final class MediaCredentialServer {
     }
     func url(_ path: String) -> String { "http://127.0.0.1:\(port)" + path }
     func stop() {
-        if process.isRunning { process.terminate(); process.waitUntilExit() }
-        if temporaryRoot { try? FileManager.default.removeItem(at: diagnostics) }
+        let stopped = stopOwnedFixtureProcess(process)
+        #expect(stopped)
+        if stopped && temporaryRoot { try? FileManager.default.removeItem(at: diagnostics) }
     }
     private func session() -> URLSession {
         let config = URLSessionConfiguration.ephemeral

@@ -224,8 +224,9 @@ private final class ReplayEligibilityServer {
     }
     func url(_ path: String) -> String { "http://127.0.0.1:\(port)" + path }
     func stop() {
-        if process.isRunning { process.terminate(); process.waitUntilExit() }
-        if temporary { try? FileManager.default.removeItem(at: root) }
+        let stopped = stopOwnedFixtureProcess(process)
+        #expect(stopped)
+        if stopped && temporary { try? FileManager.default.removeItem(at: root) }
     }
     private func session() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
