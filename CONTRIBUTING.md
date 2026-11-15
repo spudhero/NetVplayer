@@ -113,3 +113,8 @@ a separate child and repeated cleanup.
 On macOS the regression runner sets `NSUnbufferedIO=YES` for its child so
 Foundation stdout reaches the idle watchdog promptly. The 300-second idle
 deadline and the requirement for every started run's completion remain intact.
+
+Playback state-machine fixtures that submit through `playSpecHandler` must
+isolate their simulated state from the real engine's asynchronous stop reset.
+Use the production refresh budget and assert the loading phase before sending
+EOF; a shortened deadline must not expire during unrelated playback setup.

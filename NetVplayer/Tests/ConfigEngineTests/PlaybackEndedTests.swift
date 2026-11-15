@@ -3,6 +3,7 @@ import Testing
 import Models
 import Storage
 import SpiderEngine
+import PlayerEngine
 @testable import NetVplayerApp
 
 @Suite(.serialized)
@@ -45,8 +46,12 @@ struct PlaybackEndedTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let (state, provider, site) = await fixture(directory)
-        let normalRefreshTimeout = state.episodeListRefreshTimeout
-        if change == "timeout" { state.episodeListRefreshTimeout = .milliseconds(350) }
+        // This test submits through playSpecHandler, so the real engine must not
+        // asynchronously clear the state owned by that handler after stop().
+        let engine = MPVPlayerEngine.vod
+        let originalPlayerState = engine.playerState
+        engine.playerState = nil
+        defer { engine.playerState = originalPlayerState }
         var submissions: [PlaySpec] = []
         state.playSpecHandler = { spec in
             await Task.yield()
@@ -60,6 +65,9 @@ struct PlaybackEndedTests {
         }
         #expect(state.episodeListState == .loading)
         await state.playEpisode(Episode(name: "第1集", url: "first"))
+        // The production refresh budget also covers asynchronous playback setup.
+        // A 350ms test budget could expire before the first simulated EOF.
+        try #require(state.episodeListState == .loading)
         let spec = try #require(state.playerState.currentSpec)
         state.playerState.endDisposition = .natural
         state.handleMPVPlaybackEnded(spec: spec)
@@ -70,7 +78,7 @@ struct PlaybackEndedTests {
         case "film": state.detailVod = Vod(vodId: "other")
         case "close": state.isPlayerPresented = false
         case "timeout":
-            let timeoutDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+            let timeoutDeadline = ContinuousClock.now.advanced(by: .seconds(15))
             while state.episodeListState == .loading, ContinuousClock.now < timeoutDeadline {
                 try await Task.sleep(for: .milliseconds(5))
             }
@@ -88,8 +96,6 @@ struct PlaybackEndedTests {
             #expect(submissions.last?.metadata["vod.episodeURL"] == "second")
         } else if change == "timeout" {
             #expect(state.episodeListState == .incomplete)
-            // Only the blocked request uses a short budget; retry gets the production budget.
-            state.episodeListRefreshTimeout = normalRefreshTimeout
             await state.retryEpisodeList()
             try await waitForPreparedPlayback(state)
             #expect(state.episodeListState == .ready)

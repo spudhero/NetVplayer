@@ -322,7 +322,7 @@ private final class NavigationHarness {
     func expectCredentialBoundary(_ url: URL, headers: [String: String]) async throws {
         let start = try await rows().count
         await #expect(throws: WebViewSnifferError.credentialedCrossOriginNavigation) {
-            try await sniffer.sniff(url: url.absoluteString, headers: headers, timeout: 12)
+            try await self.sniffer.sniff(url: url.absoluteString, headers: headers, timeout: 12)
         }
         let observed = Array(try await rows().dropFirst(start))
         #expect(observed.count == 1)
