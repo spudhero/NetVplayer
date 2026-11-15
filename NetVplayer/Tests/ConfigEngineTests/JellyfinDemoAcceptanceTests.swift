@@ -108,9 +108,14 @@ struct JellyfinDemoAcceptanceTests {
     }
     evidence["libraries"] = libraries.map(\.typeName)
     evidence["movieCount"] = listing.list.count; evidence["searchResults"] = search.list.count
-    evidence["movie"] = ["title": vod.vodName, "year": detail.metadata.year ?? 0,
-      "rating": detail.rating ?? 0, "fileCount": detail.files.count, "authenticatedImages": imageCount,
-      "codec": file.videoCodec ?? "unknown", "width": Int(file.width ?? 0), "height": Int(file.height ?? 0)]
+    let movieYear: Int = detail.metadata.year ?? 0
+    let movieRating: Double = detail.rating ?? 0
+    let videoCodec: String = file.videoCodec ?? "unknown"
+    let videoWidth: Int = file.width ?? 0
+    let videoHeight: Int = file.height ?? 0
+    evidence["movie"] = ["title": vod.vodName, "year": movieYear,
+      "rating": movieRating, "fileCount": detail.files.count, "authenticatedImages": imageCount,
+      "codec": videoCodec, "width": videoWidth, "height": videoHeight]
     try save()
 
     try ProxyServer.shared.start()

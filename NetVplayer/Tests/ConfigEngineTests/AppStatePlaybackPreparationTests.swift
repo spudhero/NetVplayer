@@ -51,7 +51,7 @@ func playbackPreparationCancellationPreservesActiveVideo(cancelTask: Bool) async
     }
     // The Provider deliberately ignores cancellation and returns a valid URL late.
     await provider.complete(url: "https://media.example.test/next.mp4")
-    _ = await task.value
+    await task.value
 
     #expect(submissions == 0)
     #expect(state.playerState.currentSpec?.url == oldSpec.url)
@@ -96,7 +96,7 @@ func manualEpisodeSwitchShowsTargetWhileWaitingForPreload(action: String) async 
         #expect(!state.isPreparingVodPlayback)
     }
     await provider.complete(url: "https://media.example.test/next.mp4")
-    await task.value
+    _ = await task.value
 
     #expect(state.preparingEpisode == nil)
     #expect(!state.isPreparingVodPlayback)

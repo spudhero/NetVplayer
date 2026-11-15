@@ -38,7 +38,10 @@ struct AndroidRuntimeRealComponentAcceptanceTests {
             catch let error as URLError where error.code == .badServerResponse { throw error }
             catch { try record(name, ["error_type": String(reflecting: type(of: error))]) }
             let after = try selection()
-            try #require(after == before)
+            guard after == before else {
+                Issue.record("Rejected component changed the active selection")
+                throw URLError(.badServerResponse)
+            }
         }
 
         // A live parent listener makes EPERM/EACCES distinguish offline denial

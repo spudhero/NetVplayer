@@ -124,3 +124,5 @@ values before mixing them into `[String: Any]`. Existing platform compatibility
 notices cover noninteractive legacy Keychain reads, the explicit Sentry app-hang
 opt-out, and the sniffer's bounded fire-and-forget JavaScript poll. Those calls
 retain their current migration, privacy, and session-lifetime behavior.
+Keep task completion awaits when discarding their result; spell the discard as
+`_ = await task.value` so cleanup retains its ordering.
