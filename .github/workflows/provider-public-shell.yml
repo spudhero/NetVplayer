@@ -100,6 +100,42 @@ jobs:
         with:
           node-version: "22.20.0"
 
+      - name: Verify WebKit fixture delegate dispatch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import tempfile
+          source = Path('NetVplayer/Tests/ConfigEngineTests/WebCookieSeedScopeTests.swift').read_text()
+          start = source.index('@MainActor\nclass SeedBrowser:')
+          end = source.index('\n@MainActor\nfinal class SeedScopeFixture', start)
+          delegate_source = 'import Foundation\nimport WebKit\nimport Security\n' + source[start:end]
+          probe = '''
+          import Foundation
+          import WebKit
+          @MainActor private final class DelegateSubclass: SeedBrowser {}
+          @main struct DelegateProbe {
+              @MainActor static func main() {
+                  let selector = NSSelectorFromString("webView:didReceiveAuthenticationChallenge:completionHandler:")
+                  let delegates: [SeedBrowser] = [SeedBrowser(certificate: Data()), DelegateSubclass(certificate: Data())]
+                  for delegate in delegates {
+                      precondition(delegate.responds(to: selector), "WebKit authentication selector missing")
+                  }
+                  print("WebKit authentication selector is implemented and inherited")
+              }
+          }
+          '''
+          with tempfile.TemporaryDirectory(prefix='webkit-delegate-') as directory:
+              source = Path(directory) / 'Delegate.swift'
+              main = Path(directory) / 'Main.swift'
+              binary = Path(directory) / 'delegate-probe'
+              source.write_text(delegate_source)
+              main.write_text(probe)
+              subprocess.run(['swiftc', '-parse-as-library', '-strict-concurrency=complete',
+                              '-warnings-as-errors', str(source), str(main), '-o', str(binary)], check=True)
+              subprocess.run([str(binary)], check=True)
+          PY
+
       - name: Set up Java
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
