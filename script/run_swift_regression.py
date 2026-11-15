@@ -48,10 +48,13 @@ def main():
             for key, _ in selector.select(timeout=min(1, args.idle_timeout)):
                 data = os.read(key.fd, 65536)
                 if not data:
-                    return child.wait()
+                    selector.unregister(key.fd)
+                    continue
                 sys.stdout.buffer.write(data)
                 sys.stdout.buffer.flush()
                 last_output = time.monotonic()
+            if child.poll() is not None and not selector.get_map():
+                return child.returncode
             if time.monotonic() - last_output >= args.idle_timeout:
                 print("\nRegression stalled: collecting owned test process stacks.", flush=True)
                 if sys.platform == "darwin":
