@@ -457,6 +457,9 @@ struct PlayerWindowLifecycleTests {
                            y: screen.visibleFrame.midY - window.frame.height / 2,
                            width: window.frame.width, height: window.frame.height)
         window.setFrame(frame, display: false)
+        let restoredFrame = PlayerWindowPresentationPolicy.restoredWindowFrame(
+            lastRegularFrame: frame, currentFrame: frame, fallbackFrameSize: frame.size,
+            visibleFrame: screen.visibleFrame)
         context.attach(window)
         let originalAspect = window.contentAspectRatio
         let originalIncrements = window.contentResizeIncrements
@@ -474,12 +477,12 @@ struct PlayerWindowLifecycleTests {
         #expect(context.restoreRegularWindow())
         #expect(!context.isCompact && !context.isAlwaysOnTop)
         #expect(window.level == .normal)
-        #expect(window.frame.size == frame.size)
+        #expect(window.frame.size == restoredFrame.size)
         #expect(window.contentAspectRatio == originalAspect)
         #expect(window.contentResizeIncrements == originalIncrements)
         // Restoring normalizes the origin to whole screen points.
-        #expect(abs(window.frame.minX - frame.minX) <= 1)
-        #expect(abs(window.frame.minY - frame.minY) <= 1)
+        #expect(abs(window.frame.minX - restoredFrame.minX) <= 1)
+        #expect(abs(window.frame.minY - restoredFrame.minY) <= 1)
         context.detach(window)
     }
 
@@ -490,10 +493,14 @@ struct PlayerWindowLifecycleTests {
         window.center()
         context.attach(window)
         let frame = window.frame
+        let screen = try #require(window.screen ?? NSScreen.main)
+        let restoredFrame = PlayerWindowPresentationPolicy.restoredWindowFrame(
+            lastRegularFrame: frame, currentFrame: frame, fallbackFrameSize: frame.size,
+            visibleFrame: screen.visibleFrame)
         #expect(context.enterFloatingWindow())
         #expect(context.enterFloatingWindow())
         #expect(context.restoreRegularWindow())
-        #expect(window.frame == frame)
+        #expect(window.frame == restoredFrame)
         #expect(context.enterFloatingWindow())
         context.detach(window)
         #expect(window.level == .normal)

@@ -15,10 +15,16 @@ protocol WebMediaSniffing: AnyObject, Sendable {
     func cancel()
 }
 
-enum WebViewSnifferError: LocalizedError {
+enum WebViewSnifferError: LocalizedError, Equatable {
     case noMediaFound
+    case credentialedCrossOriginNavigation
 
-    var errorDescription: String? { "网页嗅探未找到媒体地址" }
+    var errorDescription: String? {
+        switch self {
+        case .noMediaFound: return "网页嗅探未找到媒体地址"
+        case .credentialedCrossOriginNavigation: return "已阻止携带登录凭据的网页跨域跳转，请使用不需要跨域传递凭据的播放地址"
+        }
+    }
 }
 
 @MainActor
@@ -471,6 +477,19 @@ public final class WebViewSniffer: NSObject, WKScriptMessageHandler, WKNavigatio
     public func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
         if self.webView === webView {
+            // Older WebKit can forward an explicit Cookie header across origins.
+            // Cancel before the target request instead of replaying a rewritten
+            // navigation or treating delegate headers as proof of wire safety.
+            let credentialed = requestHeaders.contains { key, value in
+                ["cookie", "authorization", "proxy-authorization"].contains(key.lowercased()) && !value.isEmpty
+            }
+            if action.targetFrame?.isMainFrame == true, credentialed,
+               Self.originRelation(action.request.url, to: URL(string: pageURL)) != "sameOrigin" {
+                record("credentialBoundary", extra: ["mainFrame": true, "action": "blocked"])
+                decisionHandler(.cancel)
+                finish(.failure(WebViewSnifferError.credentialedCrossOriginNavigation))
+                return
+            }
             let kind: String
             switch action.navigationType {
             case .linkActivated: kind = "link"

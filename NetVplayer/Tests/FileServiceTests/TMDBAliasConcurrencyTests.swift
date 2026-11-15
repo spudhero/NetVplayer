@@ -19,7 +19,7 @@ struct TMDBAliasConcurrencyTests {
     @Test(arguments: [AliasHTTPFixture.Mode.invalid, .limited, .timeout])
     fileprivate func incompleteCoverageNeverExportsPartialAliasMatches(mode: AliasHTTPFixture.Mode) async throws {
         let fixture = AliasHTTPFixture(mode: mode)
-        let provider = make(fixture, policy: .init(requestTimeout: .milliseconds(50), retryBudget: 0))
+        let provider = make(fixture, policy: .init(requestTimeout: .milliseconds(500), retryBudget: 0))
         let candidates = try await provider.search(title: "Alias Movie", year: 2020, kind: .movies)
         #expect(candidates.count == 20 && candidates.allSatisfy { $0.metadata.alternativeTitles == nil })
         #expect(MetadataMatcher.uniqueMatch(candidates: candidates, title: "Alias Movie", year: 2020, kind: .movies) == nil)

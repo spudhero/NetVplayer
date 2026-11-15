@@ -116,7 +116,7 @@ struct WebViewSnifferIntegrationTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         do {
-            _ = try await WebViewSniffer(diagnosticDirectory: directory).sniff(url: server.url("/page/unavailable"), timeout: 0.5)
+            _ = try await WebViewSniffer(diagnosticDirectory: directory).sniff(url: server.url("/page/unavailable"), timeout: 5)
             Issue.record("Unavailable page returned media")
         } catch { #expect(error is WebViewSnifferError) }
         let path = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)

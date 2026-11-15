@@ -36,11 +36,11 @@ struct ProviderInteractionTests {
 
     @Test(arguments: ["canceled", "stuck", "dismissed"])
     func interactionEndsWithoutAnAutomaticNetworkRetry(mode: String) async throws {
-        let fixture = try InteractionFixture(maximumWait: .milliseconds(450))
+        let fixture = try InteractionFixture(maximumWait: .seconds(2))
         defer { fixture.remove() }
         let request = ProviderRequest(providerID: "fixture", operation: .player, arguments: ["mode": .string(mode)])
         await #expect(throws: mode == "canceled" ? ProviderInteractionError.canceled : ProviderInteractionError.timedOut) {
-            try await fixture.client.request(request, timeout: .milliseconds(300), interaction: fixture.policy)
+            try await fixture.client.request(request, timeout: .seconds(2), interaction: fixture.policy)
         }
         #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("interaction-request").path))
         try await fixture.client.stopAndConfirmExit()

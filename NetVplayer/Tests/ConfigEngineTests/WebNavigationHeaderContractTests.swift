@@ -3,8 +3,8 @@ import Testing
 import WebKit
 @testable import ParseEngine
 
-/// Actual HTTP/TLS receipts are the oracle. A WKNavigationAction's URLRequest,
-/// the input map and the cookie store are intentionally not wire evidence.
+/// Actual HTTP/TLS receipts are the oracle. Uncredentialed navigation follows
+/// native WebKit; explicit credentials never cross the initial origin.
 @Suite(.serialized)
 @MainActor
 struct WebNavigationHeaderContractTests {
@@ -30,12 +30,13 @@ struct WebNavigationHeaderContractTests {
 
     @Test func crossHostAndCrossSiteRedirectsMatchUnmodifiedWebKit() async throws {
         let h = try NavigationHarness(); defer { h.fixture.stop() }
+        let headers = NavigationHarness.uncredentialedHeaders
         for secure in [false, true] {
             for host in ["sibling.example.test", "other.test"] {
                 let target = h.url("/nav/page", host: host, secure: secure)
                 let url = h.redirect(target, secure: secure)
-                let native = try await h.run(url, label: "cross-\(host)-\(secure)", shared: false)
-                let shared = try await h.run(url, label: "cross-\(host)-\(secure)", shared: true)
+                let native = try await h.run(url, label: "cross-\(host)-\(secure)", headers: headers, shared: false)
+                let shared = try await h.run(url, label: "cross-\(host)-\(secure)", headers: headers, shared: true)
                 #expect(native.signature == shared.signature)
                 let landing = try #require(shared.navigation.last)
                 #expect(landing.host == host)
@@ -53,21 +54,23 @@ struct WebNavigationHeaderContractTests {
                 var headers = NavigationHarness.headers
                 headers["Cookie"] = "nav=secure; Path=/nav; Secure; HttpOnly"
                 let url = h.redirect(h.url("/nav/page", host: host, secure: !secure), secure: secure)
-                let native = try await h.run(url, label: "scheme-\(host)-\(secure)", headers: headers, shared: false)
-                let shared = try await h.run(url, label: "scheme-\(host)-\(secure)", headers: headers, shared: true)
-                #expect(native.signature == shared.signature)
-                #expect(shared.rows.first?.headers["cookie"] == headers["Cookie"])
-                // Scheme-change handling of an explicit Cookie field belongs
-                // to WebKit. The wire signature above compares the unmodified
-                // browser on this OS; cross-host credentials must still clear.
-                #expect(shared.navigation.last?.headers["authorization"] == nil)
-                if host != "video.example.test" {
-                    #expect(shared.navigation.last?.headers["cookie"] == nil)
-                }
-                let probe = try #require(shared.rows.first { $0.path == "/nav/probe" })
-                #expect(probe.headers["cookie"] == nil)
+                try await h.expectCredentialBoundary(url, headers: headers)
             }
         }
+    }
+
+    @Test func explicitCredentialsNeverReachACrossOriginRedirectTarget() async throws {
+        let h = try NavigationHarness(); defer { h.fixture.stop() }
+        for field in ["Cookie", "Authorization", "Proxy-Authorization"] {
+            var headers = NavigationHarness.uncredentialedHeaders
+            headers[field] = field == "Cookie" ? NavigationHarness.cookie : "Bearer fixture-only"
+            for host in ["sibling.example.test", "other.test"] {
+                try await h.expectCredentialBoundary(h.redirect(h.url("/nav/page", host: host)), headers: headers)
+            }
+        }
+        // The same sniffer remains reusable; a retired credential map cannot
+        // affect a later uncredentialed request.
+        _ = try await h.run(h.url("/nav/page", host: "other.test"), label: "boundary-reuse", headers: [:], shared: true)
     }
 
     @Test func rejectedSeedStillSubmitsExplicitInitialCookie() async throws {
@@ -87,8 +90,8 @@ struct WebNavigationHeaderContractTests {
         let landing = h.url("/nav/page")
         let foreign = h.redirect(landing, host: "other.test")
         let url = h.redirect(foreign, rotate: true)
-        let native = try await h.run(url, label: "return-rotation", shared: false)
-        let shared = try await h.run(url, label: "return-rotation", shared: true)
+        let native = try await h.run(url, label: "return-rotation", headers: NavigationHarness.uncredentialedHeaders, shared: false)
+        let shared = try await h.run(url, label: "return-rotation", headers: NavigationHarness.uncredentialedHeaders, shared: true)
         #expect(native.signature == shared.signature)
         #expect(shared.navigation.count == 3)
         #expect(shared.navigation[1].headers["cookie"] == nil)
@@ -113,8 +116,8 @@ struct WebNavigationHeaderContractTests {
         let h = try NavigationHarness(); defer { h.fixture.stop() }
         for host in ["video.example.test", "other.test"] {
             let url = h.url("/nav/page", query: ["mode": "replace", "next": h.url("/nav/page", host: host).absoluteString])
-            let native = try await h.run(url, label: "replace-\(host)", shared: false)
-            let shared = try await h.run(url, label: "replace-\(host)", shared: true)
+            let native = try await h.run(url, label: "replace-\(host)", headers: NavigationHarness.uncredentialedHeaders, shared: false)
+            let shared = try await h.run(url, label: "replace-\(host)", headers: NavigationHarness.uncredentialedHeaders, shared: true)
             #expect(native.signature == shared.signature)
             #expect(shared.navigation.count == 2)
             #expect(shared.navigation.last?.headers["authorization"] == nil)
@@ -149,7 +152,7 @@ struct WebNavigationHeaderContractTests {
 
     @Test func navigationDiagnosticsSeparateDelegateRequestsFromWireEvidence() async throws {
         let h = try NavigationHarness(); defer { h.fixture.stop() }
-        var headers = NavigationHarness.headers
+        var headers = NavigationHarness.uncredentialedHeaders
         for i in 0..<70 { headers["X-Field-\(i)"] = "synthetic-private-value" }
         let url = h.redirect(h.url("/nav/page", host: "other.test", query: ["private": "synthetic-query-value"]))
         _ = try await h.run(url, label: "diagnostics", headers: headers, shared: true)
@@ -178,7 +181,9 @@ struct WebNavigationHeaderContractTests {
         let h = try NavigationHarness(); defer { h.fixture.stop() }
         let gate = "timeout"
         let held = h.redirect(h.url("/nav/page", query: ["case": "stale-timeout"]), hold: gate)
-        do { _ = try await h.sniffer.sniff(url: held.absoluteString, headers: NavigationHarness.headers, timeout: 0.4); Issue.record("held navigation completed") }
+        let pending = Task { try await h.sniffer.sniff(url: held.absoluteString, headers: NavigationHarness.headers, timeout: 3) }
+        try await h.waitForGate(gate)
+        do { _ = try await pending.value; Issue.record("held navigation completed") }
         catch { #expect(error is WebViewSnifferError) }
         try await h.release(gate)
         let result = try await h.run(h.url("/nav/page"), label: "timeout-empty", headers: [:], shared: true)
@@ -239,6 +244,7 @@ private final class NavigationBrowser: SeedBrowser {
 private final class NavigationHarness {
     static let cookie = "nav=initial; Path=/nav; HttpOnly"
     static let headers = ["Cookie": cookie, "Authorization": "Bearer navigation-only", "X-Navigation-Token": "fixture-custom-only", "User-Agent": "NetVplayer-Local-Navigation/1"]
+    static let uncredentialedHeaders = headers.filter { !["Cookie", "Authorization"].contains($0.key) }
     let fixture: SeedScopeFixture
     private var delegates: [NavigationBrowser] = []
     lazy var sniffer = WebViewSniffer(diagnosticDirectory: fixture.root, configureBrowser: { [weak self] browser in
@@ -311,5 +317,17 @@ private final class NavigationHarness {
         if !FileManager.default.fileExists(atPath: path.path) { FileManager.default.createFile(atPath: path.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
         let file = try FileHandle(forWritingTo: path); try file.seekToEnd(); try file.write(contentsOf: data); try file.close()
         return observed
+    }
+
+    func expectCredentialBoundary(_ url: URL, headers: [String: String]) async throws {
+        let start = try await rows().count
+        await #expect(throws: WebViewSnifferError.credentialedCrossOriginNavigation) {
+            try await sniffer.sniff(url: url.absoluteString, headers: headers, timeout: 12)
+        }
+        let observed = Array(try await rows().dropFirst(start))
+        #expect(observed.count == 1)
+        #expect(observed.first?.path == "/nav/redirect")
+        #expect(observed.first?.host == "video.example.test")
+        #expect(observed.first?.headers["cookie"] == headers["Cookie"])
     }
 }
