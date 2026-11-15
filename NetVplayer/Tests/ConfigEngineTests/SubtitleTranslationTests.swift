@@ -316,7 +316,8 @@ private final class ContractTranslator: SubtitleTranslationService {
     func releaseFirst() { continuation?.resume(); continuation = nil }
 }
 
-/// Opt-in live Apple service test. Requires macOS 26 and already installed language
+#if compiler(>=6.2)
+/// Opt-in live Apple service test. Requires the macOS 26 SDK, macOS 26 and installed language
 /// assets; it neither substitutes responses nor requests a remote provider.
 @MainActor
 @Test(.enabled(if: ProcessInfo.processInfo.environment["NETVPLAYER_APPLE_TRANSLATION_FIXTURE"] != nil))
@@ -381,3 +382,9 @@ func appleSubtitleNativeCheckpointResumeAndExport() async throws {
         "fixtureFingerprint": doc.fingerprint, "exportsReparsedWithSameTimeline": true]
     try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("native-run.json"), options: .atomic)
 }
+#else
+// Runtime availability cannot make an initializer visible to an older SDK.
+@MainActor
+@Test(.disabled("Requires the macOS 26 SDK (Xcode 26+) and installed language assets"))
+func appleSubtitleNativeCheckpointResumeAndExport() async throws {}
+#endif

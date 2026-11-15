@@ -138,12 +138,16 @@ struct PosterDemandSchedulingTests {
         let url = fixture.url("/ready/retry").absoluteString
         loader.load(from: url, maxPixelSize: 64)
         try await wait { loader.isDeferred }
-        let signal = Task { () -> Void in
-            for await _ in NotificationCenter.default.notifications(named: .posterWorkCapacityDidChange) { return }
+        let (signals, continuation) = AsyncStream<Void>.makeStream()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .posterWorkCapacityDidChange, object: nil, queue: nil
+        ) { _ in
+            continuation.yield(())
+            continuation.finish()
         }
-        await Task.yield()
+        defer { NotificationCenter.default.removeObserver(observer); continuation.finish() }
         PosterCancellationURLProtocol.state.complete(path: "/blocked/active")
-        await signal.value
+        for await _ in signals { break }
         loader.load(from: url, maxPixelSize: 64)
         try await wait { loader.image != nil }
         #expect(!loader.isDeferred && !loader.isLoading)

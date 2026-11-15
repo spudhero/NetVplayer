@@ -124,7 +124,7 @@ import Testing
                 for patch in sample.patches {
                     let components = (patch.linearSRGB + [1]).map { CGFloat($0) }
                     let expected = try #require(NSColor(colorSpace: referenceSpace, components: components, count: 4).usingColorSpace(space))
-                    let target = [expected.redComponent, expected.greenComponent, expected.blueComponent].map { min(1, max(0, $0)) }
+                    let target = [expected.redComponent, expected.greenComponent, expected.blueComponent].map { min(1, max(0, Double($0))) }
                     var average = [Double](repeating: 0, count: 3)
                     for dy in -2...2 { for dx in -2...2 {
                         let offset = ((patch.y + dy)*chart.width + patch.x + dx)*4
@@ -180,7 +180,7 @@ import Testing
                     var values: [[Double]] = []
                     for (i, rgb) in overlayRGB.enumerated() {
                         let expected = try #require(NSColor(srgbRed: rgb[0], green: rgb[1], blue: rgb[2], alpha: 1).usingColorSpace(space))
-                        let target = [expected.redComponent, expected.greenComponent, expected.blueComponent]
+                        let target = [expected.redComponent, expected.greenComponent, expected.blueComponent].map { Double($0) }
                         let offset = (40*640 + 42 + 64*i)*4
                         let actual = (0..<3).map { Double(pixels[offset+$0]) }
                         values.append(actual)
@@ -224,7 +224,7 @@ import Testing
             var errors: [Double] = []
             for (i, rgb) in overlayRGB.enumerated() {
                 let expected = try #require(NSColor(srgbRed: rgb[0], green: rgb[1], blue: rgb[2], alpha: 1).usingColorSpace(space))
-                let target = [expected.redComponent, expected.greenComponent, expected.blueComponent]
+                let target = [expected.redComponent, expected.greenComponent, expected.blueComponent].map { Double($0) }
                 let offset = (180*640+80+160*i)*4
                 errors.append(contentsOf: (0..<3).map { abs(Double(pixels[offset+$0])-min(1,max(0,target[$0]))*255) })
             }

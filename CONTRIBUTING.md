@@ -27,6 +27,11 @@ python3 script/test_provider_public_shell.py --gson-jar /path/to/gson-2.11.0.jar
 git diff --check
 ```
 
+The serial suite supports Xcode 16.4 and later. The opt-in installed-session Apple
+translation test requires Xcode 26 / the macOS 26 SDK as well as macOS 26 and
+installed language assets. Older toolchains report that test as disabled; this is
+not evidence of a successful real-service translation run.
+
 The signed sandbox home-isolation integration requires the real macOS account
 home: sandbox home-relative entitlements cannot use a temporary `HOME`. Run it
 explicitly from a normal user session, without a `HOME` or `CFFIXED_USER_HOME`
@@ -51,9 +56,9 @@ real-service tests ran; those results are reported separately.
 
 Official macOS releases use a `MAJOR.MINOR.PATCH` tag on `main`. The tag must
 match `CFBundleShortVersionString`; the build number must also advance. Pushing
-the tag triggers the release workflow, which publishes only after the packaged
+the tag triggers the release workflow, which creates a draft only after the packaged
 and re-extracted application passes architecture, version, signature, SBOM,
-checksum, and source-free checks.
+checksum, and source-free checks. Publishing that reviewed draft is a separate step.
 
 Public releases also require the project's TMDB application credential. Follow
 [TMDB setup](TMDB_SETUP.md) to apply and configure the repository Secret. The
