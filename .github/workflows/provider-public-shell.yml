@@ -59,6 +59,7 @@ on:
       - "script/test_package_libmpv_runtime_licenses.py"
       - "script/test_prepare_embedded_quickjs_runtime.py"
       - "script/test_provider_public_shell.py"
+      - "script/run_swift_regression.py"
       - "script/test_provider_*.py"
       - "script/validate_provider_*.py"
       - "script/validate_*_runtime.py"
@@ -77,6 +78,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Verify build volume capacity
+        run: |
+          python3 - <<'PY'
+          import shutil
+          available = shutil.disk_usage('.').free
+          print(f'Build volume available bytes: {available}')
+          if available < 8_000_000_000:
+              raise SystemExit('Build requires at least 8 GB available')
+          PY
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
