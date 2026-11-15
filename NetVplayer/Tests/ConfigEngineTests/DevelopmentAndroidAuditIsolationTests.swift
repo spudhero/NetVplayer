@@ -251,7 +251,10 @@ struct DevelopmentAndroidAuditIsolationTests {
         #expect(engine.playbackFailure(for: replacement) == nil)
     }
 
-    @Test(arguments: [200, 403, 503])
+    // This exercises the full native player, including its OpenGL surface.
+    // Headless runners still execute the status ownership/redaction contracts above.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["NETVPLAYER_RUN_NATIVE_AUDIT_INTEGRATION"] == "1"),
+          arguments: [200, 403, 503])
     func nativeMediaFailureReportsOnlyObservedHTTPStatus(status: Int) async throws {
         let fixture = try await Fixture(savedLive: false)
         defer { fixture.close() }

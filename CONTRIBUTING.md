@@ -32,6 +32,15 @@ translation test requires Xcode 26 / the macOS 26 SDK as well as macOS 26 and
 installed language assets. Older toolchains report that test as disabled; this is
 not evidence of a successful real-service translation run.
 
+The native HTTP-failure audit creates an OpenGL playback surface and requires a
+graphical macOS session with libmpv. Enable its three local HTTP fixtures with
+`NETVPLAYER_RUN_NATIVE_AUDIT_INTEGRATION=1` and filter
+`nativeMediaFailureReportsOnlyObservedHTTPStatus`. Headless CI reports this
+integration as disabled and still runs the audit ownership and status contracts.
+CI runs the serial suite through `script/run_swift_regression.py`; five minutes
+without output collects owned test process stacks and fails the run, preserving
+the evidence needed to diagnose a stall.
+
 The signed sandbox home-isolation integration requires the real macOS account
 home: sandbox home-relative entitlements cannot use a temporary `HOME`. Run it
 explicitly from a normal user session, without a `HOME` or `CFFIXED_USER_HOME`

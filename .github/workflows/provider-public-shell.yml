@@ -133,7 +133,9 @@ jobs:
         run: python3 script/test_provider_public_shell.py --gson-jar "$NETVPLAYER_GSON_JAR"
 
       - name: Run serial SwiftPM regression
-        run: swift test --package-path NetVplayer --disable-sandbox --no-parallel
+        run: >-
+          python3 script/run_swift_regression.py --
+          swift test --package-path NetVplayer --disable-sandbox --no-parallel
 
       - name: Verify signed sandbox home isolation
         env:

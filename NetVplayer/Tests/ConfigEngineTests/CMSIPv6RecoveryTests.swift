@@ -181,14 +181,16 @@ private func cmsRaceDNSResponse() -> HTTPResponse {
     let start = ContinuousClock.now
     do {
         _ = try await CMSIPv6Recovery.verifiedIPv6Response(
-            for: cmsRecoveryURL, timeout: 0.09, resolve: { timeout in
-                #expect(timeout > 0 && timeout <= 0.09)
-                try await Task.sleep(for: .milliseconds(25))
+            for: cmsRecoveryURL, timeout: 2, resolve: { timeout in
+                #expect(timeout > 0 && timeout <= 2)
+                // Leave scheduling headroom while consuming a measurable part
+                // of the shared budget before either connection starts.
+                try await Task.sleep(for: .milliseconds(250))
                 return cmsRaceDNSResponse()
             }, load: { _, address, timeout in
-                #expect(timeout > 0 && timeout < 0.075)
+                #expect(timeout > 0 && timeout < 1.8)
                 await events.add("start:" + address)
-                do { try await Task.sleep(for: .seconds(3)) }
+                do { try await Task.sleep(for: .seconds(10)) }
                 catch { await events.add("cancelled:" + address); throw error }
                 Issue.record("The common deadline must cancel both connections")
                 throw URLError(.unknown)
@@ -201,7 +203,7 @@ private func cmsRaceDNSResponse() -> HTTPResponse {
     let observed = await events.snapshot()
     #expect(observed.filter { $0.hasPrefix("start:") }.count == 2)
     #expect(observed.filter { $0.hasPrefix("cancelled:") }.count == 2)
-    #expect(start.duration(to: .now) < .seconds(1))
+    #expect(start.duration(to: .now) < .seconds(5))
 }
 
 @Test func testCMSVerifiedIPv6RaceNeverAcceptsCertificateFailures() async throws {
