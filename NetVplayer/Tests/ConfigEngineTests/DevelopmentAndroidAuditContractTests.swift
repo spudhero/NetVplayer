@@ -113,8 +113,19 @@ import Testing
         state.activeSite = site
         let vod = Vod(vodId: name, vodName: "Fixture")
         state.updateDetailPrefetch(vod: vod, site: site, hovering: true)
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(await provider.count() == (preference == .androidPreferred ? 0 : 1))
+        if preference == .androidPreferred {
+            // Observe past the hover debounce without starting Android business code.
+            try await Task.sleep(for: .milliseconds(400))
+        } else {
+            // A fixed sleep cannot guarantee the actor request has run on a busy runner.
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while await provider.count() == 0, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        let hoverCalls = await provider.count()
+        #expect(hoverCalls == (preference == .androidPreferred ? 0 : 1),
+            "Hover calls for \(preference): \(hoverCalls)")
         await state.openVodCard(vod)
         #expect(await provider.count() == 1)
         #expect(state.isDetailPresented)

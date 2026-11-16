@@ -139,3 +139,8 @@ When testing coalesced network reports, hold the fixture response until every
 update and the terminal stop have been submitted, then release it explicitly.
 A short sleep cannot establish that ordering on a loaded runner. Assert the
 exact Started / latest Progress / Stopped sequence and final positions.
+
+For hover prefetch tests, wait for the observed Provider call within a bounded
+deadline before checking its exact count. The 250 ms UI debounce plus a fixed
+sleep does not guarantee actor scheduling. Keep the Android-original negative
+case separate: hovering must make zero calls before the explicit card click.
