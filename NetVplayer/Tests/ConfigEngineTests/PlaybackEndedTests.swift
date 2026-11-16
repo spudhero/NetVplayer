@@ -64,6 +64,9 @@ struct PlaybackEndedTests {
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(state.episodeListState == .loading)
+        // Exercise the refresh already being in flight while playback starts,
+        // independently of local proxy discovery speed.
+        await provider.waitForRefresh()
         await state.playEpisode(Episode(name: "第1集", url: "first"))
         // The production refresh budget also covers asynchronous playback setup.
         // A 350ms test budget could expire before the first simulated EOF.
@@ -86,10 +89,13 @@ struct PlaybackEndedTests {
             #expect(!state.isDetailLoading)
         default: break
         }
+        try #require(state.playerState.endDisposition == .natural)
+        try #require(state.playerState.currentSpec?.metadata["playback.sessionGeneration"]
+            == spec.metadata["playback.sessionGeneration"])
         await provider.finishRefresh()
         await load.value
         try await Task.sleep(for: .milliseconds(40))
-        if change == "player" { try await waitForPreparedPlayback(state) }
+        if change == "player" { try await waitForPreparedPlayback(state, episodeURL: "second") }
         #expect(submissions.count == (change == "player" ? 2 : 1))
         if change == "player" {
             #expect(state.episodeListState == .ready)
@@ -100,7 +106,7 @@ struct PlaybackEndedTests {
             try #require(state.playerState.currentSpec?.metadata["playback.sessionGeneration"]
                 == spec.metadata["playback.sessionGeneration"])
             await state.retryEpisodeList()
-            try await waitForPreparedPlayback(state)
+            try await waitForPreparedPlayback(state, episodeURL: "second")
             #expect(state.episodeListState == .ready)
             #expect(submissions.count == 2)
         }
@@ -438,14 +444,20 @@ struct PlaybackEndedTests {
     }
 
     @MainActor
-    private func waitForPreparedPlayback(_ state: AppState) async throws {
-        // Resolution may include an asynchronous transport probe; 40ms is not a completion signal.
+    private func waitForPreparedPlayback(_ state: AppState, episodeURL: String? = nil) async throws {
+        // A previous episode can be idle before the next submission begins.
+        // When supplied, the expected episode is the completion signal.
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         await Task.yield()
-        while state.isPreparingVodPlayback, ContinuousClock.now < deadline {
+        while (state.isPreparingVodPlayback || (episodeURL != nil
+            && state.playerState.currentSpec?.metadata["vod.episodeURL"] != episodeURL)),
+            ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(!state.isPreparingVodPlayback)
+        if let episodeURL {
+            #expect(state.playerState.currentSpec?.metadata["vod.episodeURL"] == episodeURL)
+        }
     }
 
     @MainActor
