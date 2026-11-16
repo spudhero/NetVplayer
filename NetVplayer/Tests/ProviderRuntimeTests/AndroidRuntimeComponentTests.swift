@@ -148,7 +148,7 @@ import ProviderSDK
     let registry = SpiderReplacementRegistry()
     let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: f.root.appendingPathComponent("state"),
         registry: registry, arguments: [])
-    try await registration.register(runtime: runtime, sites: [site], preference: .automatic)
+    try await registration.register(runtime: runtime, sites: [site], preference: .androidPreferred)
     let provider = try #require(await registry.nativeProvider(for: site) as? AndroidOriginalUnavailableProvider)
     #expect(provider.reason == .missingProviderArtifact)
     #expect(await !registration.isRegistered(site: site))
