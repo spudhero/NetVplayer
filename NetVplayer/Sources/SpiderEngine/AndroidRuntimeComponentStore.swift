@@ -132,7 +132,7 @@ public actor AndroidRuntimeComponentStore {
               m.macOSMinimumVersion == "14.0", m.protocolVersion == 1,
               !m.assets.isEmpty, m.assets.count <= 15000,
               Set(m.assets.map(\.path)).count == m.assets.count else { throw AndroidRuntimeComponentError.invalidPackage }
-        try Self.validateTree(directory, assets: m.assets)
+        try Self.validateTree(directory, document: document)
         try verifier.verify(document, packageRoot: directory)
         let identity = SHA256.hash(data: try JSONEncoder.providerCanonical.encode(m)).map { String(format: "%02x", $0) }.joined()
         let runtime = try DevelopmentAndroidRuntimeLayout.load(root: directory.appendingPathComponent("AndroidProviderRuntime"), componentIdentity: identity)
@@ -142,7 +142,8 @@ public actor AndroidRuntimeComponentStore {
         return runtime
     }
 
-    private static func validateTree(_ directory: URL, assets: [ProviderAsset]) throws {
+    private static func validateTree(_ directory: URL, document: SignedProviderManifest) throws {
+        let assets = document.manifest.assets
         let rootValues = try directory.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
         guard rootValues.isDirectory == true, rootValues.isSymbolicLink != true else { throw AndroidRuntimeComponentError.invalidPackage }
         let directory = directory.standardizedFileURL.resolvingSymlinksInPath()
@@ -165,8 +166,28 @@ public actor AndroidRuntimeComponentStore {
             bytes += Int64(size)
             guard actual.count <= 15001, bytes <= 2 * 1024 * 1024 * 1024 else { throw AndroidRuntimeComponentError.invalidPackage }
         }
-        guard actual == Set(assets.map(\.path)).union(["signed-manifest.json"]) else {
+        let metadata: Set<String> = ["manifest.json", "signature.ed25519", "SHA256SUMS"]
+        guard actual.subtracting(metadata) == Set(assets.map(\.path)).union(["signed-manifest.json"]) else {
             throw AndroidRuntimeComponentError.invalidPackage
+        }
+        // Distribution archives carry redundant metadata; imported legacy
+        // directories may omit it. Any present copy must match the signed data.
+        for name in actual.intersection(metadata) {
+            let url = directory.appendingPathComponent(name)
+            guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= 4 * 1024 * 1024 else {
+                throw AndroidRuntimeComponentError.invalidPackage
+            }
+            let data = try Data(contentsOf: url)
+            let valid: Bool
+            switch name {
+            case "manifest.json":
+                let manifest = try JSONDecoder().decode(ProviderManifest.self, from: data)
+                valid = try JSONEncoder.providerCanonical.encode(manifest) == JSONEncoder.providerCanonical.encode(document.manifest)
+            case "signature.ed25519": valid = data == Data(base64Encoded: document.signature)
+            default:
+                valid = data == Data(assets.map { $0.sha256 + "  " + $0.path + "\n" }.joined().utf8)
+            }
+            guard valid else { throw AndroidRuntimeComponentError.invalidPackage }
         }
     }
 

@@ -13,6 +13,7 @@ extension AppState {
         androidRuntimeComponentBusy = phase != "ready"
         let message: String
         switch phase {
+        case "downloading-runtime": message = "正在下载完整 Android 运行环境…"
         case "checking": message = "正在检查 Android 运行组件…"
         case "downloading-installer": message = "正在下载 Android 安装组件…"
         case "downloading-java", "installing-java": message = "正在准备 Java 运行环境…"
@@ -38,7 +39,7 @@ extension AppState {
             await refreshAndroidRuntimeComponent()
             // Replace any unavailable source registrations in this process.
             let configURL = libraryConfigurationURL.isEmpty ? userPreferences.currentVodConfigUrl : libraryConfigurationURL
-            if !configURL.isEmpty {
+            if activeProviderExecutionPreference.usesAndroid, !configURL.isEmpty {
                 await loadConfig(url: configURL, persistUserConfig: false, restoreSavedConfiguration: true)
             }
         } catch {

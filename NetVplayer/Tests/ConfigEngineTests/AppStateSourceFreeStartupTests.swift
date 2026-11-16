@@ -11,7 +11,32 @@ import CryptoKit
 @Suite("Source-free startup", .serialized)
 struct AppStateSourceFreeStartupTests {
     @MainActor
-    @Test func automaticMixedConfigurationCompletesRegistrationAndPublishesCapabilities() async throws {
+    @Test func macConfigurationNeverStartsAndroidPreparation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "mac-no-android-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        defaults.set("automatic", forKey: ProviderExecutionPreference.storageKey)
+        let state = AppState(loadDefaultConfig: false, startProxyServer: false, startProviderRuntime: false,
+            storageManager: StorageManager(storageDirectory: directory), userPreferences: UserPreferences(defaults: defaults),
+            androidProviderRegistrationOverride: { _ in Issue.record("Mac startup invoked Android registration") })
+        let url = "https://mac-only.example.test/config"
+        let input = ResolvedVodInput(json: #"{"spider":"https://mac-only.example.test/provider.jar","sites":[{"key":"MDrive","name":"Drive","type":3,"api":"csp_MyDriveGuard"},{"key":"mac-unsupported","name":"Unsupported","type":3,"api":"csp_UnimplementedGuard"}]}"#,
+            config: Config(type: .vod, url: url), kind: .configuration, canonicalURL: url, initialResult: Models.Result())
+        await state.loadConfig(url: url, waitForProviderRuntime: false, refreshCachedConfiguration: false,
+            includeLiveContent: false, preparedInput: input)
+        #expect(state.isConfigLoaded)
+        #expect(state.activeProviderExecutionPreference == .macPreferred)
+        #expect(state.providerExecutionBackends["MDrive"] == .macNative)
+        #expect(state.providerExecutionBackends["mac-unsupported"] == .standard)
+        #expect(!state.androidRuntimeComponentBusy)
+    }
+
+    @MainActor
+    @Test func androidConfigurationCompletesRegistrationAndPublishesCapabilities() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mixed-default-" + UUID().uuidString)
         let suite = "netvplayer-mixed-default-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -41,7 +66,7 @@ struct AppStateSourceFreeStartupTests {
         let configURL = "https://mixed.example.test/config.json"
         let json = #"{"spider":"https://mixed.example.test/provider.jar","sites":[{"key":"mixed-java","name":"Java","type":3,"api":"csp_FixtureGuard"},{"key":"mixed-script","name":"Script","type":3,"api":"https://mixed.example.test/drpy2.js"},{"key":"mixed-notice","name":"Notice","type":3,"api":"csp_XPathGuard"}]}"#
         let preferences = UserPreferences(defaults: defaults)
-        #expect(preferences.providerExecutionPreference == .automatic)
+        preferences.providerExecutionPreference = .androidPreferred
         let state = AppState(loadDefaultConfig: false, startProxyServer: false,
             storageManager: StorageManager(storageDirectory: directory), userPreferences: preferences,
             androidProviderRegistrationOverride: { sites in

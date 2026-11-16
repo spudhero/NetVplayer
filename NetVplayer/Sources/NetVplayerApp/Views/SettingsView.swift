@@ -667,6 +667,7 @@ struct SettingsView: View {
     private var providerRuntimeSettings: some View {
         VStack(alignment: .leading, spacing: AppSurfaceVisualPolicy.pageSectionGap) {
             ProviderExecutionSettingsView(appState: appState)
+            if !appState.activeProviderExecutionPreference.usesAndroid {
             GroupBox(label: SettingsPanelLabel(
                 title: L10n.text("播放扩展支持"),
                 subtitle: L10n.text("自动准备并更新播放所需组件，无需手动安装。"),
@@ -765,6 +766,7 @@ struct SettingsView: View {
                 }
             }
 
+            }
             GroupBox(L10n.text("组件存储")) {
                 VStack(alignment: .leading, spacing: 10) {
                     if let usage = appState.providerStorageUsage {
@@ -1082,7 +1084,7 @@ struct SettingsView: View {
                 }
 
                 if isLoadingVod {
-                    Label(L10n.text("正在加载点播源"), systemImage: "arrow.triangle.2.circlepath")
+                    Label(appState.androidRuntimeComponentProgress ?? L10n.text("正在加载点播源"), systemImage: "arrow.triangle.2.circlepath")
                         .foregroundStyle(palette.muted)
                         .font(.caption)
                 } else if let error = appState.configError {

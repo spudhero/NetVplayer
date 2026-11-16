@@ -6,18 +6,21 @@ import Testing
 
 @Suite("Provider execution preference", .serialized)
 struct ProviderExecutionPreferenceTests {
-    @Test func persistsAndUnknownValuesRetainExistingRouting() throws {
+    @Test func persistsTwoImplementationsAndMigratesLegacyAutomatic() throws {
         let name = "netvplayer-provider-preference-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let preferences = UserPreferences(defaults: defaults)
-        #expect(preferences.providerExecutionPreference == .automatic)
+        #expect(preferences.providerExecutionPreference == .macPreferred)
+        defaults.set("automatic", forKey: ProviderExecutionPreference.storageKey)
+        #expect(preferences.providerExecutionPreference == .macPreferred)
+        #expect(ProviderExecutionPreference.allCases == [.macPreferred, .androidPreferred])
         for mode in ProviderExecutionPreference.allCases {
             preferences.providerExecutionPreference = mode
             #expect(UserPreferences(defaults: defaults).providerExecutionPreference == mode)
         }
         defaults.set("future-unsupported-backend", forKey: ProviderExecutionPreference.storageKey)
-        #expect(preferences.providerExecutionPreference == .automatic)
+        #expect(preferences.providerExecutionPreference == .macPreferred)
     }
 
     @MainActor @Test func preferenceChangesTakeEffectOnlyInANewSession() throws {
@@ -32,14 +35,14 @@ struct ProviderExecutionPreferenceTests {
         let state = AppState(loadDefaultConfig: false, startProxyServer: false, startProviderRuntime: false,
             storageManager: StorageManager(storageDirectory: directory), userPreferences: preferences)
         state.preferredProviderExecution = .androidPreferred
-        #expect(state.activeProviderExecutionPreference == .automatic)
+        #expect(state.activeProviderExecutionPreference == .macPreferred)
         #expect(state.providerExecutionRequiresRestart)
         #expect(preferences.providerExecutionPreference == .androidPreferred)
         let next = AppState(loadDefaultConfig: false, startProxyServer: false, startProviderRuntime: false,
             storageManager: StorageManager(storageDirectory: directory), userPreferences: preferences)
         #expect(next.activeProviderExecutionPreference == .androidPreferred)
         #expect(!next.providerExecutionRequiresRestart)
-        state.preferredProviderExecution = .automatic
+        state.preferredProviderExecution = .macPreferred
         #expect(!state.providerExecutionRequiresRestart)
     }
 
@@ -50,9 +53,9 @@ struct ProviderExecutionPreferenceTests {
         let fingerprints = ProviderExecutionPreference.allCases.map {
             LibrarySourceIdentity.fingerprint(configurationURL: url, site: site, executionPreference: $0)
         }
-        #expect(fingerprints[0] == original)
-        #expect(Set(fingerprints).count == 3)
-        #expect(Set(fingerprints.map { LibrarySourceIdentity.key(source: $0, siteKey: site.key, vodID: "same-opaque-id") }).count == 3)
+        #expect(!fingerprints.contains(original))
+        #expect(Set(fingerprints).count == 2)
+        #expect(Set(fingerprints.map { LibrarySourceIdentity.key(source: $0, siteKey: site.key, vodID: "same-opaque-id") }).count == 2)
         let cms = Site(key: "cms", name: "CMS", type: 1, api: "https://cms.example.test")
         #expect(Set(ProviderExecutionPreference.allCases.map {
             LibrarySourceIdentity.fingerprint(configurationURL: url, site: cms, executionPreference: $0)

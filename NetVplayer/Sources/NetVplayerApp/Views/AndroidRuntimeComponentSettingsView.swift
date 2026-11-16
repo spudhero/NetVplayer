@@ -46,7 +46,7 @@ struct AndroidRuntimeComponentSettingsView: View {
             }
             .disabled(appState.androidRuntimeComponentBusy)
 
-            Text(L10n.text("首次使用 Android 来源时会自动准备运行组件，也可以在这里提前下载。手动安装或回滚后需重启。"))
+            Text(L10n.text("仅在 Android 原版模式下自动下载完整运行环境。也可手动提前安装；安装不会切换当前实现。手动安装或回滚后需重启。"))
                 .font(.caption).foregroundStyle(palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }

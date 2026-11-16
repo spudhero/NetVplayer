@@ -34,12 +34,11 @@ struct ProviderExecutionSettingsView: View {
 
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(L10n.text("下次启动优先使用"))
+                    Text(L10n.text("下次启动使用"))
                         .font(.system(size: 12, weight: .semibold))
-                    Picker(L10n.text("下次启动优先使用"), selection: $appState.preferredProviderExecution) {
+                    Picker(L10n.text("下次启动使用"), selection: $appState.preferredProviderExecution) {
                         ForEach(ProviderExecutionPreference.allCases, id: \.self) { preference in
                             Text(preferenceTitle(preference)).tag(preference)
-                                .disabled(preference == .androidPreferred && !appState.hasBundledAndroidProviderRuntime)
                         }
                     }
                     .labelsHidden()
@@ -49,7 +48,7 @@ struct ProviderExecutionSettingsView: View {
                         .font(.caption).foregroundStyle(palette.muted)
                         .fixedSize(horizontal: false, vertical: true)
                     if !appState.hasBundledAndroidProviderRuntime {
-                        Text(L10n.text("安装下方的运行组件后，才能选择 Android 原版优先。"))
+                        Text(L10n.text("选择 Android 原版后，首次加载配置时下载完整运行环境。"))
                             .font(.caption).foregroundStyle(palette.color(for: .warning))
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -80,16 +79,8 @@ struct ProviderExecutionSettingsView: View {
 
                 DisclosureGroup(L10n.text("兼容性说明")) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(L10n.text("Android 原版按配置运行原始 JAR；缺少组件或运行能力时会显示错误，不会在失败后自动改用 Mac 适配。"))
-                        if let site = appState.activeSite,
-                           let backend = appState.providerExecutionBackends[site.key] {
-                            if appState.activeProviderExecutionPreference == .macPreferred && backend == .androidOriginal {
-                                Text(L10n.text("此入口没有精确匹配的 Mac 适配，使用 Android 原版。"))
-                            } else if appState.activeProviderExecutionPreference == .androidPreferred
-                                        && (backend == .macNative || backend == .macExtension) {
-                                Text(L10n.text("此来源使用独立的本地或媒体服务接口。"))
-                            }
-                        }
+                        Text(L10n.text("Mac 实现与 Android 原版独立运行。来源不受支持或运行失败时显示具体错误，不会自动切换实现。"))
+                        Text(L10n.text("本地文件、媒体服务器与标准内容接口不受此设置影响。"))
                     }
                     .font(.caption).foregroundStyle(palette.muted)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
@@ -119,17 +110,15 @@ struct ProviderExecutionSettingsView: View {
 
     private func preferenceTitle(_ preference: ProviderExecutionPreference) -> String {
         switch preference {
-        case .automatic: L10n.text("自动选择（推荐）")
-        case .macPreferred: L10n.text("Mac 适配优先")
-        case .androidPreferred: L10n.text("Android 原版优先（实验）")
+        case .automatic, .macPreferred: L10n.text("Mac 实现")
+        case .androidPreferred: L10n.text("Android 原版")
         }
     }
 
     private var preferenceDescription: String {
         switch appState.preferredProviderExecution {
-        case .automatic: L10n.text("根据来源选择兼容的解析方式。")
-        case .macPreferred: L10n.text("优先使用 Mac 适配；没有匹配适配时使用 Android 原版。")
-        case .androidPreferred: L10n.text("使用来源提供的原版解析组件，兼容性与速度因来源而异。")
+        case .automatic, .macPreferred: L10n.text("只使用 Mac 适配，不下载或调用 Android 运行环境。")
+        case .androidPreferred: L10n.text("只使用 Android 原版解析组件；目录、详情与播放均使用同一实现。")
         }
     }
 

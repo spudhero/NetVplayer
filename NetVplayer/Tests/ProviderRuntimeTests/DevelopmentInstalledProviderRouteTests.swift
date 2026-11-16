@@ -8,69 +8,31 @@ import ProviderSDK
 import Testing
 @testable import SpiderEngine
 
-@Test func developmentAiDjKeepsOriginalCatalogAndUsesHostAccountsForNativePlayback() async throws {
+@Test func developmentAiDjUsesOneCompleteImplementationWithoutHybridRouting() async throws {
     let signed = try DevelopmentSignedRouteFixture()
     let android = try DevelopmentAndroidBridgeFixture()
     defer { signed.remove(); android.remove() }
     try android.writeManifest(changes: ["bindings": [["key": "AiDj", "api": "csp_AiDjGuard", "className": "com.github.catvod.spider.AiDjGuard"]]])
     let runtime = try DevelopmentAndroidRuntimeLayout.load(root: android.runtime)
     let site = Site(key: "AiDj", name: "AiDj", type: 3, api: "csp_AiDjGuard")
-    let selections: [(ProviderExecutionPreference, [String], Bool)] = [
-        (.automatic, [], true), (.macPreferred, [], true),
-        (.androidPreferred, ["--android-provider-audit", "--android-provider-use-bundled-artifact"], false),
-        (.macPreferred, ["--android-provider-audit", "--android-provider-force-android"], false)
-    ]
-    for (preference, arguments, useNative) in selections {
+    for preference in [ProviderExecutionPreference.automatic, .macPreferred, .androidPreferred] {
         let registry = SpiderReplacementRegistry()
         await registry.registerRemote(manifest: signed.document.manifest, manager: signed.manager)
-        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: android.state, registry: registry, arguments: arguments)
-        try await registration.register(runtime: runtime, sites: [site], preference: preference)
+        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: android.state, registry: registry, bundledArtifactForTesting: true,
+            arguments: ["--android-provider-audit", "--android-provider-use-bundled-artifact"])
+        try await registration.register(runtime: runtime, sites: [site], preference: preference,
+            cloudCredentialProvider: { _ in
+                Issue.record("Registration must not read host credentials for hybrid playback")
+                return nil
+            })
         let selected = try #require(await registry.nativeProvider(for: site))
-        #expect((selected is AndroidCatalogPlaybackProvider) == useNative)
-        #expect(await registration.isRegistered(site: site))
-        #expect(await registry.executionBackend(for: site) == (useNative ? .macNative : .androidOriginal))
-        #expect(await registry.exactInstalledRemoteProvider(for: site) != nil)
-        if useNative {
-            let adapted = try #require(selected as? AndroidCatalogPlaybackProvider)
-            #expect(adapted.catalog is DevelopmentAndroidSiteProvider)
-            // An old installed package must never be sent the new episode IDs.
-            await #expect(throws: SpiderEngineError.self) {
-                try await adapted.playerContent(site: site, flag: "AI", id: "123/456")
-            }
-            for rejected in ["aidj-episode:", "12//34", "12/34?x=1", "12/%33", "12/٣", "https://example.test/"] {
-                await #expect(throws: SpiderEngineError.self) {
-                    try await adapted.playerContent(site: site, flag: "AI", id: rejected)
-                }
-            }
-        } else {
-            #expect(selected is DevelopmentAndroidSiteProvider)
-        }
+        #expect(!(selected is AndroidCatalogPlaybackProvider))
+        #expect((selected is DevelopmentAndroidSiteProvider) == preference.usesAndroid)
+        #expect((selected is RemoteSiteContentProvider) == !preference.usesAndroid)
+        #expect(await registration.isRegistered(site: site) == preference.usesAndroid)
+        #expect(await registry.executionBackend(for: site) == (preference.usesAndroid ? .androidOriginal : .macExtension))
         await registration.shutdownAll()
     }
-}
-
-@Test func developmentAiDjUpdatedNativePackageUsesHostLoginAndRechecksTrust() async throws {
-    let signed = try DevelopmentSignedRouteFixture(providerID: "netvplayer.catalog.python", version: "1.1.8")
-    let android = try DevelopmentAndroidBridgeFixture()
-    defer { signed.remove(); android.remove() }
-    try android.writeManifest(changes: ["bindings": [["key": "AiDj", "api": "csp_AiDjGuard", "className": "com.github.catvod.spider.AiDjGuard"]]])
-    let site = Site(key: "AiDj", name: "AI剧", type: 3, api: "csp_AiDjGuard")
-    let registry = SpiderReplacementRegistry()
-    await registry.registerRemote(manifest: signed.document.manifest, manager: signed.manager)
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: android.state, registry: registry, arguments: [])
-    try await registration.register(runtime: DevelopmentAndroidRuntimeLayout.load(root: android.runtime), sites: [site])
-    let selected = try #require(await registry.nativeProvider(for: site) as? AndroidCatalogPlaybackProvider)
-    for id in ["123/456", "aidj-episode:456"] {
-        do {
-            _ = try await selected.playerContent(site: site, flag: "AI", id: id)
-            Issue.record("No saved host account must request the existing host login")
-        } catch DriveEngineError.loginRequired(let provider) { #expect(provider == .quark) }
-    }
-    try await signed.store.setDisabled(true)
-    await #expect(throws: SpiderEngineError.self) {
-        try await selected.playerContent(site: site, flag: "AI", id: "123/456")
-    }
-    await registration.shutdownAll()
 }
 
 @Test func developmentMacPreferenceStillUsesOtherCompleteInstalledAdapters() async throws {
@@ -84,7 +46,7 @@ import Testing
     let site = Site(key: "Other", name: "Other", type: 3, api: "csp_OtherGuard")
     let registry = SpiderReplacementRegistry()
     await registry.registerRemote(manifest: signed.document.manifest, manager: signed.manager)
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: android.state, registry: registry, arguments: [])
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: android.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
     try await registration.register(runtime: runtime, sites: [site], preference: .macPreferred)
     let selected = try #require(await registry.nativeProvider(for: site) as? RemoteSiteContentProvider)
     #expect(selected.providerID == signed.document.manifest.providerID)
@@ -129,7 +91,7 @@ import Testing
         let site = Site(key: binding["key"]!, name: "Changed identity", type: 3, api: binding["api"]!)
         let registry = SpiderReplacementRegistry()
         await registry.registerRemote(manifest: signed.document.manifest, manager: signed.manager)
-        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: android.state, registry: registry, arguments: [])
+        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: android.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
         try await registration.register(runtime: runtime, sites: [site])
         #expect(await registration.isRegistered(site: site))
         _ = try #require(await registry.nativeProvider(for: site) as? DevelopmentAndroidSiteProvider)

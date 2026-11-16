@@ -46,6 +46,25 @@ import ProviderSDK
     #expect(!DevelopmentAndroidCatVodProxyAdapter.matchesRoute(parameters, site: site, providerID: runtime.manifest.providerID))
 }
 
+@Test func originalComponentChecksDistributionMetadataAgainstSignedManifest() async throws {
+    let f = try OriginalComponentFixture(); defer { f.remove() }
+    let store = try f.store()
+    _ = try await store.install(directory: f.package(version: "1.0.0"))
+    for name in ["manifest.json", "signature.ed25519", "SHA256SUMS"] {
+        let candidate = try f.package(version: "2.0.0", suffix: name)
+        try Data("tampered metadata".utf8).write(to: candidate.appendingPathComponent(name))
+        await #expect(throws: (any Error).self) { try await store.install(directory: candidate) }
+        #expect(try await store.status().version == "1.0.0")
+    }
+    let candidate = try f.package(version: "2.0.0", suffix: "valid-metadata")
+    let document = try f.read(candidate)
+    try JSONEncoder.providerCanonical.encode(document.manifest).write(to: candidate.appendingPathComponent("manifest.json"))
+    try #require(Data(base64Encoded: document.signature)).write(to: candidate.appendingPathComponent("signature.ed25519"))
+    try Data(document.manifest.assets.map { $0.sha256 + "  " + $0.path + "\n" }.joined().utf8)
+        .write(to: candidate.appendingPathComponent("SHA256SUMS"))
+    #expect(try await store.install(directory: candidate).version == "2.0.0")
+}
+
 @Test func originalComponentWrongSignatureCorruptionAndUndeclaredCodeNeverActivate() async throws {
     let f = try OriginalComponentFixture(); defer { f.remove() }
     let store = try f.store()

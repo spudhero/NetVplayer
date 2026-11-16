@@ -127,7 +127,24 @@ import Testing
     await registration.shutdownAll()
 }
 
-@Test(arguments: [ProviderExecutionPreference.automatic, .macPreferred, .androidPreferred])
+@Test(arguments: [ProviderExecutionPreference.automatic, .macPreferred])
+func developmentMacConfigurationNeverFetchesOrConvertsAndroidArtifacts(preference: ProviderExecutionPreference) async throws {
+    let fixture = try AndroidArtifactFixture()
+    defer { fixture.remove() }
+    let store = fixture.store(fetch: { _, _ in
+        Issue.record("Mac mode fetched an Android source JAR")
+        return AndroidArtifactFixture.new
+    }, convert: { _, _, _ in Issue.record("Mac mode converted an Android artifact") })
+    let registry = SpiderReplacementRegistry()
+    let site = fixture.site()
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.root, registry: registry,
+        arguments: ["--android-provider-audit", "--android-provider-force-android"], artifactStore: store)
+    try await registration.register(runtime: fixture.configurationRuntime, sites: [site], preference: preference)
+    #expect(await registry.nativeProvider(for: site) == nil)
+    #expect(await !registration.isRegistered(site: site))
+}
+
+@Test(arguments: [ProviderExecutionPreference.androidPreferred])
 func developmentAndroidOriginalArtifactFailureDoesNotBlockOtherSources(preference: ProviderExecutionPreference) async throws {
     let fixture = try AndroidArtifactFixture()
     defer { fixture.remove() }
@@ -155,7 +172,7 @@ func developmentAndroidOriginalArtifactFailureDoesNotBlockOtherSources(preferenc
     await registration.shutdownAll()
 }
 
-@Test(arguments: [ProviderExecutionPreference.automatic, .macPreferred])
+@Test(arguments: [ProviderExecutionPreference.androidPreferred])
 func developmentAndroidMixedConfigurationDefersClassesToOriginalLoader(preference: ProviderExecutionPreference) async throws {
     let fixture = try AndroidArtifactFixture()
     defer { fixture.remove() }
@@ -181,7 +198,7 @@ func developmentAndroidMixedConfigurationDefersClassesToOriginalLoader(preferenc
         #expect(await registry.executionBackend(for: site) == .androidOriginal)
         #expect(await registration.effectiveProviderSHA256(site: site) == fixture.sha(AndroidArtifactFixture.new))
     }
-    #expect(await registry.executionBackend(for: native) == .macNative)
+    #expect(await registry.executionBackend(for: native) == .androidOriginal)
     #expect(await counters.fetches == 1)
     #expect(await counters.conversions == 1)
     // Registration must succeed; the actual loader still resolves or rejects

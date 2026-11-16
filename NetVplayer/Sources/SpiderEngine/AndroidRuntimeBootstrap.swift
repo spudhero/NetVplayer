@@ -9,7 +9,7 @@ actor AndroidRuntimeBootstrap {
     typealias Progress = @Sendable (String) async -> Void
     typealias Operation = @Sendable (Bundle, @escaping Progress) async throws -> Void
     static let shared = AndroidRuntimeBootstrap()
-    static let providerID = "netvplayer.android.bootstrap"
+    static let providerID = AndroidRuntimeComponentStore.providerID
     private let operation: Operation
     private var pending: Task<Void, Error>?
 
@@ -43,8 +43,8 @@ actor AndroidRuntimeBootstrap {
         let component = AndroidRuntimeComponentStore(root: root, verifier: verifier)
         if try await component.status().version != nil { return }
         await progress("checking")
-        let rawURL = bundle.object(forInfoDictionaryKey: "NetVplayerAndroidRuntimeBootstrapIndexURL") as? String
-            ?? "https://spudhero.github.io/NetVplayer-Provider-Distribution/android/index.json"
+        let rawURL = bundle.object(forInfoDictionaryKey: "NetVplayerAndroidRuntimeIndexURL") as? String
+            ?? "https://spudhero.github.io/NetVplayer-Provider-Distribution/android/runtime/index.json"
         guard let url = URL(string: rawURL), url.scheme == "https" else {
             throw AndroidRuntimeComponentError.invalidPackage
         }
@@ -53,31 +53,21 @@ actor AndroidRuntimeBootstrap {
             ($0.architectures.contains(ProviderManifestVerifier.currentArchitecture) || $0.architectures.contains("universal2")) }).max(by: {
             ProviderManifestVerifier.compareVersions($0.version, $1.version) < 0
         }) else { throw ProviderRuntimeBootstrapError.releaseNotFound(providerID) }
-        await progress("downloading-installer")
+        await progress("downloading-runtime")
         let downloaded = try await distribution.downloadAndExtract(release)
         do {
             let document = try JSONDecoder().decode(SignedProviderManifest.self,
                 from: Data(contentsOf: downloaded.rootURL.appendingPathComponent("signed-manifest.json")))
-            let manifest = document.manifest
-            guard manifest.providerID == providerID, manifest.version == release.version,
-                  manifest.runtime == .python, manifest.sourcePolicy == .userConfiguredOnly,
-                  manifest.entrypoint == "bootstrap.pyc", manifest.runner == "bootstrap.pyc",
-                  manifest.runtimeExecutable == "runtimes/cpython/bin/python3",
-                  manifest.capabilities.isEmpty, manifest.hostCapabilities.isEmpty,
-                  manifest.sourceBindings?.isEmpty ?? true else {
+            guard document.manifest.providerID == providerID, document.manifest.version == release.version,
+                  document.manifest.sourcePolicy == .userConfiguredOnly,
+                  document.manifest.capabilities.isEmpty, document.manifest.hostCapabilities.isEmpty,
+                  document.manifest.sourceBindings?.isEmpty ?? true else {
                 throw AndroidRuntimeComponentError.invalidPackage
             }
-            let store = ProviderPackageStore(rootURL: root.appendingPathComponent("bootstrap"), verifier: verifier)
-            let installed = try await store.install(packageDirectory: downloaded.rootURL, document: document)
-            let scratch = root.appendingPathComponent(".bootstrap-" + UUID().uuidString, isDirectory: true)
-            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700])
-            defer { try? FileManager.default.removeItem(at: scratch) }
-            let assembled = scratch.appendingPathComponent("component", isDirectory: true)
-            try await runInstaller(installed: installed, assembled: assembled,
-                cache: root.appendingPathComponent(".downloads", isDirectory: true), progress: progress)
             await progress("activating")
-            _ = try await component.install(directory: assembled)
+            // The component store verifies the complete signed tree and probes
+            // its bundled JVM. Installation never fetches or assembles dependencies.
+            _ = try await component.install(directory: downloaded.rootURL)
             await progress("ready")
         } catch {
             await distribution.removeTemporaryPackage(downloaded)
@@ -103,7 +93,7 @@ actor AndroidRuntimeBootstrap {
             process.standardError = FileHandle.nullDevice
             process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
                 "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
-                "TMPDIR": NSTemporaryDirectory(), "SSL_CERT_FILE": "/etc/ssl/cert.pem"]
+                "TMPDIR": NSTemporaryDirectory(), "SSL_CERT_FILE": "/etc/ssl/cert.pem", "TZ": "UTC"]
             try Task.checkCancellation()
             try process.run()
             defer { terminateInstaller(process) }

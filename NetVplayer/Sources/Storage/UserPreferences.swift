@@ -400,8 +400,8 @@ public final class UserPreferences: @unchecked Sendable {
     // MARK: - 配置源
 
     public var providerExecutionPreference: ProviderExecutionPreference {
-        get { ProviderExecutionPreference(rawValue: defaults.string(forKey: ProviderExecutionPreference.storageKey) ?? "") ?? .automatic }
-        set { defaults.set(newValue.rawValue, forKey: ProviderExecutionPreference.storageKey) }
+        get { (ProviderExecutionPreference(rawValue: defaults.string(forKey: ProviderExecutionPreference.storageKey) ?? "") ?? .macPreferred).resolved }
+        set { defaults.set(newValue.resolved.rawValue, forKey: ProviderExecutionPreference.storageKey) }
     }
 
     public var currentVodConfigUrl: String {

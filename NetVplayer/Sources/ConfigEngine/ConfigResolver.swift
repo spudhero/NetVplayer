@@ -53,6 +53,7 @@ public enum VodInputError: Error, LocalizedError, Sendable {
     case emptyURL
     case invalidURL
     case unrecognizedContent
+    case requiresMacImplementation
 
     public var errorDescription: String? {
         switch self {
@@ -62,6 +63,8 @@ public enum VodInputError: Error, LocalizedError, Sendable {
             return "点播源地址无效"
         case .unrecognizedContent:
             return "返回内容不是可识别的点播配置或内容接口"
+        case .requiresMacImplementation:
+            return "此配置使用 Mac 脚本扩展，请选择 Mac 实现并重启后加载。"
         }
     }
 }
@@ -277,7 +280,7 @@ public final class ConfigResolver: Sendable {
         return !keys.isDisjoint(with: object.keys)
     }
 
-    private static func isNodeBundleURL(_ rawURL: String) -> Bool {
+    public static func isNodeBundleURL(_ rawURL: String) -> Bool {
         guard let components = URLComponents(string: rawURL),
               let scheme = components.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {

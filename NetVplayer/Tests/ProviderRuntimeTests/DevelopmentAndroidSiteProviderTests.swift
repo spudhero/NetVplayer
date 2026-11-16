@@ -15,24 +15,22 @@ import Testing
     defer { fixture.remove() }
     for flag: Any? in [nil, false, "true", 1] {
         let bundle = try fixture.bundle(flag: flag)
-        // A non-boolean opt-in follows the production component path. This
-        // synthetic bundle deliberately has no release trust configuration.
-        await #expect(throws: ProviderTrustConfigurationError.missingKey(ProviderTrustConfiguration.manifestKeyName)) {
-            try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [fixture.site], bundle: bundle,
-                componentRuntime: { try await AndroidRuntimeComponentStore.application(bundle: $0).activeRuntime() })
-        }
+        try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [fixture.site], bundle: bundle, preference: .androidPreferred,
+            componentRuntime: { try await AndroidRuntimeComponentStore.application(bundle: $0).activeRuntime() })
+        let unavailable = try #require(await SpiderReplacementRegistry.shared.nativeProvider(for: fixture.site) as? AndroidOriginalUnavailableProvider)
+        #expect(unavailable.reason == .runtimeInvalid)
     }
     let enabled = try fixture.bundle(flag: true)
-    await #expect(throws: (any Error).self) {
-        try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [fixture.site], bundle: enabled,
-            componentRuntime: { _ in
-                Issue.record("A boolean legacy opt-in must use the bundled DEBUG runtime")
-                return nil
-            })
-    }
+    try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [fixture.site], bundle: enabled, preference: .androidPreferred,
+        componentRuntime: { _ in
+            Issue.record("A boolean legacy opt-in must use the bundled DEBUG runtime")
+            return nil
+        })
+    let unavailable = try #require(await SpiderReplacementRegistry.shared.nativeProvider(for: fixture.site) as? AndroidOriginalUnavailableProvider)
+    #expect(unavailable.reason == .runtimeInvalid)
 }
 
-@Test func developmentProviderPreferencesSelectAWholeSourceAndKeepAutomaticDefault() async throws {
+@Test func developmentProviderPreferencesSelectOnlyTheirWholeImplementation() async throws {
     for preference in ProviderExecutionPreference.allCases {
         let fixture = try DevelopmentAndroidBridgeFixture()
         defer { fixture.remove() }
@@ -41,7 +39,7 @@ import Testing
         let native = DevelopmentAndroidNativeRouteFixture()
         await registry.register(originalKey: fixture.site.key, originalAPI: fixture.site.api, provider: native)
         let arguments = preference == .androidPreferred ? ["--android-provider-audit", "--android-provider-use-bundled-artifact"] : []
-        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: arguments)
+        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: arguments)
         try await registration.register(runtime: runtime, sites: [fixture.site], preference: preference)
         let selected = try #require(await registry.nativeProvider(for: fixture.site))
         if preference == .macPreferred {
@@ -62,16 +60,17 @@ import Testing
     }
 }
 
-@Test func developmentMacPreferenceFallsBackOnlyWhenExactAdaptationIsMissing() async throws {
+@Test func developmentMacPreferenceKeepsAliasesWithoutAndroidFallback() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture()
     defer { fixture.remove() }
     let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
     let registry = SpiderReplacementRegistry()
-    // An API alias may belong to a different source sharing that Guard class.
+    // Android registration cannot override Mac aliases even without an exact pair.
     await registry.register(originalAPI: fixture.site.api, provider: DevelopmentAndroidNativeRouteFixture())
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: [])
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
     try await registration.register(runtime: runtime, sites: [fixture.site], preference: .macPreferred)
-    #expect(await registry.executionBackend(for: fixture.site) == .androidOriginal)
+    #expect(await registry.executionBackend(for: fixture.site) == .macNative)
+    #expect(await !registration.isRegistered(site: fixture.site))
     await registration.shutdownAll()
 }
 
@@ -83,7 +82,7 @@ import Testing
     let registry = SpiderReplacementRegistry()
     let sites = nativeRouteBindings.map { Site(key: $0["key"]!, name: "Route", type: 3, api: $0["api"]!) }
     for site in sites { await registry.register(originalKey: site.key, originalAPI: site.api, provider: DevelopmentAndroidNativeRouteFixture()) }
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry,
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true,
         arguments: ["--android-provider-audit", "--android-provider-use-bundled-artifact"])
     try await registration.register(runtime: runtime, sites: sites, preference: .androidPreferred)
     for site in sites {
@@ -111,7 +110,7 @@ import Testing
     let native = DevelopmentAndroidNativeRouteFixture()
     await registry.register(originalAPI: site.api, provider: native)
     await registry.register(originalKey: site.key, originalAPI: site.api, provider: native)
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry,
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true,
         arguments: ["--android-provider-audit", "--android-provider-use-bundled-artifact"])
     try await registration.register(runtime: runtime, sites: [site], preference: .androidPreferred)
     let provider = try #require(await registry.nativeProvider(for: site) as? DevelopmentAndroidSiteProvider)
@@ -141,7 +140,7 @@ import Testing
     for site in sites { await registry.register(originalKey: site.key, originalAPI: site.api, provider: native) }
     // A bundled-input flag alone must not make a normal session execute an old
     // bundled business artifact when its configuration declares no JAR.
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry,
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: false,
         arguments: ["--android-provider-use-bundled-artifact"])
     try await registration.register(runtime: runtime, sites: sites, preference: .androidPreferred)
     for (site, reason) in [(fixture.site, AndroidOriginalUnavailableReason.missingProviderArtifact), (script, .unsupportedSourceAPI)] {
@@ -191,12 +190,14 @@ import Testing
         await registry.register(originalKey: site.key, originalAPI: site.api, provider: native)
     }
     try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [fixture.site, android, independent], bundle: bundle,
-        componentRuntime: { _ in throw AndroidRuntimePreparationError.failed })
+        componentRuntime: { _ in
+            Issue.record("Mac mode must not prepare Android, even if preparation would fail")
+            throw AndroidRuntimePreparationError.failed
+        })
     for site in [fixture.site, independent] {
         #expect(await registry.nativeProvider(for: site) as? DevelopmentAndroidNativeRouteFixture === native)
     }
-    let unavailable = try #require(await registry.nativeProvider(for: android) as? AndroidOriginalUnavailableProvider)
-    #expect(unavailable.reason == .preparationFailed)
+    #expect(await registry.nativeProvider(for: android) == nil)
     // The preference must still be honored if the user explicitly chose Android.
     try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [fixture.site], bundle: bundle, preference: .androidPreferred,
         componentRuntime: { _ in throw AndroidRuntimePreparationError.failed })
@@ -256,12 +257,12 @@ import Testing
     // AppState configuration tests clear the shared registry's content caches concurrently.
     // This lifecycle fixture owns its registry so unrelated cleanup cannot retire its request.
     let registry = SpiderReplacementRegistry()
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry)
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true)
     try await registration.register(runtime: runtime, sites: [fixture.site, unlisted])
     let firstMatch = await registry.nativeProvider(for: fixture.site)
     let first = try #require(firstMatch as? DevelopmentAndroidSiteProvider)
     let missingMatch = await registry.nativeProvider(for: unlisted)
-    #expect(missingMatch == nil)
+    #expect(missingMatch is DevelopmentAndroidSiteProvider)
     await registration.shutdownAll()
     let secondMatch = await registry.nativeProvider(for: fixture.site)
     let second = try #require(secondMatch as? DevelopmentAndroidSiteProvider)
@@ -334,7 +335,7 @@ import Testing
     #expect(throws: DevelopmentAndroidRuntimeError.self) { try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime) }
 }
 
-@Test func developmentAndroidRegistrationPreservesCompleteNativeSources() async throws {
+@Test func developmentMacRegistrationPreservesCompleteNativeSources() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture()
     defer { fixture.remove() }
     let bindings = nativeRouteBindings
@@ -346,8 +347,8 @@ import Testing
     for site in sites {
         await registry.register(originalKey: site.key, originalAPI: site.api, provider: native)
     }
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: [])
-    try await registration.register(runtime: runtime, sites: sites + [fixture.site])
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
+    try await registration.register(runtime: runtime, sites: sites + [fixture.site], preference: .macPreferred)
     for site in sites {
         let selected = try #require(await registry.nativeProvider(for: site))
         #expect(selected as? DevelopmentAndroidNativeRouteFixture === native)
@@ -360,19 +361,19 @@ import Testing
         #expect(player.url == "https://media.example.test/native.m3u8")
     }
     #expect(await native.operations == Array(repeating: ["home", "category", "detail", "player"], count: sites.count).flatMap { $0 })
-    #expect(await registration.isRegistered(site: fixture.site))
-    #expect(await registry.nativeProvider(for: fixture.site) is DevelopmentAndroidSiteProvider)
+    #expect(await !registration.isRegistered(site: fixture.site))
+    #expect(await registry.nativeProvider(for: fixture.site) == nil)
     #expect(!FileManager.default.fileExists(atPath: fixture.state.appendingPathComponent("operations.jsonl").path))
     // Re-registering a refreshed config and shutting helpers down must retain
     // the same native objects and their coherent detail/player ID contract.
-    try await registration.register(runtime: runtime, sites: sites + [fixture.site])
+    try await registration.register(runtime: runtime, sites: sites + [fixture.site], preference: .macPreferred)
     await registration.shutdownAll()
     for site in sites {
         #expect(await registry.nativeProvider(for: site) as? DevelopmentAndroidNativeRouteFixture === native)
     }
 }
 
-@Test func developmentAndroidNativePreferenceRequiresExactIdentityAndAvailableNative() async throws {
+@Test func developmentAndroidModeIgnoresNativeIdentityMatches() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture()
     defer { fixture.remove() }
     for original in nativeRouteBindings {
@@ -387,20 +388,19 @@ import Testing
             let registry = SpiderReplacementRegistry()
             let site = Site(key: binding["key"]!, name: "Changed identity", type: 3, api: binding["api"]!)
             await registry.register(originalKey: site.key, originalAPI: site.api, provider: DevelopmentAndroidNativeRouteFixture())
-            let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: [])
+            let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
             try await registration.register(runtime: runtime, sites: [site])
             #expect(await registration.isRegistered(site: site))
             #expect(await registry.nativeProvider(for: site) is DevelopmentAndroidSiteProvider)
             await registration.shutdownAll()
         }
-        // The exact identity still needs a compiled-in keyed implementation.
-        // An API-only alias must leave the Guard route available.
+        // Android owns the route even when a Mac alias exists.
         try fixture.writeManifest(changes: ["bindings": [original]])
         let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
         let registry = SpiderReplacementRegistry()
         let site = Site(key: original["key"]!, name: "No keyed native", type: 3, api: original["api"]!)
         await registry.register(originalAPI: site.api, provider: DevelopmentAndroidNativeRouteFixture())
-        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: [])
+        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
         try await registration.register(runtime: runtime, sites: [site])
         #expect(await registration.isRegistered(site: site))
         #expect(await registry.nativeProvider(for: site) is DevelopmentAndroidSiteProvider)
@@ -408,7 +408,7 @@ import Testing
     }
 }
 
-@Test func developmentAndroidForcedGuardRouteIsAvailableOnlyInExplicitAudit() async throws {
+@Test func developmentMacModeCannotBeOverriddenByAndroidAuditFlags() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture()
     defer { fixture.remove() }
     for binding in nativeRouteBindings {
@@ -420,19 +420,17 @@ import Testing
             let registry = SpiderReplacementRegistry()
             let native = DevelopmentAndroidNativeRouteFixture()
             await registry.register(originalKey: site.key, originalAPI: site.api, provider: native)
-            let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: arguments)
-            try await registration.register(runtime: runtime, sites: [site])
-            let forced = arguments.count == 2
-            #expect(await registration.isRegistered(site: site) == forced)
+            let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: arguments)
+            try await registration.register(runtime: runtime, sites: [site], preference: .macPreferred)
+            #expect(await !registration.isRegistered(site: site))
             let selected = try #require(await registry.nativeProvider(for: site))
-            if forced { #expect(selected is DevelopmentAndroidSiteProvider) }
-            else { #expect(selected as? DevelopmentAndroidNativeRouteFixture === native) }
+            #expect(selected as? DevelopmentAndroidNativeRouteFixture === native)
             await registration.shutdownAll()
         }
     }
 }
 
-@Test func developmentAndroidPreferredNativeRouteSurvivesConfigurationReloads() async throws {
+@Test func developmentMacNativeRouteSurvivesConfigurationReloads() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture()
     defer { fixture.remove() }
     let binding = ["key": "风云", "api": "csp_FyGuard", "className": "com.github.catvod.spider.FyGuard"]
@@ -443,14 +441,14 @@ import Testing
     #if !NETVPLAYER_INCLUDE_PRIVATE_PROVIDERS
     let native = DevelopmentAndroidNativeRouteFixture()
     #endif
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: [])
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
     for _ in 0..<2 {
         #if NETVPLAYER_INCLUDE_PRIVATE_PROVIDERS
         await registry.registerBuiltInNativeProviders()
         #else
         await registry.register(originalKey: site.key, originalAPI: site.api, provider: native)
         #endif
-        try await registration.register(runtime: runtime, sites: [site])
+        try await registration.register(runtime: runtime, sites: [site], preference: .macPreferred)
         #if NETVPLAYER_INCLUDE_PRIVATE_PROVIDERS
         #expect(await registry.nativeProvider(for: site) is FyNativeProvider)
         #else
@@ -568,7 +566,7 @@ import Testing
     defer { fixture.remove() }
     let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
     let registry = SpiderReplacementRegistry()
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: [])
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
     try await registration.register(runtime: runtime, sites: [fixture.site])
     let removed = try #require(await registry.exactNativeProvider(for: fixture.site) as? DevelopmentAndroidSiteProvider)
     _ = try await removed.homeContent(site: fixture.site)
@@ -588,7 +586,7 @@ import Testing
     defer { fixture.remove() }
     let first = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
     let registry = SpiderReplacementRegistry()
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: [])
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
     try await registration.register(runtime: first, sites: [fixture.site])
     let previous = try #require(await registry.exactNativeProvider(for: fixture.site) as? DevelopmentAndroidSiteProvider)
     _ = try await previous.homeContent(site: fixture.site)
@@ -628,7 +626,7 @@ import Testing
     let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
     let registry = SpiderReplacementRegistry()
     for arguments in [[], [], ["--android-provider-audit"], ["--android-provider-audit"]] {
-        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: arguments)
+        let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: arguments)
         try await registration.register(runtime: runtime, sites: [fixture.site])
         let provider = try #require(await registry.exactNativeProvider(for: fixture.site) as? DevelopmentAndroidSiteProvider)
         _ = try await provider.homeContent(site: fixture.site)
@@ -1274,7 +1272,7 @@ private actor DevelopmentAndroidNativeRouteFixture: SiteContentProvider {
     let next = DevelopmentAndroidRuntimeLayout(root: old.root, manifest: old.manifest, classPath: old.classPath,
         componentIdentity: String(repeating: "b", count: 64))
     let registry = SpiderReplacementRegistry()
-    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, arguments: [])
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: fixture.state, registry: registry, bundledArtifactForTesting: true, arguments: [])
     try await registration.register(runtime: old, sites: [fixture.site])
     let previous = try #require(await registry.nativeProvider(for: fixture.site) as? DevelopmentAndroidSiteProvider)
     _ = try await previous.homeContent(site: fixture.site)

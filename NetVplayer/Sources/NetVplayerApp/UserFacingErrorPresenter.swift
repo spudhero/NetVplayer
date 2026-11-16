@@ -216,6 +216,7 @@ enum UserFacingErrorPresenter {
             case .emptyURL: return L10n.text("点播源地址不能为空。")
             case .invalidURL: return L10n.text("点播源地址格式不正确。")
             case .unrecognizedContent: return L10n.text("返回内容不是可识别的点播配置或内容接口。")
+            case .requiresMacImplementation: return L10n.text("此配置使用 Mac 脚本扩展，请选择 Mac 实现并重启后加载。")
             }
         }
 

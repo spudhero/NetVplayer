@@ -3,8 +3,8 @@ import Testing
 import ProviderRuntime
 @testable import SpiderEngine
 
-/// Draft bytes are supplied through a controlled transport; dependency downloads,
-/// signatures, portable installer, assembly, JVM probe and activation are real.
+/// Draft bytes are supplied through a controlled transport; the complete runtime archive,
+/// signatures, JVM probe and activation are real; every other request fails.
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["NETVPLAYER_ANDROID_BOOTSTRAP_ACCEPTANCE"] != nil))
 struct AndroidRuntimeBootstrapAcceptanceTests {
     @Test func emptyInstallationPreparesAndReopensOffline() async throws {
@@ -23,7 +23,7 @@ struct AndroidRuntimeBootstrapAcceptanceTests {
             "CFBundleShortVersionString": "2.0.0", "CFBundlePackageType": "BNDL",
             ProviderTrustConfiguration.manifestKeyName: trust["manifest_public_key"]!,
             ProviderTrustConfiguration.distributionKeyName: trust["distribution_public_key"]!,
-            "NetVplayerAndroidRuntimeBootstrapIndexURL": indexURL.absoluteString]
+            "NetVplayerAndroidRuntimeIndexURL": indexURL.absoluteString]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
             .write(to: bundleURL.appendingPathComponent("Info.plist"))
         let bundle = try #require(Bundle(url: bundleURL))
@@ -43,7 +43,9 @@ struct AndroidRuntimeBootstrapAcceptanceTests {
         #expect(try await store.activeRuntime()?.manifest.schema == 3)
         let observed = await phases.values
         #expect(observed.first == "checking" && observed.last == "ready")
-        #expect(observed.contains("downloading-java") && observed.contains("preparing-host") && observed.contains("activating"))
+        #expect(observed == ["checking", "downloading-runtime", "activating", "ready"])
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".downloads").path))
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("bootstrap").path))
         // An empty transport will fail every request. A verified existing
         // selection must reopen without fetching the catalog or dependencies.
         BootstrapAcceptanceTransport.install([:])

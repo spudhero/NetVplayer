@@ -268,7 +268,7 @@ final class AppState: ObservableObject {
         didSet { userPreferences.providerExecutionPreference = preferredProviderExecution }
     }
     @Published private(set) var providerExecutionBackends: [String: ProviderExecutionBackend] = [:]
-    var providerExecutionRequiresRestart: Bool { preferredProviderExecution != activeProviderExecutionPreference }
+    var providerExecutionRequiresRestart: Bool { preferredProviderExecution.resolved != activeProviderExecutionPreference.resolved }
     var hasBundledAndroidProviderRuntime: Bool {
         DevelopmentAndroidSiteProvider.isBundled() || androidRuntimeComponentVersion != nil
     }
@@ -965,6 +965,7 @@ final class AppState: ObservableObject {
     }
 
     private func startProviderRuntimeIfNeeded() {
+        guard !activeProviderExecutionPreference.usesAndroid else { return }
         guard !hasStartedProviderRuntime, !isTerminating else { return }
         hasStartedProviderRuntime = true
         let runtimeRegistrationTask: Task<Bool, Never>?
@@ -1124,6 +1125,7 @@ final class AppState: ObservableObject {
 
     private func waitForProviderRuntimeReadiness() async -> Bool {
         guard !isTerminating else { return false }
+        guard !activeProviderExecutionPreference.usesAndroid else { return true }
         startProviderRuntimeIfNeeded()
         let hasVerifiedPackages = await providerRuntimeRegistrationTask?.value ?? false
         finishLocalProviderRegistration(hasVerifiedPackages)
@@ -1136,7 +1138,7 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func refreshProviderRuntimeCatalog() -> Task<Void, Never>? {
-        guard !isTerminating else { return nil }
+        guard !isTerminating, !activeProviderExecutionPreference.usesAndroid else { return nil }
         if !hasStartedProviderRuntime {
             startProviderRuntimeIfNeeded()
             return providerRuntimeStartupTask
@@ -1181,7 +1183,7 @@ final class AppState: ObservableObject {
             return
         }
         savedConfigStartupPhase = .preparingExtension
-        if savedURL.hasPrefix("netvplayer-xtream://") || (userPreferences.providerRuntimeInitialInstallCompleted && providerRuntimeLocalReady) {
+        if activeProviderExecutionPreference.usesAndroid || savedURL.hasPrefix("netvplayer-xtream://") || (userPreferences.providerRuntimeInitialInstallCompleted && providerRuntimeLocalReady) {
             initialConfigTask = Task { @MainActor [weak self] in
                 guard let self, !Task.isCancelled,
                       self.configurationLoadGeneration == startupGeneration else { return }
@@ -1591,6 +1593,7 @@ final class AppState: ObservableObject {
     }
 
     private func registerBuiltInSpiderReplacements() async {
+        guard !activeProviderExecutionPreference.usesAndroid else { return }
         await SpiderReplacementRegistry.shared.registerPublicUtilityProviders(
             myDrive: MyDrivePublicProvider(credentialProvider: { provider in
                 Self.cloudCredential(for: provider)
@@ -1889,7 +1892,7 @@ final class AppState: ObservableObject {
         guard !isTerminating, !Task.isCancelled else { return }
         invalidateConfigurationRefresh()
         let generation = configurationLoadGeneration
-        if waitForProviderRuntime && !url.hasPrefix("netvplayer-xtream://") {
+        if waitForProviderRuntime && !activeProviderExecutionPreference.usesAndroid && !url.hasPrefix("netvplayer-xtream://") {
             savedConfigStartupPhase = .preparingExtension
             let ready = await waitForProviderRuntimeReadiness()
             guard !Task.isCancelled, generation == configurationLoadGeneration else { return }
@@ -1907,6 +1910,9 @@ final class AppState: ObservableObject {
         savedConfigStartupPhase = .loading
         log("[DEBUG_LOGGER] 开始加载配置: \(url)")
         do {
+            if activeProviderExecutionPreference.usesAndroid, ConfigResolver.isNodeBundleURL(url) {
+                throw VodInputError.requiresMacImplementation
+            }
             self.availableDepots = []
             self.externalSourceReports = []
             self.configAggregationSnapshot = ConfigAggregationSnapshot(rootURL: url)
@@ -1973,31 +1979,22 @@ final class AppState: ObservableObject {
             }
 
             self.sites = VodConfig.shared.sites + fileServiceStore.load().services.map { $0.site() } + mediaServerStore.load().map { $0.site() }
-            if let androidProviderRegistrationOverride {
-                try await androidProviderRegistrationOverride(self.sites)
-            } else {
-                defer { androidRuntimeComponentBusy = false }
-                try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: self.sites,
-                    preference: activeProviderExecutionPreference, cloudCredentialProvider: { [weak self] drive in
-                    await MainActor.run {
-                        guard let preferences = self?.userPreferences else { return nil }
-                        switch drive {
-                        case .baidu: return preferences.baiduCookie
-                        case .ali: return preferences.aliRefreshToken
-                        case .quark: return preferences.quarkCookie
-                        case .uc: return preferences.ucCookie
-                        default: return nil
-                        }
+            if activeProviderExecutionPreference.usesAndroid {
+                if let androidProviderRegistrationOverride {
+                    try await androidProviderRegistrationOverride(self.sites)
+                } else {
+                    defer { androidRuntimeComponentBusy = false }
+                    try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: self.sites,
+                        preference: activeProviderExecutionPreference, runtimeProgress: { [weak self] phase in
+                            await self?.updateAndroidRuntimePreparation(phase: phase)
+                        })
+                    if androidRuntimeComponentError == nil {
+                        androidRuntimeComponentBusy = false
+                        await refreshAndroidRuntimeComponent()
                     }
-                }, runtimeProgress: { [weak self] phase in
-                    await self?.updateAndroidRuntimePreparation(phase: phase)
-                })
-                if androidRuntimeComponentError == nil {
-                    androidRuntimeComponentBusy = false
-                    await refreshAndroidRuntimeComponent()
                 }
             }
-            if let providerID = resolvedInput.providerID {
+            if !activeProviderExecutionPreference.usesAndroid, let providerID = resolvedInput.providerID {
                 let provider = NodeBundleSiteContentProvider(providerID: providerID)
                 for site in self.sites where site.isSpider {
                     await SpiderReplacementRegistry.shared.register(originalKey: site.key, provider: provider)

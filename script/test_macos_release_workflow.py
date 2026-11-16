@@ -318,8 +318,9 @@ else:
         self.assertRegex(info["CFBundleVersion"], r"^[1-9][0-9]*$")
         self.assertIn(f"**NetVplayer {info['CFBundleShortVersionString']} (build {info['CFBundleVersion']})**", readme)
         self.assertNotIn("| Development application |", readme)
-        self.assertIn("NetVplayer 1.1.4", readme)
-        self.assertIn("**NetVplayer 1.1.4 (build 18)**", readme)
+        release_notes = f"docs/releases/{info['CFBundleShortVersionString']}.md"
+        self.assertTrue((ROOT / release_notes).is_file())
+        self.assertIn(release_notes, readme)
         expected = f"{info['CFBundleShortVersionString']} (build {info['CFBundleVersion']}) |"
         self.assertTrue(any(f"| {kind} | {expected}" in readme
                             for kind in ("Stable application", "Release candidate")))

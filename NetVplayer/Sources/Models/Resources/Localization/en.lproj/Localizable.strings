@@ -3228,3 +3228,25 @@
 "Android 运行组件准备失败，请在设置中重试自动安装。" = "Android runtime preparation failed. Retry automatic installation in Settings.";
 "自动下载并安装" = "Download and install automatically";
 "首次使用 Android 来源时会自动准备运行组件，也可以在这里提前下载。手动安装或回滚后需重启。" = "Android runtime components are prepared automatically when first needed. You can also download them here. Manual installation or rollback requires a restart.";
+
+"下次启动使用" = "Use on next launch";
+
+"选择 Android 原版后，首次加载配置时下载完整运行环境。" = "After selecting Android original, the complete runtime is downloaded when a configuration is first loaded.";
+
+"Mac 实现与 Android 原版独立运行。来源不受支持或运行失败时显示具体错误，不会自动切换实现。" = "Mac and Android implementations run independently. Unsupported sources and execution failures show an error without switching implementations.";
+
+"本地文件、媒体服务器与标准内容接口不受此设置影响。" = "Local files, media servers and standard content APIs are independent of this setting.";
+
+"Mac 实现" = "Mac implementation";
+
+"Android 原版" = "Android original";
+
+"只使用 Mac 适配，不下载或调用 Android 运行环境。" = "Uses only Mac adapters, without downloading or invoking the Android runtime.";
+
+"只使用 Android 原版解析组件；目录、详情与播放均使用同一实现。" = "Uses only original Android providers for catalogs, details and playback.";
+
+"仅在 Android 原版模式下自动下载完整运行环境。也可手动提前安装；安装不会切换当前实现。手动安装或回滚后需重启。" = "The complete runtime is downloaded automatically only in Android mode. You can install it in advance without switching implementations. Restart after manual installation or rollback.";
+
+"正在下载完整 Android 运行环境…" = "Downloading the complete Android runtime…";
+
+"此配置使用 Mac 脚本扩展，请选择 Mac 实现并重启后加载。" = "This configuration requires a Mac script extension. Select the Mac implementation and restart before loading it.";

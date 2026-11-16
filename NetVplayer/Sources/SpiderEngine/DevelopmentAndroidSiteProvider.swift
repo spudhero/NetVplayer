@@ -91,11 +91,13 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
     /// Unsigned legacy bundles remain restricted to DEBUG builds.
     public static func registerIfEnabled(
         sites: [Site], bundle: Bundle = .main,
-        preference: ProviderExecutionPreference = .automatic,
+        preference: ProviderExecutionPreference = .macPreferred,
         baiduCookieProvider: (@Sendable () async -> String?)? = nil,
         cloudCredentialProvider: (@Sendable (DriveProvider) async -> String?)? = nil,
         runtimeProgress: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws {
+        // Select the implementation before consulting or downloading its runtime.
+        guard preference.usesAndroid else { return }
         guard sites.contains(where: { AndroidOriginalProviderPolicy.className(for: $0) != nil && !$0.jar.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             if preference == .androidPreferred {
                 for site in sites where AndroidOriginalProviderPolicy.applies(to: site) {
@@ -122,11 +124,12 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
     // installation. Runtime trust and route error handling remain in this path.
     static func registerIfEnabled(
         sites: [Site], bundle: Bundle,
-        preference: ProviderExecutionPreference = .automatic,
+        preference: ProviderExecutionPreference = .macPreferred,
         baiduCookieProvider: (@Sendable () async -> String?)? = nil,
         cloudCredentialProvider: (@Sendable (DriveProvider) async -> String?)? = nil,
         componentRuntime: @Sendable (Bundle) async throws -> DevelopmentAndroidRuntimeLayout?
     ) async throws {
+        guard preference.usesAndroid else { return }
         if CommandLine.arguments.contains("--android-provider-audit"),
            CommandLine.arguments.contains("--android-provider-native-baseline") { return }
         let runtime: DevelopmentAndroidRuntimeLayout?
@@ -145,8 +148,7 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             await DevelopmentAndroidRuntimeRegistration.shared.shutdownAll()
             if error is CancellationError { throw error }
             if error is AndroidRuntimePreparationError {
-                await AndroidOriginalProviderPolicy.registerUnavailable(sites: sites, reason: .preparationFailed,
-                    preservingMacProviders: preference != .androidPreferred)
+                await AndroidOriginalProviderPolicy.registerUnavailable(sites: sites, reason: .preparationFailed)
                 return
             }
             if preference == .androidPreferred {
@@ -1611,28 +1613,23 @@ actor DevelopmentAndroidRuntimeRegistration {
     private var registrationRevision = UUID()
 
     init(stateRoot: URL? = nil, registry: SpiderReplacementRegistry = .shared,
+         bundledArtifactForTesting: Bool = false,
          arguments: [String] = CommandLine.arguments, artifactStore: DevelopmentAndroidArtifactStore = .shared) {
         self.stateRoot = stateRoot
         self.registry = registry
         self.artifactStore = artifactStore
         auditSessionID = arguments.contains("--android-provider-audit") ? UUID().uuidString : nil
         #if DEBUG
-        forceBundledArtifactForAudit = arguments.contains("--android-provider-audit")
-            && arguments.contains("--android-provider-use-bundled-artifact")
+        // Controlled bridge fixtures exercise lifecycle/state without fetching
+        // a source JAR. Release builds never accept this injection.
+        forceBundledArtifactForAudit = bundledArtifactForTesting || (arguments.contains("--android-provider-audit")
+            && arguments.contains("--android-provider-use-bundled-artifact"))
         forceAndroidForAudit = arguments.contains("--android-provider-audit")
             && arguments.contains("--android-provider-force-android")
         #else
         forceBundledArtifactForAudit = false
         forceAndroidForAudit = false
         #endif
-    }
-
-    // Keep each source on one complete implementation. Falling back one method
-    // at a time can pass native IDs/flags into a Guard with a different schema.
-    private func preservesNative(_ binding: DevelopmentAndroidRuntimeManifest.Binding) -> Bool {
-        !forceAndroidForAudit && AndroidCompatibilityPolicy.bundled?.preservedNative?.contains(where: {
-            $0.matches(key: binding.key, api: binding.api, className: binding.className)
-        }) == true
     }
 
     func isRegistered(site: Site) -> Bool {
@@ -1645,41 +1642,18 @@ actor DevelopmentAndroidRuntimeRegistration {
         return providerArtifacts[identity]
     }
 
-    private func nativePlaybackRule(_ binding: DevelopmentAndroidRuntimeManifest.Binding) -> AndroidCompatibilityPolicy.NativePlaybackRule? {
-        AndroidCompatibilityPolicy.bundled?.nativePlayback?.first {
-            $0.key == binding.key && $0.api == binding.api && $0.className == binding.className
-        }
-    }
-
     private func requireCurrent(_ revision: UUID) throws {
         try Task.checkCancellation()
         guard revision == registrationRevision else { throw CancellationError() }
     }
 
-    private func preferredMacProvider(
-        site: Site, binding: DevelopmentAndroidRuntimeManifest.Binding,
-        preference: ProviderExecutionPreference
-    ) async -> (any SiteContentProvider)? {
-        guard !forceAndroidForAudit, preference != .androidPreferred,
-              nativePlaybackRule(binding) == nil else { return nil }
-        if preference == .macPreferred || preservesNative(binding) {
-            if let provider = await registry.exactNativeProvider(for: site),
-               !(provider is DevelopmentAndroidSiteProvider),
-               !(provider is DevelopmentAndroidArtifactFailureProvider),
-               !(provider is RemoteSiteContentProvider) { return provider }
-        }
-        if preference == .macPreferred {
-            return await registry.exactInstalledRemoteProvider(for: site)
-        }
-        return nil
-    }
-
     func register(
         runtime: DevelopmentAndroidRuntimeLayout, sites: [Site],
-        preference: ProviderExecutionPreference = .automatic,
+        preference: ProviderExecutionPreference = .androidPreferred,
         baiduCookieProvider: (@Sendable () async -> String?)? = nil,
         cloudCredentialProvider: (@Sendable (DriveProvider) async -> String?)? = nil
     ) async throws {
+        guard preference.usesAndroid else { return }
         let revision = UUID()
         registrationRevision = revision
         let runtime = (preference == .androidPreferred || runtime.manifest.schema >= 2) ? runtime.selectingOriginalBindings(sites: sites) : runtime
@@ -1702,7 +1676,6 @@ actor DevelopmentAndroidRuntimeRegistration {
                 try requireCurrent(revision)
             }
         }
-        var nativeSites = 0
         var resolvedArtifacts: [String: DevelopmentAndroidRuntimeLayout] = [:]
         var failedArtifacts: Set<String> = []
         sourceLoop: for site in sites {
@@ -1724,18 +1697,6 @@ actor DevelopmentAndroidRuntimeRegistration {
                 }
             }
             guard let binding = runtime.manifest.bindings.first(where: { $0.key == site.key && $0.api == site.api }) else { continue }
-            if let adapted = await preferredMacProvider(site: site, binding: binding, preference: preference) {
-                try requireCurrent(revision)
-                let identity = DevelopmentAndroidSiteIdentity(key: site.key, api: site.api)
-                if let previous = providers.removeValue(forKey: identity) { await previous.retire() }
-                try requireCurrent(revision)
-                providerArtifacts.removeValue(forKey: identity)
-                await registry.register(originalKey: site.key, originalAPI: site.api, provider: adapted)
-                try requireCurrent(revision)
-                nativeSites += 1
-                DiagnosticLog.write("[ANDROID_PROVIDER_ROUTE] backend=\(adapted is RemoteSiteContentProvider ? "installed-signed-provider" : "existing-provider") site=\(ProviderDiagnostics.redact(site.key)) preference=\(preference.rawValue)")
-                continue
-            }
             try requireCurrent(revision)
             if failedArtifacts.contains(site.jar) { continue }
             if runtime.manifest.schema == 3 && site.jar.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1752,8 +1713,7 @@ actor DevelopmentAndroidRuntimeRegistration {
             } else {
                 let artifact: DevelopmentAndroidProviderArtifact
                 do {
-                    // Every emulated route uses the original loader, including
-                    // automatic/Mac-preferred mode. Framework and dynamic classes
+                    // Every Android route uses the original loader. Framework and dynamic classes
                     // need not be present in the source JAR's static class list.
                     // The artifact store still verifies checksums and ZIP structure.
                     artifact = try await artifactStore.resolve(declaration: site.jar, runtime: runtime,
@@ -1765,10 +1725,7 @@ actor DevelopmentAndroidRuntimeRegistration {
                     let failure = DevelopmentAndroidArtifactFailureProvider(error: error as? DevelopmentAndroidArtifactError ?? .downloadFailed)
                     for affected in sites where affected.jar == site.jar {
                         try requireCurrent(revision)
-                        guard let affectedBinding = runtime.manifest.bindings.first(where: { $0.key == affected.key && $0.api == affected.api }) else { continue }
-                        let adapted = await preferredMacProvider(site: affected, binding: affectedBinding, preference: preference)
-                        try requireCurrent(revision)
-                        if adapted != nil { continue }
+                        guard runtime.manifest.bindings.contains(where: { $0.key == affected.key && $0.api == affected.api }) else { continue }
                         let affectedIdentity = DevelopmentAndroidSiteIdentity(key: affected.key, api: affected.api)
                         if let previous = providers.removeValue(forKey: affectedIdentity) { await previous.retire() }
                         try requireCurrent(revision)
@@ -1809,21 +1766,11 @@ actor DevelopmentAndroidRuntimeRegistration {
                 providerStateIdentities[identity] = stateIdentity
             }
             try requireCurrent(revision)
-            if let rule = nativePlaybackRule(binding), preference != .androidPreferred, !forceAndroidForAudit {
-                let native = await registry.exactInstalledRemoteProvider(for: site)
-                try requireCurrent(revision)
-                let adapted = AndroidCatalogPlaybackProvider(catalog: provider, nativePlayer: native,
-                    authorization: HostDriveAccountAuthorization(credentialProvider: cloudCredentialProvider,
-                        drives: rule.accountDrives.compactMap(DriveProvider.init(rawValue:))), rule: rule)
-                await registry.register(originalKey: site.key, originalAPI: site.api, provider: adapted)
-                DiagnosticLog.write("[ANDROID_PROVIDER_ROUTE] site=\(ProviderDiagnostics.redact(site.key)) catalog=original playback=mac-native hostAccount=validate-on-play")
-            } else {
-                await registry.register(originalKey: site.key, originalAPI: site.api, provider: provider)
-            }
+            await registry.register(originalKey: site.key, originalAPI: site.api, provider: provider)
             try requireCurrent(revision)
             proxySites[identity] = (site, provider)
         }
-        DiagnosticLog.write("[ANDROID_PROVIDER_DEVELOPMENT] backend=emulated registeredSites=\(proxySites.count) preservedNativeSites=\(nativeSites) forcedAndroidAudit=\(forceAndroidForAudit)")
+        DiagnosticLog.write("[ANDROID_PROVIDER_DEVELOPMENT] backend=emulated registeredSites=\(proxySites.count) forcedAndroidAudit=\(forceAndroidForAudit)")
     }
 
     func proxyResponse(parameters: [String: String]) async throws -> ProxyResponse? {
