@@ -130,3 +130,8 @@ Keep a failable Metal surface initializer separate from NSView's nonnull
 `initWithFrame:` contract; callers must retain the nil fallback. Remove `try`
 from nonthrowing actor calls even inside Testing macros, whose diagnostics can
 otherwise appear only at the macro expansion rather than the source call.
+
+When testing coalesced network reports, hold the fixture response until every
+update and the terminal stop have been submitted, then release it explicitly.
+A short sleep cannot establish that ordering on a loaded runner. Assert the
+exact Started / latest Progress / Stopped sequence and final positions.

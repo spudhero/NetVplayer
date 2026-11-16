@@ -243,18 +243,24 @@ struct MediaServerTests {
         #expect(await runtime.activeLeaseCount == 0)
     }
     @Test func reporterOrdersStartCoalescedProgressAndTerminalStop() async throws {
-        let fixture = ServerFixture(); await fixture.delayReports()
+        let fixture = ServerFixture(); await fixture.holdReports()
         let reporter = MediaServerPlaybackReporter(client: try client(fixture), itemID: "film", sourceID: "source1", sessionID: "session1")
         await reporter.update(.init(seconds: 12.5), start: true)
-        try #require(await waitUntil { await fixture.reports.count == 1 })
+        let didStart = await waitUntil { await fixture.reports.count == 1 }
+        if !didStart { await fixture.releaseReports() }
+        try #require(didStart)
         for value in 1...100 { await reporter.update(.init(seconds: Double(value * 10), paused: value % 2 == 0)) }
         await reporter.stop(.init(seconds: 77, paused: true))
         await reporter.update(.init(seconds: 999), start: true)
+        #expect(await fixture.reports.count == 1)
+        await fixture.releaseReports()
         try #require(await waitUntil { await reporter.idle })
         let reports = await fixture.reports
         #expect(reports.first?.path.hasSuffix("/Sessions/Playing") == true)
         #expect(reports.last?.path.hasSuffix("/Stopped") == true)
-        #expect(reports.count <= 3)
+        try #require(reports.count == 3)
+        #expect(reports[1].path.hasSuffix("/Progress"))
+        #expect(reports[1].ticks == 10_000_000_000)
         #expect(reports.last?.ticks == 770_000_000)
         #expect(reports.allSatisfy { $0.session == "session1" })
         #expect(await reporter.failures == 0)
@@ -335,14 +341,22 @@ private actor ServerFixture {
     var cdnCredentialsAbsent = true, anonymousCredentialsAbsent = true, loginBodyCorrect = false
     var reports: [Report] = []
     private var serverID = "server1", rangeMode = "normal"
-    private var slowRead = false, slowPlayback = false, slowReport = false
+    private var slowRead = false, slowPlayback = false
+    private var reportGateClosed = false
+    private var reportWaiters: [CheckedContinuation<Void, Never>] = []
     private var unsupportedSource: String?
     func setUnsupportedSource(_ value: String) { unsupportedSource = value }
     func replaceServerIdentity() { serverID = "server2" }
     func setRangeMode(_ value: String) { rangeMode = value }
     func delayReads() { slowRead = true }
     func delayPlaybackInfo() { slowPlayback = true }
-    func delayReports() { slowReport = true }
+    func holdReports() { reportGateClosed = true }
+    func releaseReports() {
+        reportGateClosed = false
+        let waiters = reportWaiters
+        reportWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
     func handle(_ request: URLRequest, limit: Int) async throws -> (Data, HTTPURLResponse) {
         let url = request.url!, path = url.path
         paths.append(path)
@@ -418,7 +432,7 @@ private actor ServerFixture {
         if path.contains("/Sessions/Playing") {
             let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
             reports.append(.init(path: path, ticks: (body["PositionTicks"] as! NSNumber).int64Value, session: body["PlaySessionId"] as! String))
-            if slowReport { try? await Task.sleep(for: .milliseconds(80)) }
+            if reportGateClosed { await withCheckedContinuation { reportWaiters.append($0) } }
             return (Data(), HTTPURLResponse(url: url, statusCode: 204, httpVersion: nil, headerFields: nil)!)
         }
         if path.hasSuffix("/Stream.srt") {
