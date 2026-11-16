@@ -2,12 +2,15 @@
 
 This file records user-visible release and fix history. For installation requirements and current usage, see the [README](README.md).
 
-- 发布准备：2.0.1（52）修复正式安装包初始化时的 SwiftPM 资源定位崩溃，新增脱离构建缓存的解压 App 启动门禁；[候选说明](docs/releases/2.0.1.md)。
-- 2.0.1 候选同时修复退出时 AppKit 模态循环阻塞异步清理，保留保存进度、清理失败重试和重启交接；新增三个原生退出场景检查。
-
 - 2.0.0 提供来源解析方式：“自动选择 / Mac 适配优先 / Android 原版优先”，重启生效并显示实际后端；不同路径的历史标识隔离保存。Android 首次使用自动准备环境，已知兼容限制见版本说明。
 
 ## 中文
+
+### [2.0.1](https://github.com/spudhero/NetVplayer/releases/tag/2.0.1)（2026-11-16）
+
+正式构建号 **52**。修复安装包初始化时资源定位崩溃，以及正常退出时异步清理卡住。
+直接替换应用，无需删除配置、账号、历史或收藏。发布前通过完整回归及最终 ZIP 的隔离
+初始化、出画和正常退出检查；真实服务与长期播放限制保留，见 [发布说明](docs/releases/2.0.1.md)。
 
 ### [2.0.0](https://github.com/spudhero/NetVplayer/releases/tag/2.0.0)（2026-11-16）
 
@@ -263,6 +266,13 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [2.0.1](https://github.com/spudhero/NetVplayer/releases/tag/2.0.1) (2026-11-16)
+
+Build **52** fixes an installed-app resource initialization crash and blocked asynchronous cleanup during normal quit.
+Replace the app without deleting settings, accounts, history or favorites. Full regression and isolated initialization,
+capture and normal exit from the final ZIP passed before publication. Existing real-service and sustained-playback
+limitations remain; see the [release notes](docs/releases/2.0.1.md).
 
 ### [2.0.0](https://github.com/spudhero/NetVplayer/releases/tag/2.0.0) (2026-11-16)
 
