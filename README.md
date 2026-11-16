@@ -21,14 +21,15 @@
 
 ![NetVplayer running on macOS](website/assets/home-aurora.webp)
 
-主干开发版本 / Main development version: **NetVplayer 2.0.0 (build 51)**，尚未发布 / unreleased. 功能变化与已知限制见 [2.0.0 开发版说明](docs/releases/2.0.0.md)。
+当前正式版本 / Current release: **NetVplayer 2.0.0 (build 51)**。功能变化与已知限制见 [2.0.0 发布说明](docs/releases/2.0.0.md)。
 
-发布基线 / Release baseline: **NetVplayer 1.1.4 (build 18)**.
+上一正式版本 / Previous release: **NetVplayer 1.1.4 (build 18)**.
 
 | Component | Version |
 | --- | --- |
-| Development application | 2.0.0 (unreleased) |
-| Stable application | 1.1.4 |
+| Stable application | 2.0.0 (build 51) |
+| Python Provider | 1.1.13 |
+| Android support | 1.1.0 |
 
 ## 中文
 
@@ -44,11 +45,11 @@ FongMi/TV、OK影视、影视仓、TVBox 等工具主要服务 Android 生态。
 
 ### 主要功能
 
-开发分支支持直接添加夸克、UC、阿里、百度、115 的个人网盘目录，复用海报、详情和原片播放。真实账号验收待完成，见[使用与验证](docs/releases/2.0.0.md)。
+支持直接添加夸克、UC、阿里、百度、115 的个人网盘目录，复用海报、详情和原片播放。真实账号验收待完成，见[使用与验证](docs/releases/2.0.0.md)。
 
-开发分支已新增 Plex、FTP／SFTP，并补齐 WebDAV、Alist、OpenList 的应用内实测；这些改动尚未发布，范围与限制见[开发版说明](docs/releases/2.0.0.md)。
+2.0 新增 Plex、FTP／SFTP，并补齐 WebDAV、Alist、OpenList 的应用内实测；范围与限制见[发布说明](docs/releases/2.0.0.md)。
 
-极影视／飞牛影视接入也已实现，并完成独立模拟 HTTP 与原生播放验证；真实 NAS 和完整播放窗口截图仍待验。见[开发版说明与限制](docs/releases/2.0.0.md)。
+极影视／飞牛影视接入也已实现，并完成独立模拟 HTTP 与原生播放验证；真实 NAS 和完整播放窗口截图仍待验。见[发布说明与限制](docs/releases/2.0.0.md)。
 
 - **浏览与搜索**：影片详情、多线路选集、跨已连接来源搜索。
 - **点播与直播**：字幕、音轨、倍速、画面比例、章节预览、频道分组与节目单。
@@ -112,11 +113,11 @@ The project brings browsing, search, episode selection, and playback into a nati
 
 ### Features
 
-The development branch adds personal folders from Quark, UC, Aliyun, Baidu, and 115 to the existing poster library, details, and original-file playback. Real-account acceptance is pending; see the [usage and validation notes](docs/releases/2.0.0.md).
+The app supports adding personal folders from Quark, UC, Aliyun, Baidu, and 115 to the existing poster library, details, and original-file playback. Real-account acceptance is pending; see the [usage and validation notes](docs/releases/2.0.0.md).
 
-The development branch adds Plex, FTP, and SFTP, with native-app acceptance evidence for WebDAV, Alist, and OpenList. These changes are not yet released; see the [development notes](docs/releases/2.0.0.md) for scope and limitations.
+Version 2.0 adds Plex, FTP, and SFTP, with native-app acceptance evidence for WebDAV, Alist, and OpenList. See the [release notes](docs/releases/2.0.0.md) for scope and limitations.
 
-Zspace Media and FnOS Media integration is implemented and verified with independent synthetic HTTP services and native playback. Real NAS acceptance and complete playback-window screenshots remain pending; see the [development notes and limitations](docs/releases/2.0.0.md).
+Zspace Media and FnOS Media integration is implemented and verified with independent synthetic HTTP services and native playback. Real NAS acceptance and complete playback-window screenshots remain pending; see the [release notes and limitations](docs/releases/2.0.0.md).
 
 - **Browse and search:** details, multiple playback routes, episode selection, and search across connected sources.
 - **Video and live TV:** subtitles, audio tracks, playback speed, aspect ratio, chapter previews, channel groups, and programme guides.

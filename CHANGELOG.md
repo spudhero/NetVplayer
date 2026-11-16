@@ -2,11 +2,13 @@
 
 This file records user-visible release and fix history. For installation requirements and current usage, see the [README](README.md).
 
-- 本地开发版新增入口源解析方式：“自动选择 / Mac 适配优先 / Android 原版优先”，重启生效并显示实际后端；不同路径的历史标识隔离保存。Android 原版仍为实验能力，已记录独立对齐计划与未通过项目，未作为正式发布。
+- 2.0.0 提供来源解析方式：“自动选择 / Mac 适配优先 / Android 原版优先”，重启生效并显示实际后端；不同路径的历史标识隔离保存。Android 首次使用自动准备环境，已知兼容限制见版本说明。
 
 ## 中文
 
-### 未发布
+### [2.0.0](https://github.com/spudhero/NetVplayer/releases/tag/2.0.0)（2026-11-16）
+
+正式构建号 **51**。新增 Android 执行环境自动下载、完整签名校验、失败重试和离线复用；Python 目录扩展更新至 1.1.13，Android 支持包为 1.1.0。以下保留开发期修订记录，构建 19／20 等编号属于历史构建，具体范围见[发布说明](docs/releases/2.0.0.md)。
 
 - 修复默认自动选择模式下混合视频源配置被整体判为组件格式无效的问题；正常来源继续注册，失败来源显示具体组件原因。修复包构建号为 **2.0.0（20）**。
 - 主干应用版本提升为 **2.0.0（构建号 19）**，完整整合原版运行时、OV91 十项改进与最新 UI 优化。详见[2.0.0 说明](docs/releases/2.0.0.md)，既有真实服务与硬件验收缺口保留。
@@ -259,7 +261,9 @@ This file records user-visible release and fix history. For installation require
 
 ## English
 
-### Unreleased
+### [2.0.0](https://github.com/spudhero/NetVplayer/releases/tag/2.0.0) (2026-11-16)
+
+Release build **51** adds automatic Android environment download, complete signature verification, retry, and offline reuse. Python catalog support is 1.1.13; Android support is 1.1.0. The following development history retains earlier build numbers; see the [release notes](docs/releases/2.0.0.md) for scope and limitations.
 
 - Fix mixed source configurations failing registration in automatic mode. Healthy sources continue registering, and affected sources show the component failure. The fix uses **2.0.0 (build 20)**.
 - Advance the main development application to **2.0.0 (build 19)**, integrating the original runtime, ten OV91 improvements, and the latest UI refinements. See the [2.0.0 notes](docs/releases/2.0.0.md); existing real-service and hardware acceptance gaps remain open.

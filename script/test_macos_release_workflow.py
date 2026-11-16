@@ -317,10 +317,13 @@ else:
         self.assertEqual(info["CFBundleShortVersionString"], "2.0.0")
         self.assertRegex(info["CFBundleVersion"], r"^[1-9][0-9]*$")
         self.assertIn(f"**NetVplayer 2.0.0 (build {info['CFBundleVersion']})**", readme)
-        self.assertIn("| Development application | 2.0.0 (unreleased) |", readme)
+        self.assertNotIn("| Development application |", readme)
         self.assertIn("NetVplayer 1.1.4", readme)
         self.assertIn("**NetVplayer 1.1.4 (build 18)**", readme)
-        self.assertIn("| Stable application | 1.1.4 |", readme)
+        self.assertIn(
+            f"| Stable application | {info['CFBundleShortVersionString']} (build {info['CFBundleVersion']}) |",
+            readme,
+        )
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ Detailed release notes are kept here by version. See the [CHANGELOG](../../CHANG
 
 | 版本 / Version | 发布日期 / Release date |
 | --- | --- |
-| [2.0.0](2.0.0.md) | 未发布 / Unreleased |
+| [2.0.0](2.0.0.md) | 2026-11-16 |
 | [1.1.4](1.1.4.md) | 2026-10-15 |
 | [1.1.3](1.1.3.md) | 2026-10-13 |
 | [1.1.2](1.1.2.md) | 2026-10-12 |
