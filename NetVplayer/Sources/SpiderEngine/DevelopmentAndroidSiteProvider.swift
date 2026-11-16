@@ -1356,7 +1356,12 @@ struct DevelopmentAndroidRuntimeLayout: Sendable {
         }
         files["provider.jar"] = providerArtifact?.original ?? root.appendingPathComponent("inputs/provider.jar")
         files["provider-jvm.jar"] = providerArtifact?.converted ?? root.appendingPathComponent("converted/provider-jvm.jar")
-        for relative in ["inputs/host.apk", "converted/host-jvm.jar", "jdk/bin/java", "evidence.json"] {
+        var runtimeFiles = ["inputs/host.apk", "converted/host-jvm.jar", "jdk/bin/java"]
+        runtimeFiles += (manifest.modules ?? []).flatMap { ["inputs/\($0).apk", "converted/\($0)-jvm.jar"] }
+        if manifest.schema < 3 || FileManager.default.fileExists(atPath: root.appendingPathComponent("evidence.json").path) {
+            runtimeFiles.append("evidence.json")
+        }
+        for relative in runtimeFiles {
             files[relative] = root.appendingPathComponent(relative)
         }
         return try files.mapValues { try Self.digest($0) }
@@ -1458,12 +1463,15 @@ struct DevelopmentAndroidRuntimeLayout: Sendable {
             let directory = relative.isEmpty ? stateDirectory : stateDirectory.appendingPathComponent(relative, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         }
-        let properties = [
+        let modulePaths: [String] = (manifest.modules ?? []).flatMap {
+            ["converted/" + $0 + "-jvm.jar", "inputs/" + $0 + ".apk"]
+        }
+        let hostClassPath = (["converted/host-jvm.jar", "inputs/host.apk"] + modulePaths)
+            .map { root.appendingPathComponent($0).path }.joined(separator: ":")
+        let properties: [(String, String)] = [
             ("dexPath", (providerArtifact?.original ?? root.appendingPathComponent("inputs/provider.jar")).path),
             ("convertedPath", (providerArtifact?.converted ?? root.appendingPathComponent("converted/provider-jvm.jar")).path),
-            ("classPath", (["converted/host-jvm.jar", "inputs/host.apk"] + (manifest.modules ?? []).flatMap {
-                ["converted/" + $0 + "-jvm.jar", "inputs/" + $0 + ".apk"]
-            }).map { root.appendingPathComponent($0).path }.joined(separator: ":")),
+            ("classPath", hostClassPath),
             ("providerClass", binding.className),
             ("sourceIdentity", DevelopmentAndroidSiteProvider.sourceIdentity(key: binding.key, api: binding.api)),
             ("bootstrapClass", manifest.bootstrapClass ?? "com.github.catvod.spider.Init"),

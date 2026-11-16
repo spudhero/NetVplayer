@@ -15,7 +15,8 @@ struct AndroidRuntimeBootstrapAcceptanceTests {
         let release = (index["releases"] as! [[String: Any]])[0]
         let archiveURL = try #require(URL(string: release["archive_url"] as! String))
         let indexURL = URL(string: "https://android-bootstrap-fixture.invalid/index.json")!
-        let work = input.appendingPathComponent("client-" + UUID().uuidString)
+        let work = FileManager.default.temporaryDirectory.appendingPathComponent("bootstrap-client-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: work) }
         let bundleURL = work.appendingPathComponent("Client.bundle")
         try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
         let info: [String: Any] = ["CFBundleIdentifier": "com.netvplayer.bootstrap.acceptance",
