@@ -76,17 +76,46 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         SHA256.hash(data: Data((key + "\0" + api).utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// First-use preparation is shared with configuration loading. A first
+    /// installation can be used immediately; replacing an active runtime still
+    /// retains the existing restart boundary.
+    public static func prepareRuntime(progress: @escaping @Sendable (String) async -> Void = { _ in }) async throws {
+        _ = try await AndroidRuntimeComponentSession.shared.runtime(bundle: .main, progress: progress)
+    }
+
+    public static func cancelRuntimePreparation() async {
+        await AndroidRuntimeComponentSession.shared.cancelPreparation()
+    }
+
     /// The release path uses the pinned component selected at process startup.
     /// Unsigned legacy bundles remain restricted to DEBUG builds.
     public static func registerIfEnabled(
         sites: [Site], bundle: Bundle = .main,
         preference: ProviderExecutionPreference = .automatic,
         baiduCookieProvider: (@Sendable () async -> String?)? = nil,
-        cloudCredentialProvider: (@Sendable (DriveProvider) async -> String?)? = nil
+        cloudCredentialProvider: (@Sendable (DriveProvider) async -> String?)? = nil,
+        runtimeProgress: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws {
+        guard sites.contains(where: { AndroidOriginalProviderPolicy.className(for: $0) != nil && !$0.jar.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            if preference == .androidPreferred {
+                for site in sites where AndroidOriginalProviderPolicy.applies(to: site) {
+                    let reason: AndroidOriginalUnavailableReason = AndroidOriginalProviderPolicy.className(for: site) == nil
+                        ? .unsupportedSourceAPI : .missingProviderArtifact
+                    await AndroidOriginalProviderPolicy.registerUnavailable(sites: [site], reason: reason)
+                }
+            }
+            return
+        }
         try await registerIfEnabled(sites: sites, bundle: bundle, preference: preference,
             baiduCookieProvider: baiduCookieProvider, cloudCredentialProvider: cloudCredentialProvider,
-            componentRuntime: { try await AndroidRuntimeComponentSession.shared.runtime(bundle: $0) })
+            componentRuntime: {
+                do { return try await AndroidRuntimeComponentSession.shared.runtime(bundle: $0, progress: runtimeProgress) }
+                catch is CancellationError { throw CancellationError() }
+                catch {
+                    await runtimeProgress("failed")
+                    throw AndroidRuntimePreparationError.failed
+                }
+            })
     }
 
     // Fixtures supply a component selection without consulting the user's
@@ -114,6 +143,12 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             #endif
         } catch {
             await DevelopmentAndroidRuntimeRegistration.shared.shutdownAll()
+            if error is CancellationError { throw error }
+            if error is AndroidRuntimePreparationError {
+                await AndroidOriginalProviderPolicy.registerUnavailable(sites: sites, reason: .preparationFailed,
+                    preservingMacProviders: preference != .androidPreferred)
+                return
+            }
             if preference == .androidPreferred {
                 // Preserve the configuration and let the source show the
                 // actionable component error instead of a generic config error.
@@ -1370,11 +1405,11 @@ struct DevelopmentAndroidRuntimeLayout: Sendable {
         guard data.count <= 1024 * 1024 else { throw DevelopmentAndroidRuntimeError.invalidBundle("Manifest is too large") }
         let manifest = try JSONDecoder().decode(DevelopmentAndroidRuntimeManifest.self, from: data)
         guard ((manifest.schema == 1 && manifest.providerID == "android-runtime-experiment")
-                || (manifest.schema == 2 && manifest.providerID == AndroidRuntimeComponentStore.providerID && componentIdentity != nil)),
+                || ((manifest.schema == 2 || manifest.schema == 3) && manifest.providerID == AndroidRuntimeComponentStore.providerID && componentIdentity != nil)),
               manifest.backend == nil || manifest.backend == "emulated" else {
             throw DevelopmentAndroidRuntimeError.invalidBundle("Expected schema 1 and the explicit emulated development runtime")
         }
-        guard (manifest.schema == 2 || !manifest.bindings.isEmpty),
+        guard (manifest.schema >= 2 || !manifest.bindings.isEmpty),
               manifest.bindings.allSatisfy({ !$0.key.isEmpty && !$0.api.isEmpty && validClassName($0.className) }),
               Set(manifest.bindings.map { DevelopmentAndroidSiteIdentity(key: $0.key, api: $0.api) }).count == manifest.bindings.count,
               manifest.bootstrapClass.map({ $0.isEmpty || validClassName($0) }) ?? true,
@@ -1626,7 +1661,7 @@ actor DevelopmentAndroidRuntimeRegistration {
     ) async throws {
         let revision = UUID()
         registrationRevision = revision
-        let runtime = (preference == .androidPreferred || runtime.manifest.schema == 2) ? runtime.selectingOriginalBindings(sites: sites) : runtime
+        let runtime = (preference == .androidPreferred || runtime.manifest.schema >= 2) ? runtime.selectingOriginalBindings(sites: sites) : runtime
         guard let support = stateRoot ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             throw DevelopmentAndroidRuntimeError.invalidBundle("Application Support is unavailable")
         }
@@ -1682,6 +1717,12 @@ actor DevelopmentAndroidRuntimeRegistration {
             }
             try requireCurrent(revision)
             if failedArtifacts.contains(site.jar) { continue }
+            if runtime.manifest.schema == 3 && site.jar.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                await registry.register(originalKey: site.key, originalAPI: site.api,
+                    provider: AndroidOriginalUnavailableProvider(reason: .missingProviderArtifact))
+                try requireCurrent(revision)
+                continue
+            }
             let effectiveRuntime: DevelopmentAndroidRuntimeLayout
             if forceBundledArtifactForAudit || site.jar.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 effectiveRuntime = runtime

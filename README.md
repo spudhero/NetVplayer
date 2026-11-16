@@ -21,7 +21,7 @@
 
 ![NetVplayer running on macOS](website/assets/home-aurora.webp)
 
-主干开发版本 / Main development version: **NetVplayer 2.0.0 (build 50)**，尚未发布 / unreleased. 功能变化与已知限制见 [2.0.0 开发版说明](docs/releases/2.0.0.md)。
+主干开发版本 / Main development version: **NetVplayer 2.0.0 (build 51)**，尚未发布 / unreleased. 功能变化与已知限制见 [2.0.0 开发版说明](docs/releases/2.0.0.md)。
 
 发布基线 / Release baseline: **NetVplayer 1.1.4 (build 18)**.
 
@@ -83,7 +83,7 @@ TMDB 由正式应用提供项目凭据，普通用户无需填写令牌。配置
 
 兼容的签名 Provider 由应用自动下载、验证和更新，异常时在“设置 → 扩展支持”选择“重新检查”。包版本与兼容说明见 [Provider Releases](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases)。主程序和 SDK 公开，Provider 实现源码保持私有。
 
-Android Provider 的 Java／JNI 实现源码也归入私有库；公开加载接口及经审核的项目原创生成物。外部 Provider JAR、宿主 APK 和包含这些输入的完整本地运行时不随公开应用发布，由使用者提供。公开播放器中的兼容规则资源是私有规则的固定摘要生成物。
+Android Provider 的 Java／JNI 实现源码也归入私有库；公开加载接口及经审核的项目原创生成物。首次使用 Android 来源时，应用自动准备并校验运行环境；Java、框架和宿主等固定依赖从上游获取，来源 JAR 按用户配置下载。外部 Provider JAR、宿主 APK 和包含这些输入的完整运行时不捆绑在公开应用或支持包中。公开播放器中的兼容规则资源是私有规则的固定摘要生成物。
 
 使用 Xcode 和 Homebrew libmpv 依赖从源码构建：
 
@@ -147,7 +147,7 @@ Official builds supply the TMDB application credential; ordinary users do not ne
 
 The app automatically downloads, verifies, and updates compatible signed Providers. Use Settings → Verified Extensions → Check Again if preparation fails. See [Provider Releases](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) for versions and compatibility. The main application and SDK are public; Provider implementation sources remain private.
 
-Android Provider Java/JNI implementation sources also remain private. Public loading interfaces and reviewed project-owned generated artifacts are available. External Provider JARs, host APKs, and complete local runtime packages containing those inputs are user supplied and are excluded from the public application. The player's compatibility resource is a pinned artifact generated from private rules.
+Android Provider Java/JNI implementation sources also remain private. Public loading interfaces and reviewed project-owned generated artifacts are available. On first use, the app automatically prepares and verifies Android support, fetching pinned runtime dependencies directly from upstream and source JARs from user configuration. Third-party Provider JARs, host APKs and complete runtimes containing them are excluded from application and support archives. The player's compatibility resource is a pinned artifact generated from private rules.
 
 Build from source with Xcode and the Homebrew libmpv dependencies using the commands above. Further documentation: [Architecture](ARCHITECTURE.md) · [Provider SDK](provider-sdk/README.md) · [Runners](provider-runners/README.md) · [Packaging credentials](TMDB_SETUP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md).
 

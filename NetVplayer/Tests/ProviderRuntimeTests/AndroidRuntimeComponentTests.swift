@@ -118,6 +118,23 @@ import ProviderSDK
     #expect(try await store.install(directory: f.package(version: "2.0.0")).previousVersion == nil)
 }
 
+@Test func bootstrappedComponentUsesConfiguredArtifactsAndRejectsMissingJAR() async throws {
+    let f = try OriginalComponentFixture(); defer { f.remove() }
+    let store = try f.store()
+    _ = try await store.install(directory: f.package(version: "1.0.0", schema: 3))
+    let runtime = try #require(try await store.activeRuntime())
+    #expect(runtime.manifest.schema == 3)
+    #expect(runtime.manifest.bindings.isEmpty)
+    let site = Site(key: "bootstrap-fixture", name: "Fixture", type: 3, api: "csp_Unconfigured")
+    let registry = SpiderReplacementRegistry()
+    let registration = DevelopmentAndroidRuntimeRegistration(stateRoot: f.root.appendingPathComponent("state"),
+        registry: registry, arguments: [])
+    try await registration.register(runtime: runtime, sites: [site], preference: .automatic)
+    let provider = try #require(await registry.nativeProvider(for: site) as? AndroidOriginalUnavailableProvider)
+    #expect(provider.reason == .missingProviderArtifact)
+    #expect(await !registration.isRegistered(site: site))
+}
+
 private struct OriginalComponentFixture: Sendable {
     let root: URL
     let key = Curve25519.Signing.PrivateKey()
@@ -140,7 +157,7 @@ private struct OriginalComponentFixture: Sendable {
     func write(_ document: SignedProviderManifest, at directory: URL) throws {
         try JSONEncoder.providerCanonical.encode(document).write(to: directory.appendingPathComponent("signed-manifest.json"))
     }
-    func package(version: String, adapter: String = "host", suffix: String = "") throws -> URL {
+    func package(version: String, adapter: String = "host", suffix: String = "", schema: Int = 2) throws -> URL {
         let directory = root.appendingPathComponent(version + suffix)
         let runtime = directory.appendingPathComponent("AndroidProviderRuntime")
         var files = ["lib/android-adapter.jar", "lib/java-runner.jar", "lib/gson.jar", "lib/android-framework.jar", "lib/macapk-loader.jar", "lib/bcprov-fixture.jar",
@@ -152,7 +169,7 @@ private struct OriginalComponentFixture: Sendable {
             try Data((file == "lib/android-adapter.jar" ? adapter : file).utf8).write(to: path)
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: runtime.appendingPathComponent("jdk/bin/java").path)
-        let value: [String: Any] = ["schema": 2, "providerID": "android-original-runtime", "backend": "emulated", "bindings": [],
+        let value: [String: Any] = ["schema": schema, "providerID": "android-original-runtime", "backend": "emulated", "bindings": [],
             "providerSHA256": try ProviderManifestVerifier.sha256(of: runtime.appendingPathComponent("inputs/provider.jar")),
             "hostSHA256": try ProviderManifestVerifier.sha256(of: runtime.appendingPathComponent("inputs/host.apk"))]
         try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]).write(to: runtime.appendingPathComponent("manifest.json"))

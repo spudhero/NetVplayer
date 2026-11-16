@@ -3214,3 +3214,17 @@
 "无法启动磁力播放，请稍后重试或选择其他资源。" = "Magnet playback could not start. Try again later or choose another resource.";
 "未能读取磁力文件信息，请稍后重试或选择其他资源。" = "Could not retrieve the magnet file list. Try again later or choose another resource.";
 "等待磁力文件信息超时，请稍后重试或选择其他资源。" = "Timed out waiting for the magnet file list. Try again later or choose another resource.";
+
+"正在检查 Android 运行组件…" = "Checking Android runtime components…";
+"正在下载 Android 安装组件…" = "Downloading Android installer…";
+"正在准备 Java 运行环境…" = "Preparing Java runtime…";
+"正在准备 Android 兼容框架…" = "Preparing Android compatibility framework…";
+"正在准备 Android 宿主…" = "Preparing Android host…";
+"正在下载 Android 兼容依赖…" = "Downloading Android compatibility dependencies…";
+"正在校验并启用 Android 运行组件…" = "Verifying and activating Android runtime…";
+"Android 运行组件已就绪" = "Android runtime is ready";
+"正在准备 Android 运行组件…" = "Preparing Android runtime…";
+"Android 运行组件准备失败，请检查网络后重试。" = "Android runtime preparation failed. Check your connection and try again.";
+"Android 运行组件准备失败，请在设置中重试自动安装。" = "Android runtime preparation failed. Retry automatic installation in Settings.";
+"自动下载并安装" = "Download and install automatically";
+"首次使用 Android 来源时会自动准备运行组件，也可以在这里提前下载。手动安装或回滚后需重启。" = "Android runtime components are prepared automatically when first needed. You can also download them here. Manual installation or rollback requires a restart.";

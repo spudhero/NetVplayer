@@ -179,12 +179,38 @@ import Testing
     for site in sites { #expect(await registry.nativeProvider(for: site) as? DevelopmentAndroidNativeRouteFixture === native) }
 }
 
+@Test func developmentAndroidPreparationFailurePreservesOtherSourcesAndCanRetry() async throws {
+    let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
+    let bundle = try fixture.bundle(flag: false)
+    let registry = SpiderReplacementRegistry.shared
+    let native = DevelopmentAndroidNativeRouteFixture()
+    var android = fixture.site
+    android.key += "-unavailable"
+    let independent = Site(key: fixture.site.key + "-local", name: "Local", type: 3, api: "netvplayer-local")
+    for site in [fixture.site, independent] {
+        await registry.register(originalKey: site.key, originalAPI: site.api, provider: native)
+    }
+    try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [fixture.site, android, independent], bundle: bundle,
+        componentRuntime: { _ in throw AndroidRuntimePreparationError.failed })
+    for site in [fixture.site, independent] {
+        #expect(await registry.nativeProvider(for: site) as? DevelopmentAndroidNativeRouteFixture === native)
+    }
+    let unavailable = try #require(await registry.nativeProvider(for: android) as? AndroidOriginalUnavailableProvider)
+    #expect(unavailable.reason == .preparationFailed)
+    // The preference must still be honored if the user explicitly chose Android.
+    try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [fixture.site], bundle: bundle, preference: .androidPreferred,
+        componentRuntime: { _ in throw AndroidRuntimePreparationError.failed })
+    #expect(await registry.nativeProvider(for: fixture.site) is AndroidOriginalUnavailableProvider)
+}
+
 @Test func developmentAndroidOriginalInvalidRuntimeShowsComponentFailureWithoutNativeFallback() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
     let bundle = try fixture.bundle(flag: true) // Enabled but missing runtime files.
     let native = DevelopmentAndroidNativeRouteFixture()
     await SpiderReplacementRegistry.shared.register(originalKey: fixture.site.key, originalAPI: fixture.site.api, provider: native)
-    try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [fixture.site], bundle: bundle, preference: .androidPreferred)
+    var site = fixture.site
+    site.jar = "https://fixture.example.test/provider.jar"
+    try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: [site], bundle: bundle, preference: .androidPreferred)
     let selected = try #require(await SpiderReplacementRegistry.shared.nativeProvider(for: fixture.site) as? AndroidOriginalUnavailableProvider)
     #expect(selected.reason == .runtimeInvalid)
     await #expect(throws: ProviderErrorPayload.self) { try await selected.homeContent(site: fixture.site) }

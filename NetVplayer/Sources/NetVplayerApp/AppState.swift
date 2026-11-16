@@ -276,6 +276,7 @@ final class AppState: ObservableObject {
     @Published var androidRuntimePreviousVersion: String?
     @Published var androidRuntimeComponentError: String?
     @Published var androidRuntimeComponentBusy = false
+    @Published var androidRuntimeComponentProgress: String?
     @Published var androidRuntimeComponentRequiresRestart = false
 
     private let providerRuntimeBootstrap: ProviderRuntimeBootstrap?
@@ -892,6 +893,7 @@ final class AppState: ObservableObject {
         if livePreviews.activeCount > 0 { await livePreviews.drain() }
         await localAutomation.shutdown()
         DevelopmentAndroidAppAudit.cancel()
+        await DevelopmentAndroidSiteProvider.cancelRuntimePreparation()
         await DevelopmentAndroidSiteProvider.shutdownAll()
         let epgJob = liveEpgTask
         let jobs = [proxyDetectionTask, initialConfigTask, configurationRefreshTask, providerRuntimeStartupTask,
@@ -1974,6 +1976,7 @@ final class AppState: ObservableObject {
             if let androidProviderRegistrationOverride {
                 try await androidProviderRegistrationOverride(self.sites)
             } else {
+                defer { androidRuntimeComponentBusy = false }
                 try await DevelopmentAndroidSiteProvider.registerIfEnabled(sites: self.sites,
                     preference: activeProviderExecutionPreference, cloudCredentialProvider: { [weak self] drive in
                     await MainActor.run {
@@ -1986,7 +1989,13 @@ final class AppState: ObservableObject {
                         default: return nil
                         }
                     }
+                }, runtimeProgress: { [weak self] phase in
+                    await self?.updateAndroidRuntimePreparation(phase: phase)
                 })
+                if androidRuntimeComponentError == nil {
+                    androidRuntimeComponentBusy = false
+                    await refreshAndroidRuntimeComponent()
+                }
             }
             if let providerID = resolvedInput.providerID {
                 let provider = NodeBundleSiteContentProvider(providerID: providerID)

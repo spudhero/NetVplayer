@@ -23,18 +23,30 @@ public enum AndroidOriginalProviderPolicy {
 
     public static func registerUnavailable(
         sites: [Site], reason: AndroidOriginalUnavailableReason,
+        preservingMacProviders: Bool = false,
         registry: SpiderReplacementRegistry = .shared
     ) async {
         for site in sites where applies(to: site) {
+            if preservingMacProviders {
+                if let provider = await registry.exactNativeProvider(for: site),
+                   !(provider is DevelopmentAndroidSiteProvider),
+                   !(provider is AndroidOriginalUnavailableProvider),
+                   !(provider is DevelopmentAndroidArtifactFailureProvider),
+                   !(provider is RemoteSiteContentProvider) { continue }
+                if await registry.exactInstalledRemoteProvider(for: site) != nil { continue }
+            }
             await registry.register(originalKey: site.key, originalAPI: site.api,
                 provider: AndroidOriginalUnavailableProvider(reason: reason))
         }
     }
 }
 
+enum AndroidRuntimePreparationError: Error { case failed }
+
 public enum AndroidOriginalUnavailableReason: String, Sendable {
     case runtimeUnavailable
     case runtimeInvalid
+    case preparationFailed
     case unsupportedSourceAPI
     case missingProviderArtifact
 
@@ -43,6 +55,7 @@ public enum AndroidOriginalUnavailableReason: String, Sendable {
         switch self {
         case .runtimeUnavailable: message = L10n.text("请先在设置中安装 Android 原版运行组件。")
         case .runtimeInvalid: message = L10n.text("Android 原版运行组件校验失败，请重新安装或回滚组件。")
+        case .preparationFailed: message = L10n.text("Android 运行组件准备失败，请在设置中重试自动安装。")
         case .unsupportedSourceAPI: message = L10n.text("此入口的原版脚本或加载接口尚未接入通用运行环境。")
         case .missingProviderArtifact: message = L10n.text("此 Android 入口未提供原始 JAR，请检查配置中的 spider 或 jar。")
         }

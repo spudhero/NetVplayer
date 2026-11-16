@@ -136,7 +136,7 @@ public actor AndroidRuntimeComponentStore {
         try verifier.verify(document, packageRoot: directory)
         let identity = SHA256.hash(data: try JSONEncoder.providerCanonical.encode(m)).map { String(format: "%02x", $0) }.joined()
         let runtime = try DevelopmentAndroidRuntimeLayout.load(root: directory.appendingPathComponent("AndroidProviderRuntime"), componentIdentity: identity)
-        guard runtime.manifest.schema == 2, runtime.manifest.providerID == Self.providerID else {
+        guard (runtime.manifest.schema == 2 || runtime.manifest.schema == 3), runtime.manifest.providerID == Self.providerID else {
             throw AndroidRuntimeComponentError.invalidPackage
         }
         return runtime
@@ -242,15 +242,29 @@ public actor AndroidRuntimeComponentStore {
 actor AndroidRuntimeComponentSession {
     static let shared = AndroidRuntimeComponentSession()
     private var selections: [URL: Task<DevelopmentAndroidRuntimeLayout?, Error>] = [:]
-    func runtime(bundle: Bundle) async throws -> DevelopmentAndroidRuntimeLayout? {
+    func cancelPreparation() async {
+        for task in selections.values { task.cancel() }
+        await AndroidRuntimeBootstrap.shared.cancel()
+    }
+    func runtime(bundle: Bundle, progress: @escaping AndroidRuntimeBootstrap.Progress = { _ in }) async throws -> DevelopmentAndroidRuntimeLayout? {
         if let cached = selections[bundle.bundleURL] { return try await cached.value }
         // Publish the load before awaiting it: concurrent config loads must all
         // observe one selection, even if settings activates an update meanwhile.
         let load = Task<DevelopmentAndroidRuntimeLayout?, Error> {
-            guard FileManager.default.fileExists(atPath: AndroidRuntimeComponentStore.defaultRoot.appendingPathComponent("selection.json").path) else { return nil }
+            if !FileManager.default.fileExists(atPath: AndroidRuntimeComponentStore.defaultRoot.appendingPathComponent("selection.json").path) {
+                try await AndroidRuntimeBootstrap.shared.prepare(bundle: bundle, progress: progress)
+            }
             return try await AndroidRuntimeComponentStore.application(bundle: bundle).activeRuntime()
         }
         selections[bundle.bundleURL] = load
-        return try await load.value
+        do {
+            let runtime = try await load.value
+            if runtime == nil { selections[bundle.bundleURL] = nil }
+            return runtime
+        } catch {
+            // A transient download failure must not poison this process.
+            selections[bundle.bundleURL] = nil
+            throw error
+        }
     }
 }

@@ -46,6 +46,9 @@ PRIVATE_TEST_FILES = {
     "NetVplayer/Tests/ConfigEngineTests/WoggMirrorFallbackTests.swift",
 }
 INTERNAL_MIGRATION_FILES = {
+    "script/build_android_bootstrap_release.py",
+    "script/publish_android_bootstrap_release.py",
+    "script/test_android_bootstrap.py",
     "script/build_android_runtime_component.py",
     "script/test_android_runtime_component.py",
     "script/build_android_compatibility_policy.py",

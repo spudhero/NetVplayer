@@ -32,7 +32,7 @@ struct AndroidRuntimeComponentSettingsView: View {
             if appState.androidRuntimeComponentBusy {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(L10n.text("正在验证并准备组件…")).font(.caption)
+                    Text(appState.androidRuntimeComponentProgress ?? L10n.text("正在验证并准备组件…")).font(.caption)
                 }
                 .accessibilityElement(children: .combine)
             }
@@ -41,12 +41,12 @@ struct AndroidRuntimeComponentSettingsView: View {
             }
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { installButton; rollbackButton }
-                VStack(alignment: .leading, spacing: 8) { installButton; rollbackButton }
+                HStack(spacing: 10) { automaticButton; installButton; rollbackButton }
+                VStack(alignment: .leading, spacing: 8) { automaticButton; installButton; rollbackButton }
             }
             .disabled(appState.androidRuntimeComponentBusy)
 
-            Text(L10n.text("选择解压后的签名组件文件夹。安装、更新或回滚后，重启才能使用。"))
+            Text(L10n.text("首次使用 Android 来源时会自动准备运行组件，也可以在这里提前下载。手动安装或回滚后需重启。"))
                 .font(.caption).foregroundStyle(palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -64,8 +64,18 @@ struct AndroidRuntimeComponentSettingsView: View {
         .task { if loadOnAppear { await appState.refreshAndroidRuntimeComponent() } }
     }
 
+    @ViewBuilder private var automaticButton: some View {
+        if !appState.hasBundledAndroidProviderRuntime {
+            Button(L10n.text("自动下载并安装")) {
+                Task { await appState.prepareAndroidRuntimeAutomatically() }
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("settings.android-component.automatic")
+        }
+    }
+
     @ViewBuilder private var installButton: some View {
-        if installIsPrimary {
+        if installIsPrimary && appState.hasBundledAndroidProviderRuntime {
             installAction.buttonStyle(.borderedProminent)
         } else {
             installAction.buttonStyle(.bordered)
