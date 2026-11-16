@@ -195,7 +195,7 @@ else:
     def test_release_verifies_pinned_libmpv_on_supported_runner_and_checks_macos14_minimum(self) -> None:
         required = (
             "libmpv-runtime:",
-            "runs-on: macos-15",
+            "runs-on: macos-26",
             "gh release download 1.1.2 --repo spudhero/NetVplayer",
             "e03ebba79d6b396f837eca1f93462be69f99f0a3ef58d1f2d0b5ea1592d669fb",
             "shasum -a 256 --check",
