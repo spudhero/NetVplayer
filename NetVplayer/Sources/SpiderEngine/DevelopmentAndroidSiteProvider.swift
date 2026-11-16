@@ -1304,6 +1304,7 @@ struct DevelopmentAndroidRuntimeManifest: Decodable, Sendable {
     let bootstrapClass: String?
     let package: String?
     var compatibility: AndroidCompatibilityPolicy? = nil
+    var modules: [String]? = nil
 }
 
 struct DevelopmentAndroidRuntimeLayout: Sendable {
@@ -1381,10 +1382,12 @@ struct DevelopmentAndroidRuntimeLayout: Sendable {
             guard let name = AndroidOriginalProviderPolicy.className(for: site) else { return nil }
             return .init(key: site.key, api: site.api, className: name)
         }
-        let selected = DevelopmentAndroidRuntimeManifest(schema: manifest.schema,
+        var selected = DevelopmentAndroidRuntimeManifest(schema: manifest.schema,
             providerID: manifest.providerID, backend: manifest.backend,
             providerSHA256: manifest.providerSHA256, hostSHA256: manifest.hostSHA256,
             bindings: bindings, bootstrapClass: manifest.bootstrapClass, package: manifest.package)
+        selected.compatibility = manifest.compatibility
+        selected.modules = manifest.modules
         return Self(root: root, manifest: selected, classPath: classPath, providerArtifact: providerArtifact, componentIdentity: componentIdentity)
     }
 
@@ -1424,6 +1427,14 @@ struct DevelopmentAndroidRuntimeLayout: Sendable {
         }
         _ = try containedFile("converted/provider-jvm.jar", root: root)
         _ = try containedFile("converted/host-jvm.jar", root: root)
+        guard manifest.modules?.allSatisfy({ $0 == "quickjs" }) ?? true,
+              Set(manifest.modules ?? []).count == (manifest.modules ?? []).count else {
+            throw DevelopmentAndroidRuntimeError.invalidBundle("Unsupported runtime modules")
+        }
+        for module in manifest.modules ?? [] {
+            _ = try containedFile("inputs/" + module + ".apk", root: root)
+            _ = try containedFile("converted/" + module + "-jvm.jar", root: root)
+        }
         let java = try containedFile("jdk/bin/java", root: root)
         guard FileManager.default.isExecutableFile(atPath: java.path) else {
             throw DevelopmentAndroidRuntimeError.invalidBundle("Bundled Java is not executable")
@@ -1450,7 +1461,9 @@ struct DevelopmentAndroidRuntimeLayout: Sendable {
         let properties = [
             ("dexPath", (providerArtifact?.original ?? root.appendingPathComponent("inputs/provider.jar")).path),
             ("convertedPath", (providerArtifact?.converted ?? root.appendingPathComponent("converted/provider-jvm.jar")).path),
-            ("classPath", ["converted/host-jvm.jar", "inputs/host.apk"].map { root.appendingPathComponent($0).path }.joined(separator: ":")),
+            ("classPath", (["converted/host-jvm.jar", "inputs/host.apk"] + (manifest.modules ?? []).flatMap {
+                ["converted/" + $0 + "-jvm.jar", "inputs/" + $0 + ".apk"]
+            }).map { root.appendingPathComponent($0).path }.joined(separator: ":")),
             ("providerClass", binding.className),
             ("sourceIdentity", DevelopmentAndroidSiteProvider.sourceIdentity(key: binding.key, api: binding.api)),
             ("bootstrapClass", manifest.bootstrapClass ?? "com.github.catvod.spider.Init"),

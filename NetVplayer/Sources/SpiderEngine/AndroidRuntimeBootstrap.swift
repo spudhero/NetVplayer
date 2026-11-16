@@ -86,7 +86,7 @@ actor AndroidRuntimeBootstrap {
         await distribution.removeTemporaryPackage(downloaded)
     }
 
-    private static func runInstaller(installed: URL, assembled: URL, cache: URL,
+    static func runInstaller(installed: URL, assembled: URL, cache: URL,
                                      progress: @escaping Progress) async throws {
         let worker = Task.detached(priority: .utility) {
             let process = Process()

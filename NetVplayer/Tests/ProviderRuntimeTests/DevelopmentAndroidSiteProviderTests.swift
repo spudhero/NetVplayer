@@ -228,6 +228,21 @@ import Testing
     }
 }
 
+@Test func developmentAndroidRuntimePreservesValidatedModulePathsWhenSelectingSources() throws {
+    let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
+    for file in ["inputs/quickjs.apk", "converted/quickjs-jvm.jar"] {
+        try Data("controlled module".utf8).write(to: fixture.runtime.appendingPathComponent(file))
+    }
+    try fixture.writeManifest(changes: ["modules": ["quickjs"]])
+    let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
+    let selected = runtime.selectingOriginalBindings(sites: [fixture.site])
+    #expect(selected.manifest.modules == ["quickjs"])
+    let command = try selected.command(binding: #require(selected.manifest.bindings.first), stateDirectory: fixture.state)
+    #expect(command.arguments.contains { $0.hasPrefix("-Dnetvplayer.android.classPath=") && $0.contains("converted/quickjs-jvm.jar") && $0.contains("inputs/quickjs.apk") })
+    try fixture.writeManifest(changes: ["modules": ["../outside"]])
+    #expect(throws: (any Error).self) { try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime) }
+}
+
 @Test func developmentAndroidRegistrationIsExactAndSurvivesProcessShutdown() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture()
     defer { fixture.remove() }
