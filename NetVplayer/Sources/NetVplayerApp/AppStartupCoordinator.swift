@@ -41,7 +41,11 @@ enum AppStartup {
             validate: { state in
                 if state.startupServiceFailed { throw StartupServiceFailure.unavailable }
             },
-            cleanup: { try await $0.prepareForApplicationTermination() },
+            cleanup: {
+                if visual != nil { print("Visual capture: cleaning up application state") }
+                try await $0.prepareForApplicationTermination()
+                if visual != nil { print("Visual capture: application cleanup complete") }
+            },
             onReady: { state in
                 if let androidAudit {
                     DevelopmentAndroidAppAudit.start(androidAudit, state: state)

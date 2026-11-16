@@ -82,6 +82,13 @@ A capture written before a blocked exit still fails the startup gate. When updat
 an empty release draft, explicitly keep both `tag_name` and `target_commitish`;
 verify lookup by the exact version before dispatching preparation.
 
+The public gate also runs `script/verify_app_termination.py --output <new-directory>`
+on macOS. It embeds the production quit delegate method in an isolated AppKit app
+and exercises concurrent quit, cleanup failure/retry, and restart handoff. Quit
+first returns `terminateCancel`, awaits cleanup on the normal event loop, then
+requests termination again; `terminateLater` can enter a modal loop before the
+MainActor cleanup task runs. This check creates no NetVplayer account or settings.
+
 Before fixing the official tag, the `Release macOS app` workflow can prepare the
 same verified assets manually from `main`, with the application version as its
 `version` input. The exact commit must pass the public gate before packaging, and the

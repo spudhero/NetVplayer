@@ -106,15 +106,17 @@ final class NetVplayerAppDelegate: NSObject, NSApplicationDelegate {
         // restart's helper/SDK handoff. That owner requests termination again afterwards.
         if restartHandoffPending { return .terminateCancel }
         if startup.phase == .stopped { return .terminateNow }
-        guard terminationReplyTask == nil else { return .terminateLater }
+        guard terminationReplyTask == nil else { return .terminateCancel }
         let cleanup = startup.terminate()
         terminationReplyTask = Task { @MainActor in
             let completed = await cleanup.value
             self.terminationReplyTask = nil
-            sender.reply(toApplicationShouldTerminate: completed && !self.restartHandoffPending)
+            if completed && !self.restartHandoffPending { sender.terminate(nil) }
             if !completed { self.showMainWindowIfNeeded() }
         }
-        return .terminateLater
+        // terminateLater enters AppKit's modal run loop, which can starve the
+        // MainActor cleanup task. Retry after cleanup on the normal event loop.
+        return .terminateCancel
     }
 
     private var restartHandoffPending: Bool {

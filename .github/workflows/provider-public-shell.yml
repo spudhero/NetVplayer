@@ -54,6 +54,8 @@ on:
       - "script/test_macos_release_workflow.py"
       - "script/verify_packaged_app_startup.py"
       - "script/test_packaged_app_startup.py"
+      - "script/verify_app_termination.py"
+      - "script/fixtures/application_termination.swift"
       - "script/test_app_update_release.py"
       - "script/validate_app_update_feed.py"
       - "script/validate_macos_release_version.py"
@@ -96,6 +98,9 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+
+      - name: Verify native asynchronous application termination
+        run: python3 script/verify_app_termination.py --output "$RUNNER_TEMP/application-termination"
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
