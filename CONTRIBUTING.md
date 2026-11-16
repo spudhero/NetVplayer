@@ -95,6 +95,11 @@ Both choices execute the same complete gate; capacity failure without executed
 steps provides no test acceptance. The release still requires a successful gate
 for its exact source commit and separately checks packaged macOS 14 deployment targets.
 
+The WebKit rule diagnostic contract emits its media candidates from a later rule
+script, after the earlier script's completion is recorded. Page-owned media may
+legitimately complete sniffing before load-finished scripts run. CI checks this
+contract before the full Swift suite, reusing the same SwiftPM build.
+
 Before fixing the official tag, the `Release macOS app` workflow can prepare the
 same verified assets manually from `main`, with the application version as its
 `version` input. The exact commit must pass the public gate before packaging, and the

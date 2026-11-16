@@ -199,6 +199,13 @@ jobs:
       - name: Verify the CI regression runner
         run: python3 -m unittest script/test_run_swift_regression.py
 
+      # Fail early on the WebKit diagnostic contract before the complete suite.
+      # SwiftPM reuses this build for the complete regression below.
+      - name: Verify WebKit rule diagnostic ordering
+        run: >-
+          swift test --package-path NetVplayer --disable-sandbox --no-parallel
+          --filter diagnosticsHashRuleScriptsAndRecordRejectedChecks
+
       - name: Run serial SwiftPM regression
         run: >-
           python3 script/run_swift_regression.py --require-summary --

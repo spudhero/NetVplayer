@@ -239,8 +239,14 @@ struct WebMediaRuleContractTests {
         let base = ProcessInfo.processInfo.environment["NETVPLAYER_WEB_RULE_EVIDENCE_DIR"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.temporaryDirectory
         let directory = base.appendingPathComponent("rule-diagnostic-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let policy = WebMediaPolicy(rules: [Rule(hosts: ["127.0.0.1"], script: ["window.privateRule='rule-secret'"])], check: { $0.contains("/stream/opaque") })
-        _ = try await WebViewSniffer(diagnosticDirectory: directory).sniff(url: server.url("/page/spider"), timeout: 2, policy: policy)
+        // Page-owned media can finish the session before didFinish runs its scripts.
+        // Discover media from the second script so the first script's hash must
+        // already be recorded, independent of WebKit's page-load timing.
+        let scripts = ["window.privateRule='rule-secret'",
+                       "fetch('/decoy/movie.mp4'); fetch('/stream/opaque')"]
+        let policy = WebMediaPolicy(rules: [Rule(hosts: ["127.0.0.1"], script: scripts)], check: { $0.contains("/stream/opaque") })
+        let spec = try await WebViewSniffer(diagnosticDirectory: directory).sniff(url: server.url("/page/frame"), timeout: 2, policy: policy)
+        #expect(spec.url == server.url("/stream/opaque"))
         let file = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
         let data = try Data(contentsOf: file)
         let text = String(data: data, encoding: .utf8)!
@@ -250,7 +256,7 @@ struct WebMediaRuleContractTests {
         #expect(report["schema"] as? Int == 7 && events.count <= 128)
         #expect(events.contains { $0["stage"] as? String == "mediaCheck" && $0["accepted"] as? Bool == false })
         #expect(events.contains { $0["stage"] as? String == "mediaCheck" && $0["accepted"] as? Bool == true })
-        #expect(events.contains { $0["stage"] as? String == "ruleScript" && ($0["scriptSHA256"] as? String)?.count == 64 })
+        #expect(events.contains { $0["stage"] as? String == "ruleScript" && $0["index"] as? Int == 0 && ($0["scriptSHA256"] as? String)?.count == 64 })
     }
 
 
