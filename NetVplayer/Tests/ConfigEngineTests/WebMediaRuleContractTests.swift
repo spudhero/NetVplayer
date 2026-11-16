@@ -239,13 +239,23 @@ struct WebMediaRuleContractTests {
         let base = ProcessInfo.processInfo.environment["NETVPLAYER_WEB_RULE_EVIDENCE_DIR"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.temporaryDirectory
         let directory = base.appendingPathComponent("rule-diagnostic-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            // Keep standalone CI failures actionable without logging URLs or scripts.
+            if let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil),
+               let file = files.first, let data = try? Data(contentsOf: file),
+               let report = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let events = report["events"] as? [[String: Any]] {
+                print("Web media diagnostic stages: " + events.compactMap { $0["stage"] as? String }.joined(separator: ","))
+            }
+        }
         // Page-owned media can finish the session before didFinish runs its scripts.
         // Discover media from the second script so the first script's hash must
         // already be recorded, independent of WebKit's page-load timing.
         let scripts = ["window.privateRule='rule-secret'",
                        "fetch('/decoy/movie.mp4'); fetch('/stream/opaque')"]
         let policy = WebMediaPolicy(rules: [Rule(hosts: ["127.0.0.1"], script: scripts)], check: { $0.contains("/stream/opaque") })
-        let spec = try await WebViewSniffer(diagnosticDirectory: directory).sniff(url: server.url("/page/frame"), timeout: 2, policy: policy)
+        // This test also runs alone, before WebKit's processes have been started.
+        let spec = try await WebViewSniffer(diagnosticDirectory: directory).sniff(url: server.url("/page/frame"), timeout: 10, policy: policy)
         #expect(spec.url == server.url("/stream/opaque"))
         let file = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
         let data = try Data(contentsOf: file)
