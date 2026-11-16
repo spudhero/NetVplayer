@@ -2,6 +2,15 @@ name: Provider public shell
 
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "macOS runner (use 26 when the 15 ARM64 pool lacks capacity)"
+        required: false
+        default: macos-15
+        type: choice
+        options:
+          - macos-15
+          - macos-26
   push:
     branches:
       - main
@@ -77,7 +86,7 @@ permissions:
 
 jobs:
   public-shell:
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -89,6 +89,12 @@ first returns `terminateCancel`, awaits cleanup on the normal event loop, then
 requests termination again; `terminateLater` can enter a modal loop before the
 MainActor cleanup task runs. This check creates no NetVplayer account or settings.
 
+Push regression uses `macos-15`. If GitHub cannot allocate that runner pool,
+manually dispatch `Provider public shell` on the same commit with `runner=macos-26`.
+Both choices execute the same complete gate; capacity failure without executed
+steps provides no test acceptance. The release still requires a successful gate
+for its exact source commit and separately checks packaged macOS 14 deployment targets.
+
 Before fixing the official tag, the `Release macOS app` workflow can prepare the
 same verified assets manually from `main`, with the application version as its
 `version` input. The exact commit must pass the public gate before packaging, and the
