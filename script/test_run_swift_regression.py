@@ -36,6 +36,19 @@ class SwiftRegressionRunnerTests(unittest.TestCase):
                         'print("✔ Test run with 10 tests passed after 0.1 seconds."); ') * count
                 self.assertEqual(self.run_child(code).returncode, 0)
 
+    def test_completed_summary_accepts_optional_suite_counts(self):
+        for summary in ("1 test in 1 suite", "2246 tests in 233 suites", "22,046 tests in 2,233 suites"):
+            with self.subTest(summary=summary):
+                code = ('print("◇ Test run started."); '
+                        f'print("✔ Test run with {summary} passed after 684.426 seconds.")')
+                result = self.run_child(code)
+                self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_failed_summary_with_suite_counts_is_rejected(self):
+        code = ('print("◇ Test run started."); '
+                'print("✘ Test run with 2246 tests in 233 suites failed after 1 second with 1 issue.")')
+        self.assertEqual(self.run_child(code).returncode, 125)
+
     def test_zero_exit_without_any_test_run_is_rejected(self):
         self.assertEqual(self.run_child('pass').returncode, 125)
 

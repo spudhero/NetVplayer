@@ -58,7 +58,7 @@ def main():
         nonlocal started, completed
         line = re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]', b'', line)
         started += int(b'Test run started.' in line)
-        completed += int(re.search(rb'Test run with [0-9,]+ tests? passed', line) is not None)
+        completed += int(re.search(rb'Test run with [0-9,]+ tests?(?: in [0-9,]+ suites?)? passed\b', line) is not None)
     try:
         while True:
             for key, _ in selector.select(timeout=min(1, args.idle_timeout)):
