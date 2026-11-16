@@ -78,7 +78,7 @@ final class NetVplayerAppDelegate: NSObject, NSApplicationDelegate {
 
         StartupWindowProbe.scheduleIfRequested()
         #endif
-        if DevelopmentAndroidAppAudit.current != nil {
+        if DevelopmentAndroidAppAudit.current != nil || PlayerVisualRegressionConfiguration.current != nil {
             // Explicit acceptance runs must also start when scene restoration
             // does not attach StartupRootView. The coordinator is idempotent
             // with the view's ordinary startIfNeeded task.

@@ -40,16 +40,28 @@ def verify(app: Path, build_resources: Path, output: Path) -> dict:
     capture = output / "startup.png"
     # This existing mode skips saved-state restoration, providers, diagnostics and
     # update checks, but still executes AppState's real theme publication path.
-    command = ["/usr/bin/open", "-n", "-W", str(app), "--args",
+    command = ["/usr/bin/open", "-n", "-F", "-W",
+               "--env", "NSUnbufferedIO=YES",
+               "--stdout", str((output / "app.stdout.log").resolve()),
+               "--stderr", str((output / "app.stderr.log").resolve()), str(app), "--args",
                "--visual-regression-player", "normal",
                "--visual-regression-viewport", "1200x675",
                "--visual-regression-output", str(capture.resolve())]
-    with hidden_build_resources(build_resources):
-        subprocess.run(command, check=True, timeout=90, capture_output=True, text=True)
-        data = capture.read_bytes()
-        if (len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR"
-                or struct.unpack(">II", data[16:24]) != (1200, 675)):
-            raise ValueError("packaged app did not produce the expected startup capture")
+    launch_completed = False
+    try:
+        with hidden_build_resources(build_resources):
+            subprocess.run(command, check=True, timeout=90, capture_output=True, text=True)
+            launch_completed = True
+            data = capture.read_bytes()
+            if (len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR"
+                    or struct.unpack(">II", data[16:24]) != (1200, 675)):
+                raise ValueError("packaged app did not produce the expected startup capture")
+    except Exception as error:
+        failure = {"failure_type": type(error).__name__, "launch_completed": launch_completed,
+                   "capture_exists": capture.is_file(),
+                   "build_resources_restored": build_resources.is_dir()}
+        (output / "failure.json").write_text(json.dumps(failure, indent=2) + "\n")
+        raise
     receipt = {"packaged_app_started": True, "swiftpm_build_resources_hidden": True,
                "build_resources_restored": build_resources.is_dir(), "capture": capture.name,
                "viewport": [1200, 675]}

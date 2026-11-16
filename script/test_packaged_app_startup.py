@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import struct
@@ -27,10 +28,14 @@ class PackagedAppStartupTests(unittest.TestCase):
         self.output = self.root / "result"
 
     def launched(self, command, **kwargs):
-        self.assertEqual(command[:4], ["/usr/bin/open", "-n", "-W", str(self.app)])
+        self.assertEqual(command[:4], ["/usr/bin/open", "-n", "-F", "-W"])
+        self.assertEqual(command[command.index("--args") - 1], str(self.app))
+        for option, name in [("--stdout", "app.stdout.log"), ("--stderr", "app.stderr.log")]:
+            self.assertEqual(Path(command[command.index(option) + 1]).name, name)
         self.assertFalse(self.build.exists())
         self.assertTrue((self.app / "Contents/Resources/NetVplayer_NetVplayerApp.bundle").is_dir())
         self.assertEqual(kwargs["timeout"], 90)
+        self.assertEqual(command[command.index("--env") + 1], "NSUnbufferedIO=YES")
         return Path(command[command.index("--visual-regression-output") + 1])
 
     @patch.dict(os.environ, {"CI": "true"})
@@ -60,6 +65,23 @@ class PackagedAppStartupTests(unittest.TestCase):
                         verify(self.app, self.build, output)
                 self.assertEqual((self.build / "original").read_bytes(), b"preserve")
                 self.assertFalse((output / "result.json").exists())
+                receipt = json.loads((output / "failure.json").read_text())
+                self.assertFalse(receipt["capture_exists"])
+                self.assertTrue(receipt["build_resources_restored"])
+
+    @patch.dict(os.environ, {"CI": "true"})
+    def test_capture_written_before_exit_timeout_remains_a_failure_with_evidence(self):
+        def launch(command, **kwargs):
+            self.launched(command, **kwargs).write_bytes(b"capture before blocked exit")
+            raise subprocess.TimeoutExpired("open", 90)
+        with patch("script.verify_packaged_app_startup.subprocess.run", side_effect=launch):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                verify(self.app, self.build, self.output)
+        receipt = json.loads((self.output / "failure.json").read_text())
+        self.assertTrue(receipt["capture_exists"])
+        self.assertFalse(receipt["launch_completed"])
+        self.assertTrue(receipt["build_resources_restored"])
+        self.assertFalse((self.output / "result.json").exists())
 
     @patch.dict(os.environ, {"CI": "false"})
     def test_refuses_to_move_a_developer_build_outside_isolated_ci(self):

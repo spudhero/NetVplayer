@@ -75,6 +75,13 @@ a rendered capture. The probe restores the build resources on failure as well as
 success; moving those resources is restricted to an isolated CI runner. Publishing
 that reviewed draft is a separate step.
 
+The visual acceptance mode starts its coordinator from the application delegate
+even when no SwiftUI root view is mounted. CI launches a fresh instance and retains
+stdout, stderr, any capture, and a failure receipt even when the probe times out.
+A capture written before a blocked exit still fails the startup gate. When updating
+an empty release draft, explicitly keep both `tag_name` and `target_commitish`;
+verify lookup by the exact version before dispatching preparation.
+
 Before fixing the official tag, the `Release macOS app` workflow can prepare the
 same verified assets manually from `main`, with the application version as its
 `version` input. The exact commit must pass the public gate before packaging, and the

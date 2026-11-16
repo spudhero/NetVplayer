@@ -31,6 +31,7 @@ enum AppStartup {
             factory: { choice in
                 if let androidAudit { return DevelopmentAndroidAppAudit.makeState(androidAudit) }
                 let restore = choice == .restore && visual == nil && !isolatedAudit
+                if visual != nil { print("Visual capture: initializing application state") }
                 let state = AppState(loadDefaultConfig: restore, startProxyServer: visual == nil,
                                      startProviderRuntime: restore,
                                      deferStartupRestoration: choice == .deferRestoration)
@@ -46,8 +47,10 @@ enum AppStartup {
                     DevelopmentAndroidAppAudit.start(androidAudit, state: state)
                     return
                 }
-                if let visual { PlayerVisualRegressionCaptureController.schedule(configuration: visual) }
-                else {
+                if let visual {
+                    print("Visual capture: application state ready")
+                    PlayerVisualRegressionCaptureController.schedule(configuration: visual)
+                } else {
                     FeedbackReportFileStore.cleanupExpiredReports()
                     AppUpdateCoordinator.shared.start()
                 }

@@ -15,7 +15,10 @@ enum PlayerVisualRegressionCaptureController {
 
     private static func presentRenderingWindow(configuration: PlayerVisualRegressionConfiguration) {
         let contentRect = NSRect(origin: .zero, size: configuration.viewport)
-        guard let appState = AppStartup.shared.runtime, AppStartup.shared.phase == .ready else { return }
+        guard let appState = AppStartup.shared.runtime, AppStartup.shared.phase == .ready else {
+            fail("visual capture requires a ready application state")
+        }
+        print("Visual capture: presenting rendering window")
         let rootView = PlayerView(
             playerState: appState.playerState,
             windowContext: PlayerWindowContext(),
