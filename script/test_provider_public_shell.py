@@ -145,6 +145,7 @@ def main() -> int:
             "script/test_audit_torrent_bridge_licenses.py",
             "script/test_apply_torrent_bridge_replacements.py",
             "script/test_macos_release_workflow.py",
+            "script/test_packaged_app_startup.py",
             "script/test_app_update_release.py",
             "script/test_package_sentry_resources.py",
             "script/test_package_tmdb_credentials.py",

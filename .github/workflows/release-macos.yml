@@ -383,10 +383,23 @@ jobs:
             --require-mach-o
           python3 script/audit_source_free_app.py --repo . --app-bundle "$extracted_app"
 
+          build_bin="$(swift build --package-path NetVplayer --configuration release --show-bin-path)"
+          python3 script/verify_packaged_app_startup.py \
+            --app-bundle "$extracted_app" \
+            --build-resources "$build_bin/NetVplayer_NetVplayerApp.bundle" \
+            --output "$release_root/startup-smoke"
+
           cp dist/sbom/NetVplayer.build-artifacts.json "$asset_output/"
           cp dist/sbom/NetVplayer.cdx.json "$asset_output/"
           cp dist/sbom/NetVplayer.spdx.json "$asset_output/"
           echo "asset-output=$asset_output" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve packaged startup acceptance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NetVplayer-${{ env.RELEASE_VERSION }}-startup-smoke
+          path: ${{ runner.temp }}/netvplayer-release/startup-smoke
+          if-no-files-found: error
 
       - name: Generate matching Sentry debug symbols
         shell: bash

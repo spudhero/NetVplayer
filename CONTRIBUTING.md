@@ -69,7 +69,11 @@ Official macOS releases use a `MAJOR.MINOR.PATCH` tag on `main`. The tag must
 match `CFBundleShortVersionString`; the build number must also advance. Pushing
 the tag triggers the release workflow, which creates a draft only after the packaged
 and re-extracted application passes architecture, version, signature, SBOM,
-checksum, and source-free checks. Publishing that reviewed draft is a separate step.
+checksum, and source-free checks. It also launches the extracted app in its isolated
+visual mode with the SwiftPM build resource fallback temporarily hidden, and requires
+a rendered capture. The probe restores the build resources on failure as well as
+success; moving those resources is restricted to an isolated CI runner. Publishing
+that reviewed draft is a separate step.
 
 Before fixing the official tag, the `Release macOS app` workflow can prepare the
 same verified assets manually from `main`, with the application version as its

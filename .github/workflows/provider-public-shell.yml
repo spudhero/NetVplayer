@@ -52,6 +52,8 @@ on:
       - "script/test_audit_torrent_bridge_licenses.py"
       - "script/test_apply_torrent_bridge_replacements.py"
       - "script/test_macos_release_workflow.py"
+      - "script/verify_packaged_app_startup.py"
+      - "script/test_packaged_app_startup.py"
       - "script/test_app_update_release.py"
       - "script/validate_app_update_feed.py"
       - "script/validate_macos_release_version.py"

@@ -2,6 +2,8 @@
 
 This file records user-visible release and fix history. For installation requirements and current usage, see the [README](README.md).
 
+- 发布准备：2.0.1（52）修复正式安装包初始化时的 SwiftPM 资源定位崩溃，新增脱离构建缓存的解压 App 启动门禁；[候选说明](docs/releases/2.0.1.md)。
+
 - 2.0.0 提供来源解析方式：“自动选择 / Mac 适配优先 / Android 原版优先”，重启生效并显示实际后端；不同路径的历史标识隔离保存。Android 首次使用自动准备环境，已知兼容限制见版本说明。
 
 ## 中文

@@ -5,8 +5,10 @@ enum AndroidDialogThemePublisher {
     /// Only public appearance tokens cross this boundary. No dialog text,
     /// account state or source configuration is written to this file.
     static func publish(_ palette: AppThemePalette) {
-        guard let archive = Bundle.module.url(forResource: "android-presentation", withExtension: "jar",
-                                               subdirectory: "AndroidPresentation") else { return }
+        guard let archive = AppThemeResourceBundle.bundle.url(
+            forResource: "android-presentation", withExtension: "jar",
+            subdirectory: "AndroidPresentation"
+        ) else { return }
         do {
             let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                 appropriateFor: nil, create: true).appendingPathComponent("NetVplayer/Presentation", isDirectory: true)
