@@ -87,9 +87,12 @@ struct HistoryFileRecoveryTests {
         state.sites = [site]
         state.activeSite = site
         state.isConfigLoaded = true
-        let history = LibraryIdentityMigration.bind(History(siteKey: site.key, vodId: unique, vodName: "History title", vodFlag: "line",
+        var history = LibraryIdentityMigration.bind(History(siteKey: site.key, vodId: unique, vodName: "History title", vodFlag: "line",
                                                             episodeUrl: locator("original-file"), episodeName: "第1集", position: 42_000, duration: 600_000),
                                                    configuration: config, site: site)
+        // Model a record saved by this implementation; legacy mixed records retain their old identity.
+        history.sourceFingerprint = state.librarySourceFingerprint(siteKey: site.key)
+        history.key = LibrarySourceIdentity.key(source: history.sourceFingerprint, siteKey: site.key, vodID: history.vodId)
         state.historyItems = [history]
         return (state, provider, history, directory)
     }
