@@ -186,16 +186,48 @@ func posterTransportDoesNotRetryCertificateOrBodyLimitErrors(code: Int32) async 
 }
 
 @Test func posterDNSCancellationPreservesAnotherConsumer() async throws {
+    let lookup = PosterLookupGate()
+    // Bound a broken cancellation path; normal completion is explicitly released below.
+    let releaseDeadline = Task {
+        try? await Task.sleep(for: .seconds(30))
+        await lookup.release()
+    }
+    defer { releaseDeadline.cancel() }
     let resolver = SourcePosterAddressResolver { _ in
-        try await Task.sleep(for: .milliseconds(100))
+        await lookup.waitForRelease()
+        try Task.checkCancellation()
         return posterDNSResponse(ttl: 1)
     }
     let first = Task { try await resolver.addresses(timeout: 3) }
     let second = Task { try await resolver.addresses(timeout: 3) }
-    try await Task.sleep(for: .milliseconds(20))
+    await lookup.waitUntilStarted()
     first.cancel()
     do { _ = try await first.value; Issue.record("Cancelled consumer must fail") } catch is CancellationError {}
+    await lookup.release()
     #expect(try await second.value == [posterIPv6])
+}
+
+/// Hold the lookup until cancellation has been observed, regardless of executor load.
+private actor PosterLookupGate {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitForRelease() async {
+        started = true
+        startWaiters.forEach { $0.resume() }; startWaiters.removeAll()
+        if !released { await withCheckedContinuation { releaseWaiters.append($0) } }
+    }
+
+    func waitUntilStarted() async {
+        if !started { await withCheckedContinuation { startWaiters.append($0) } }
+    }
+
+    func release() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }; releaseWaiters.removeAll()
+    }
 }
 
 @Test func posterDNSLastConsumerCancelsLookup() async throws {

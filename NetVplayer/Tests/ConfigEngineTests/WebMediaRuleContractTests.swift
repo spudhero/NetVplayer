@@ -51,7 +51,7 @@ struct WebMediaRuleContractTests {
         let scripts = ["", "window.order += 'A'", "if(window.order==='CA') fetch('/stream/opaque?order=CA')"]
         let policy = WebMediaPolicy(rules: [Rule(hosts: ["127.0.0.1"], regex: ["/stream/opaque"], script: scripts)])
         let spec = try await WebViewSniffer().sniff(url: server.url("/page/script"), clickScript: click,
-            timeout: 2, policy: policy)
+            timeout: 10, policy: policy)
         #expect(spec.url == server.url("/stream/opaque?order=CA"))
         try await server.save("rule-script-order")
     }

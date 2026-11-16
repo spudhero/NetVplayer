@@ -96,6 +96,9 @@ struct PlaybackEndedTests {
             #expect(submissions.last?.metadata["vod.episodeURL"] == "second")
         } else if change == "timeout" {
             #expect(state.episodeListState == .incomplete)
+            try #require(state.playerState.endDisposition == .natural)
+            try #require(state.playerState.currentSpec?.metadata["playback.sessionGeneration"]
+                == spec.metadata["playback.sessionGeneration"])
             await state.retryEpisodeList()
             try await waitForPreparedPlayback(state)
             #expect(state.episodeListState == .ready)
