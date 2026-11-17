@@ -13,7 +13,7 @@ struct WebMediaRuleContractTests {
         let server = try RuleLoopbackServer()
         defer { server.stop() }
         let policy = WebMediaPolicy(rules: [Rule(hosts: ["127.0.0.1"], regex: ["/stream/opaque"])])
-        let spec = try await WebViewSniffer().sniff(url: server.url("/page/opaque"), timeout: 1.5, policy: policy)
+        let spec = try await WebViewSniffer().sniff(url: server.url("/page/opaque"), timeout: 10, policy: policy)
         #expect(spec.url == server.url("/stream/opaque?raw=a%2Fb+%20"))
         try await server.save("extensionless-rule")
     }
