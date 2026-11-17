@@ -6,6 +6,10 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [2.0.2](https://github.com/spudhero/NetVplayer/releases/tag/2.0.2)（2026-11-17）
+
+正式构建号 **53**。Mac 实现与 Android 原版严格二选一，取消自动跨实现替换；修复 Mac 模式误触发 Android 准备及失败占位遮蔽来源。Android 采用完整签名环境 1.2.2，通用桥接／构建和固定上游对应源码作为组件附件公开。应用六附件通过原字节复验，既有真实服务和长期播放限制继续保留，见[发布说明](docs/releases/2.0.2.md)。
+
 ### [2.0.1](https://github.com/spudhero/NetVplayer/releases/tag/2.0.1)（2026-11-16）
 
 正式构建号 **52**。修复安装包初始化时资源定位崩溃，以及正常退出时异步清理卡住。
@@ -266,6 +270,10 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [2.0.2](https://github.com/spudhero/NetVplayer/releases/tag/2.0.2) (2026-11-17)
+
+Build **53** isolates Mac and original Android implementations, removes automatic cross-implementation fallback, and fixes unintended Android preparation and masking of Mac sources. Android installs complete signed runtime 1.2.2; generic bridge/build and fixed upstream sources are supplied as runtime release attachments. All six original application assets passed byte-for-byte prepared verification. Existing live-service and sustained-playback limits remain; see the [release notes](docs/releases/2.0.2.md).
 
 ### [2.0.1](https://github.com/spudhero/NetVplayer/releases/tag/2.0.1) (2026-11-16)
 

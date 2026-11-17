@@ -21,18 +21,16 @@
 
 ![NetVplayer running on macOS](website/assets/home-aurora.webp)
 
-候选版本 / Release candidate: **NetVplayer 2.0.2 (build 53)**。修复来源实现隔离与环境准备问题，尚在发布验收。见 [2.0.2 说明](docs/releases/2.0.2.md)。
+当前正式版本 / Current release: **NetVplayer 2.0.2 (build 53)**。修复 Mac／Android 来源实现隔离与环境准备问题，Android 使用完整签名运行环境。见 [2.0.2 发布说明 / Release notes](docs/releases/2.0.2.md)。
 
-当前正式版本 / Current release: **NetVplayer 2.0.1 (build 52)**。修复安装后初始化崩溃与正常退出卡住；2.0.0 用户请升级，无需删除配置或历史。见 [2.0.1 发布说明 / Release notes](docs/releases/2.0.1.md)。
-
-上一正式版本 / Previous release: **NetVplayer 2.0.0 (build 51)**。存在已修复的启动问题，请使用当前版本 / Upgrade to the current release for the startup fix.
+上一正式版本 / Previous release: **NetVplayer 2.0.1 (build 52)**。来源实现隔离问题已在 2.0.2 修复，请升级 / Upgrade to 2.0.2 for isolated source implementations.
 
 | Component | Version |
 | --- | --- |
-| Release candidate | 2.0.2 (build 53) |
-| Stable application | 2.0.1 (build 52) |
+| Stable application | 2.0.2 (build 53) |
 | Python Provider | 1.1.13 |
-| Android support | 1.1.0 |
+| Complete Android runtime | 1.2.2 |
+| Legacy Android installer | 1.1.0 (historical compatibility) |
 
 ## 中文
 
