@@ -35,10 +35,25 @@ struct AndroidRuntimeBootstrapAcceptanceTests {
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel(); BootstrapAcceptanceTransport.install([:]) }
         let client = ProviderDistributionClient(session: session)
-        let phases = BootstrapAcceptancePhases()
-        try await AndroidRuntimeBootstrap.install(bundle: bundle, progress: { await phases.append($0) }, root: root, distribution: client)
         let verifier = try ProviderTrustConfiguration.load(bundle: bundle).manifestVerifier(shellVersion: "2.0.0")
         let store = AndroidRuntimeComponentStore(root: root, verifier: verifier)
+        let previousInput = ProcessInfo.processInfo.environment["NETVPLAYER_ANDROID_BOOTSTRAP_PREVIOUS_ACCEPTANCE"]
+        if let previousInput {
+            let previous = URL(fileURLWithPath: previousInput)
+            let previousIndex = try JSONSerialization.jsonObject(with: Data(contentsOf: previous.appendingPathComponent("index.json"))) as! [String: Any]
+            let previousRelease = ((previousIndex["index"] as! [String: Any])["releases"] as! [[String: Any]])[0]
+            let previousArchive = previous.appendingPathComponent(URL(string: previousRelease["archive_url"] as! String)!.lastPathComponent)
+            let extracted = work.appendingPathComponent("previous-runtime")
+            let unzip = Process()
+            unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            unzip.arguments = ["-x", "-k", previousArchive.path, extracted.path]
+            try unzip.run(); unzip.waitUntilExit()
+            #expect(unzip.terminationStatus == 0)
+            _ = try await store.install(directory: extracted)
+            #expect(!AndroidRuntimeBootstrap.supportsRuntimeVersion(try await store.status().version))
+        }
+        let phases = BootstrapAcceptancePhases()
+        try await AndroidRuntimeBootstrap.install(bundle: bundle, progress: { await phases.append($0) }, root: root, distribution: client)
         #expect(try await store.status().version == release["version"] as? String)
         #expect(try await store.activeRuntime()?.manifest.schema == 3)
         let observed = await phases.values
@@ -52,7 +67,7 @@ struct AndroidRuntimeBootstrapAcceptanceTests {
         try await AndroidRuntimeBootstrap.install(bundle: bundle, progress: { _ in
             Issue.record("Offline reopening must not start preparation")
         }, root: root, distribution: client)
-        let receipt: [String: Any] = ["empty_installation": "passed", "offline_reopen": "passed",
+        let receipt: [String: Any] = ["installation": previousInput == nil ? "empty" : "upgrade", "installation_result": "passed", "offline_reopen": "passed",
             "version": release["version"]!, "phases": observed,
             "archive_sha256": try ProviderManifestVerifier.sha256(of: archive)]
         try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys, .prettyPrinted])

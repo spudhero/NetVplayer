@@ -3,6 +3,15 @@ import Darwin
 import Testing
 @testable import SpiderEngine
 
+@Test func androidBootstrapRequiresTheMatchingOriginalJSRuntime() {
+    for version in [nil, "1.1.0", "1.2.2", "1.2.3"] {
+        #expect(!AndroidRuntimeBootstrap.supportsRuntimeVersion(version))
+    }
+    for version in ["1.2.4", "1.2.5", "1.10.0", "2.0.0"] {
+        #expect(AndroidRuntimeBootstrap.supportsRuntimeVersion(version))
+    }
+}
+
 @Test func androidBootstrapSharesConcurrentPreparation() async throws {
     let probe = BootstrapProbe()
     let bootstrap = AndroidRuntimeBootstrap { _, _ in

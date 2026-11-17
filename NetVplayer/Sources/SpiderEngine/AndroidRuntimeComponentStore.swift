@@ -272,10 +272,11 @@ actor AndroidRuntimeComponentSession {
         // Publish the load before awaiting it: concurrent config loads must all
         // observe one selection, even if settings activates an update meanwhile.
         let load = Task<DevelopmentAndroidRuntimeLayout?, Error> {
-            if !FileManager.default.fileExists(atPath: AndroidRuntimeComponentStore.defaultRoot.appendingPathComponent("selection.json").path) {
+            let store = try AndroidRuntimeComponentStore.application(bundle: bundle)
+            if !AndroidRuntimeBootstrap.supportsRuntimeVersion(try await store.status().version) {
                 try await AndroidRuntimeBootstrap.shared.prepare(bundle: bundle, progress: progress)
             }
-            return try await AndroidRuntimeComponentStore.application(bundle: bundle).activeRuntime()
+            return try await store.activeRuntime()
         }
         selections[bundle.bundleURL] = load
         do {

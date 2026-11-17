@@ -4935,7 +4935,8 @@ final class AppState: ObservableObject {
                 finalSpec = finalSpec.merging(parsedSpec)
                 // A successful browser result may have no file extension. Do
                 // not load that media as another page in the automatic pass.
-                if parsedSpec.headerPolicy == .replace && parsedSpec.url != resolveResult.playUrl + resolveResult.url {
+                if parsedSpec.headerPolicy == .replace && (parsedSpec.url != resolveResult.playUrl + resolveResult.url
+                    || parsedSpec.metadata[ParseEngine.confirmedWebMediaResponseMetadataKey] == "true") {
                     sourceResolvedDirectMedia = true
                 }
                 recordPlaybackStartupStage("secondary-parse", generation: sessionGeneration)

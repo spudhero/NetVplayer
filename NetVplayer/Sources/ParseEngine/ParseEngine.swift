@@ -9,6 +9,8 @@ import Networking
 public final class ParseEngine: @unchecked Sendable {
 
     public static let shared = ParseEngine()
+    /// Set only after WebKit receives a successful main-frame media response.
+    public static let confirmedWebMediaResponseMetadataKey = "web.mediaResponseConfirmed"
 
     private let httpClient: HTTPClient
     private let snifferFactory: @MainActor @Sendable () -> any WebMediaSniffing
@@ -112,7 +114,8 @@ public final class ParseEngine: @unchecked Sendable {
             }
             try Task.checkCancellation()
             guard !spec.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  spec.url != baseSpec.url else { throw WebViewSnifferError.noMediaFound }
+                  spec.url != baseSpec.url || spec.metadata[Self.confirmedWebMediaResponseMetadataKey] == "true"
+            else { throw WebViewSnifferError.noMediaFound }
             var merged = baseSpec.merging(spec)
             if spec.headerPolicy == .merge {
                 merged.headers = WebViewSniffer.mergingHeaders(baseSpec.headers, spec.headers)
@@ -172,7 +175,8 @@ public final class ParseEngine: @unchecked Sendable {
                     return .cancelled
                 }
                 switch attempt {
-                case .success(let spec) where !spec.url.isEmpty && spec.url != baseSpec.url:
+                case .success(let spec) where !spec.url.isEmpty && (spec.url != baseSpec.url
+                    || spec.metadata[Self.confirmedWebMediaResponseMetadataKey] == "true"):
                     group.cancelAll()
                     return .success(spec)
                 case .failure(let current):

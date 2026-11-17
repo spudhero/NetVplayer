@@ -59,6 +59,7 @@ public final class WebViewSniffer: NSObject, WKScriptMessageHandler, WKNavigatio
     private var candidateTaskID: UUID?
     private var candidates: [Candidate] = []
     private var candidateCount = 0
+    private var navigationMediaPending = false
 
     public override init() { diagnosticDirectory = nil; configureStore = nil; configureBrowser = nil; super.init() }
 
@@ -192,6 +193,7 @@ public final class WebViewSniffer: NSObject, WKScriptMessageHandler, WKNavigatio
         scriptTask = nil
         candidates = []
         candidateCount = 0
+        navigationMediaPending = false
         mediaPolicy = nil
         clickScript = ""
         preparing?.cancel()
@@ -542,6 +544,39 @@ public final class WebViewSniffer: NSObject, WKScriptMessageHandler, WKNavigatio
         if self.webView === webView, let response = navigationResponse.response as? HTTPURLResponse {
             record("navigationResponse", url: response.url?.absoluteString,
                    extra: ["mainFrame": navigationResponse.isForMainFrame, "status": response.statusCode])
+            let mime = response.mimeType?.lowercased() ?? ""
+            if navigationResponse.isForMainFrame, (200..<300).contains(response.statusCode),
+               (mime.hasPrefix("video/") || mime.hasPrefix("audio/")
+                    || ["application/vnd.apple.mpegurl", "application/x-mpegurl", "application/dash+xml"].contains(mime)),
+               let url = response.url, ["http", "https"].contains(url.scheme?.lowercased()),
+               let id = sessionID, !navigationMediaPending {
+                navigationMediaPending = true
+                // Cancel before WebKit hands the response to its media plug-in.
+                // A response is evidence even when its URL equals the input.
+                decisionHandler(.cancel)
+                candidateTask?.cancel()
+                candidateTaskID = nil
+                candidateTask = Task { @MainActor [weak self] in
+                    guard let self, self.sessionID == id, !Task.isCancelled else { return }
+                    do {
+                        let accepted = try await self.mediaPolicy?.accepts(url.absoluteString) ?? true
+                        guard self.sessionID == id, !Task.isCancelled else { return }
+                        guard accepted else { self.finish(.failure(WebViewSnifferError.noMediaFound)); return }
+                        // Initial headers belong only to the exact requested URL.
+                        // Redirects do not grant permission to replay credentials.
+                        let headers = url.absoluteString == self.pageURL ? self.requestHeaders
+                            : self.requestHeaders.filter { $0.key.caseInsensitiveCompare("User-Agent") == .orderedSame }
+                        self.record("navigationMedia", url: url.absoluteString,
+                                    extra: ["status": response.statusCode, "responseMediaType": mime])
+                        self.finish(.success(PlaySpec(url: url.absoluteString, headers: headers,
+                            headerPolicy: .replace, metadata: [ParseEngine.confirmedWebMediaResponseMetadataKey: "true"])))
+                    } catch {
+                        guard self.sessionID == id, !Task.isCancelled else { return }
+                        self.finish(.failure(error))
+                    }
+                }
+                return
+            }
         }
         decisionHandler(.allow)
     }
@@ -577,11 +612,13 @@ public final class WebViewSniffer: NSObject, WKScriptMessageHandler, WKNavigatio
 
     public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         guard self.webView === webView else { return }
+        if navigationMediaPending, (error as NSError).code == NSURLErrorCancelled { return }
         finish(.failure(error))
     }
 
     public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         guard self.webView === webView else { return }
+        if navigationMediaPending, (error as NSError).code == NSURLErrorCancelled { return }
         finish(.failure(error))
     }
 

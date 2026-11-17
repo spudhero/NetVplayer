@@ -21,15 +21,15 @@
 
 ![NetVplayer running on macOS](website/assets/home-aurora.webp)
 
-当前正式版本 / Current release: **NetVplayer 2.0.2 (build 53)**。修复 Mac／Android 来源实现隔离与环境准备问题，Android 使用完整签名运行环境。见 [2.0.2 发布说明 / Release notes](docs/releases/2.0.2.md)。
+当前正式版本 / Current release: **NetVplayer 2.0.3 (build 54)**。修复网页媒体接管与 Android 脚本兼容问题，两个实现严格隔离，Android 使用完整签名运行环境。见 [2.0.3 发布说明 / Release notes](docs/releases/2.0.3.md)。
 
 上一正式版本 / Previous release: **NetVplayer 2.0.1 (build 52)**。来源实现隔离问题已在 2.0.2 修复，请升级 / Upgrade to 2.0.2 for isolated source implementations.
 
 | Component | Version |
 | --- | --- |
-| Stable application | 2.0.2 (build 53) |
+| Stable application | 2.0.3 (build 54) |
 | Python Provider | 1.1.13 |
-| Complete Android runtime | 1.2.2 |
+| Complete Android runtime | 1.2.4 |
 | Legacy Android installer | 1.1.0 (historical compatibility) |
 
 ## 中文
@@ -85,7 +85,7 @@ TMDB 由正式应用提供项目凭据，普通用户无需填写令牌。配置
 
 兼容的签名 Provider 由应用自动下载、验证和更新，异常时在“设置 → 扩展支持”选择“重新检查”。包版本与兼容说明见 [Provider Releases](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases)。主程序和 SDK 公开，站点业务 Provider 实现源码保持私有。
 
-Android 通用 Java／JNI 桥接、兼容层和构建实现已获准公开，连同固定上游对应源码、构建说明和许可证作为[完整 Android 环境的源码附件](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.2-arm64)提供；站点业务 Provider 实现继续私有。选择 Mac 实现不会准备 Android 环境；明确选择 Android 原版并重启后，首次只下载、验证和激活完整签名环境，JVM、框架和宿主不再在客户端分别下载组装。来源 JAR 仍按用户配置下载，不包含在应用或环境包中。完整环境使用独立 `android/runtime/index.json`，旧 `android/index.json` 保留历史兼容。公开播放器中的兼容规则资源是固定摘要生成物。
+Android 通用 Java／JNI 桥接、兼容层和构建实现已获准公开，连同固定上游对应源码、构建说明和许可证作为[完整 Android 环境的源码附件](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.4-arm64)提供；站点业务 Provider 实现继续私有。选择 Mac 实现不会准备 Android 环境；明确选择 Android 原版并重启后，首次只下载、验证和激活完整签名环境，JVM、框架和宿主不再在客户端分别下载组装。来源 JAR 仍按用户配置下载，不包含在应用或环境包中。完整环境使用独立 `android/runtime/index.json`，旧 `android/index.json` 保留历史兼容。公开播放器中的兼容规则资源是固定摘要生成物。
 
 使用 Xcode 和 Homebrew libmpv 依赖从源码构建：
 
@@ -149,7 +149,7 @@ Official builds supply the TMDB application credential; ordinary users do not ne
 
 The app automatically downloads, verifies, and updates compatible signed Providers. Use Settings → Verified Extensions → Check Again if preparation fails. See [Provider Releases](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) for versions and compatibility. The main application and SDK are public; business Provider implementation sources remain private.
 
-Generic Android Java/JNI bridge, compatibility and build sources are public as [complete-runtime source attachments](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.2-arm64), together with fixed upstream sources, build instructions and licenses. Business Provider implementations remain private. Mac mode does not prepare Android. After explicitly selecting original Android and restarting, the app downloads and verifies a complete signed environment, without assembling JVM/framework/host dependencies on the client. Source JARs still come from user configuration and are excluded from the app and runtime. Complete runtimes use the independent `android/runtime/index.json`; the legacy `android/index.json` is preserved. The player compatibility resource remains a pinned generated artifact.
+Generic Android Java/JNI bridge, compatibility and build sources are public as [complete-runtime source attachments](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.4-arm64), together with fixed upstream sources, build instructions and licenses. Business Provider implementations remain private. Mac mode does not prepare Android. After explicitly selecting original Android and restarting, the app downloads and verifies a complete signed environment, without assembling JVM/framework/host dependencies on the client. Source JARs still come from user configuration and are excluded from the app and runtime. Complete runtimes use the independent `android/runtime/index.json`; the legacy `android/index.json` is preserved. The player compatibility resource remains a pinned generated artifact.
 
 Build from source with Xcode and the Homebrew libmpv dependencies using the commands above. Further documentation: [Architecture](ARCHITECTURE.md) · [Provider SDK](provider-sdk/README.md) · [Runners](provider-runners/README.md) · [Packaging credentials](TMDB_SETUP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md).
 

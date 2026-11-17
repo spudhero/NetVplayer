@@ -10,6 +10,12 @@ actor AndroidRuntimeBootstrap {
     typealias Operation = @Sendable (Bundle, @escaping Progress) async throws -> Void
     static let shared = AndroidRuntimeBootstrap()
     static let providerID = AndroidRuntimeComponentStore.providerID
+    static let minimumRuntimeVersion = "1.2.4"
+
+    static func supportsRuntimeVersion(_ version: String?) -> Bool {
+        guard let version else { return false }
+        return ProviderManifestVerifier.compareVersions(version, minimumRuntimeVersion) >= 0
+    }
     private let operation: Operation
     private var pending: Task<Void, Error>?
 
@@ -41,7 +47,7 @@ actor AndroidRuntimeBootstrap {
         let shellVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
         let verifier = try trust.manifestVerifier(shellVersion: shellVersion)
         let component = AndroidRuntimeComponentStore(root: root, verifier: verifier)
-        if try await component.status().version != nil { return }
+        if supportsRuntimeVersion(try await component.status().version) { return }
         await progress("checking")
         let rawURL = bundle.object(forInfoDictionaryKey: "NetVplayerAndroidRuntimeIndexURL") as? String
             ?? "https://spudhero.github.io/NetVplayer-Provider-Distribution/android/runtime/index.json"
@@ -49,7 +55,7 @@ actor AndroidRuntimeBootstrap {
             throw AndroidRuntimeComponentError.invalidPackage
         }
         let releases = try await distribution.fetchIndex(from: url, verifier: trust.distributionVerifier())
-        guard let release = releases.filter({ $0.providerID == providerID &&
+        guard let release = releases.filter({ $0.providerID == providerID && supportsRuntimeVersion($0.version) &&
             ($0.architectures.contains(ProviderManifestVerifier.currentArchitecture) || $0.architectures.contains("universal2")) }).max(by: {
             ProviderManifestVerifier.compareVersions($0.version, $1.version) < 0
         }) else { throw ProviderRuntimeBootstrapError.releaseNotFound(providerID) }

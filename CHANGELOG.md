@@ -6,6 +6,10 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [2.0.3](https://github.com/spudhero/NetVplayer/releases/tag/2.0.3)（2026-11-17）
+
+正式构建号 **54**。修复已确认媒体响应被网页插件处理而播放失败；Android 完整组件 1.2.4 匹配宿主／JavaScript 引擎并补齐旧脚本通用 HTML 接口。不兼容旧组件在首次 Android 会话前更新，两个实现继续独立。见[发布说明](docs/releases/2.0.3.md)。
+
 ### [2.0.2](https://github.com/spudhero/NetVplayer/releases/tag/2.0.2)（2026-11-17）
 
 正式构建号 **53**。Mac 实现与 Android 原版严格二选一，取消自动跨实现替换；修复 Mac 模式误触发 Android 准备及失败占位遮蔽来源。Android 采用完整签名环境 1.2.2，通用桥接／构建和固定上游对应源码作为组件附件公开。应用六附件通过原字节复验，既有真实服务和长期播放限制继续保留，见[发布说明](docs/releases/2.0.2.md)。
@@ -270,6 +274,10 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [2.0.3](https://github.com/spudhero/NetVplayer/releases/tag/2.0.3) (2026-11-17)
+
+Build **54** fixes confirmed media responses failing in the web plug-in. Complete Android runtime 1.2.4 matches its host and JavaScript engine, adds the optional generic HTML API, and upgrades incompatible installations before their first Android session. Implementation selection remains exclusive. See [release notes](docs/releases/2.0.3.md).
 
 ### [2.0.2](https://github.com/spudhero/NetVplayer/releases/tag/2.0.2) (2026-11-17)
 

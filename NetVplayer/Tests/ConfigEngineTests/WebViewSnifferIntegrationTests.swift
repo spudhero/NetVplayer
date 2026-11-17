@@ -8,6 +8,41 @@ import Models
 @Suite(.serialized)
 @MainActor
 struct WebViewSnifferIntegrationTests {
+    @Test func directMediaNavigationCanResolveTheOriginalURL() async throws {
+        let server = try SnifferLoopbackServer()
+        defer { server.stop() }
+        let engine = ParseEngine()
+        for path in ["/media/movie.m3u8?signature=a%2Fb&part=1", "/direct/movie.mp4", "/direct/stream"] {
+            let url = server.url(path)
+            let spec = await engine.resolve(result: Result(url: url,
+                header: ["User-Agent": "Original-Provider-UA/1", "X-Provider": "same-request"]), parse: nil)
+            #expect(engine.lastFailure == nil)
+            #expect(spec.url == url)
+            #expect(spec.metadata[ParseEngine.confirmedWebMediaResponseMetadataKey] == "true")
+            #expect(spec.headers["X-Provider"] == "same-request")
+            #expect(spec.headerPolicy == .replace)
+        }
+    }
+
+    @Test func directMediaResponseStillRequiresTheOriginalSpiderCheck() async throws {
+        let server = try SnifferLoopbackServer()
+        defer { server.stop() }
+        let engine = ParseEngine()
+        let url = server.url("/direct/movie.mp4")
+        let policy = WebMediaPolicy(check: { _ in false })
+        let spec = await engine.resolve(result: Result(url: url), parse: nil, webPolicy: policy)
+        #expect(engine.lastFailure != nil)
+        #expect(spec.metadata[ParseEngine.confirmedWebMediaResponseMetadataKey] == nil)
+    }
+
+    @Test func unsuccessfulMediaResponseDoesNotConfirmPlayback() async throws {
+        let server = try SnifferLoopbackServer()
+        defer { server.stop() }
+        do {
+            _ = try await WebViewSniffer().sniff(url: server.url("/direct/missing"), timeout: 0.5)
+            Issue.record("An unsuccessful video response became playback")
+        } catch { #expect(error is WebViewSnifferError || error is URLError || (error as NSError).domain == "WebKitErrorDomain") }
+    }
     @Test func discoversStaticAndDynamicMediaInFrames() async throws {
         let server = try SnifferLoopbackServer()
         defer { server.stop() }
@@ -200,6 +235,15 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_GET(self):
         path = self.path.split('?')[0]
+        if path.startswith('/direct/'):
+            payload = b'fixture-media-response'
+            self.send_response(404 if path == '/direct/missing' else 200)
+            self.send_header('Content-Type', 'video/mp4')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            try: self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError): pass
+            return
         body = '<html><body>'
         if path == '/page/static':
             body += '<video preload="auto" src="../media/movie.m3u8?signature=a%2Fb&amp;part=1"></video>'
