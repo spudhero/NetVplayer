@@ -6,6 +6,10 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [2.0.4](https://github.com/spudhero/NetVplayer/releases/tag/2.0.4)（2026-11-17）
+
+正式构建 **55**。修复原版 Android 的异步来源检查与 WebKit 页面取消之间的竞争，保留来源拒绝、用户取消及超时。继续严格隔离两种实现，复用完整环境 1.2.4。见[发布说明](docs/releases/2.0.4.md)。
+
 ### [2.0.3](https://github.com/spudhero/NetVplayer/releases/tag/2.0.3)（2026-11-17）
 
 正式构建号 **54**。修复已确认媒体响应被网页插件处理而播放失败；Android 完整组件 1.2.4 匹配宿主／JavaScript 引擎并补齐旧脚本通用 HTML 接口。不兼容旧组件在首次 Android 会话前更新，两个实现继续独立。见[发布说明](docs/releases/2.0.3.md)。
@@ -274,6 +278,10 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [2.0.4](https://github.com/spudhero/NetVplayer/releases/tag/2.0.4) (2026-11-17)
+
+Build **55** fixes the race between the original Android asynchronous source check and WebKit policy cancellation during media handoff. Source rejection, cancellation, timeouts and exclusive implementation selection remain effective. See [release notes](docs/releases/2.0.4.md).
 
 ### [2.0.3](https://github.com/spudhero/NetVplayer/releases/tag/2.0.3) (2026-11-17)
 

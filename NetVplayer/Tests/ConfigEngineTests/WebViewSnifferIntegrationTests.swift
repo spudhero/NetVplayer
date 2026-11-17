@@ -35,6 +35,27 @@ struct WebViewSnifferIntegrationTests {
         #expect(spec.metadata[ParseEngine.confirmedWebMediaResponseMetadataKey] == nil)
     }
 
+    @Test func directMediaWaitsForTheAsynchronousOriginalSpiderCheck() async throws {
+        let server = try SnifferLoopbackServer()
+        defer { server.stop() }
+        let url = server.url("/direct/movie.mp4")
+        for accepted in [true, false] {
+            let policy = WebMediaPolicy(check: { _ in
+                try? await Task.sleep(for: .milliseconds(250))
+                return accepted
+            })
+            do {
+                let spec = try await WebViewSniffer().sniff(url: url, timeout: 5, policy: policy)
+                #expect(accepted)
+                #expect(spec.url == url)
+                #expect(spec.metadata[ParseEngine.confirmedWebMediaResponseMetadataKey] == "true")
+            } catch {
+                #expect(!accepted)
+                #expect(error is WebViewSnifferError)
+            }
+        }
+    }
+
     @Test func unsuccessfulMediaResponseDoesNotConfirmPlayback() async throws {
         let server = try SnifferLoopbackServer()
         defer { server.stop() }

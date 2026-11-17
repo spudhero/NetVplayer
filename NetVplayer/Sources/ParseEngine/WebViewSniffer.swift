@@ -612,14 +612,24 @@ public final class WebViewSniffer: NSObject, WKScriptMessageHandler, WKNavigatio
 
     public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         guard self.webView === webView else { return }
-        if navigationMediaPending, (error as NSError).code == NSURLErrorCancelled { return }
+        if isExpectedMediaHandoffCancellation(error) { return }
         finish(.failure(error))
     }
 
     public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         guard self.webView === webView else { return }
-        if navigationMediaPending, (error as NSError).code == NSURLErrorCancelled { return }
+        if isExpectedMediaHandoffCancellation(error) { return }
         finish(.failure(error))
+    }
+
+    private func isExpectedMediaHandoffCancellation(_ error: Error) -> Bool {
+        guard navigationMediaPending else { return false }
+        let error = error as NSError
+        // Cancelling a confirmed media response can report either URL loading
+        // cancellation or WebKit's policy interruption. The original Spider
+        // check may still be awaiting its provider process at this point.
+        return (error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled)
+            || (error.domain == "WebKitErrorDomain" && error.code == 102)
     }
 
     // WKWebView has no public Android-style shouldInterceptRequest for HTTP
