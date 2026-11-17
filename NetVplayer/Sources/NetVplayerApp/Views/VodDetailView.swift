@@ -874,6 +874,11 @@ private extension VodDetailView {
                 .font(.subheadline)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
+            if let size = DriveEpisodeFileSize.label(for: episode) {
+                Text(size)
+                    .font(.caption2)
+                    .foregroundStyle(palette.muted)
+            }
             if let overview = episode.overview, !overview.isEmpty {
                 Text(overview)
                     .font(.caption2)
@@ -920,6 +925,12 @@ private extension VodDetailView {
                     .font(.subheadline.weight(isHistoryEpisode ? .semibold : .regular))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if let size = DriveEpisodeFileSize.label(for: episode) {
+                    Text(size)
+                        .font(.caption2)
+                        .foregroundStyle(palette.muted)
+                }
 
                 if let overview = episode.overview, !overview.isEmpty {
                     Text(overview)

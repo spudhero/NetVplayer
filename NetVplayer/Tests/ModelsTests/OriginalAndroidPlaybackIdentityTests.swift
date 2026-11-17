@@ -10,6 +10,22 @@ private func originalBaiduID(token: String = "session-one", file: String = "file
     return String(decoding: try JSONSerialization.data(withJSONObject: object, options: .sortedKeys), as: UTF8.self)
 }
 
+@Test func originalAndroidFileSizeIsReadOnlyAndRejectsInvalidOrUnknownValues() throws {
+    let id = try originalBaiduID()
+    #expect(OriginalAndroidPlaybackIdentity.fileSizeBytes(for: id) == 100000)
+    #expect(try OriginalAndroidPlaybackIdentity.fileSizeBytes(for: originalBaiduID(extra: true)) == nil)
+    var object = try #require(JSONSerialization.jsonObject(with: Data(id.utf8)) as? [String: Any])
+    for value: Any in [true, -1, 0, 3.5, "1234", NSNull()] {
+        object["size"] = value
+        let invalid = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        #expect(OriginalAndroidPlaybackIdentity.fileSizeBytes(for: invalid) == nil)
+    }
+    object["size"] = Int64.max
+    let large = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+    #expect(OriginalAndroidPlaybackIdentity.fileSizeBytes(for: large) == Int64.max)
+    #expect(OriginalAndroidPlaybackIdentity.fileSizeBytes(for: "https://example.test/movie.mkv?size=200") == nil)
+}
+
 @Test func originalAndroidHistoryKeepsRequestAndFileIdentityWithoutSDKSession() throws {
     let original = try originalBaiduID()
     let saved = HistoryPersistencePolicy.sanitized(History(siteKey: "JPan", vodId: "returned-share-key", vodFlag: "original",

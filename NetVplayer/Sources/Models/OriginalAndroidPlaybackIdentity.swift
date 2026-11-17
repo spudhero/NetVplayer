@@ -1,8 +1,17 @@
 import Foundation
+import CoreFoundation
 import CryptoKit
 
 /// Stable original SDK file identity. Unknown structures are hashed in full.
 public enum OriginalAndroidPlaybackIdentity {
+    /// Display-only metadata; the original opaque request ID remains untouched.
+    public static func fileSizeBytes(for id: String) -> Int64? {
+        guard let object = cloudObject(for: id), let value = object["size"] as? NSNumber,
+              CFGetTypeID(value) != CFBooleanGetTypeID(),
+              let size = Int64(value.stringValue), size > 0 else { return nil }
+        return size
+    }
+
     public static func stableCloudSHA256(for id: String) -> String? {
         guard var object = cloudObject(for: id), let marker = object["flag"] as? String else { return nil }
         let transient = marker == "嘟嘟盘" ? ["seKey"]

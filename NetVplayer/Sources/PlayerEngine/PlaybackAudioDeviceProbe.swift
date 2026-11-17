@@ -4,6 +4,7 @@ import Foundation
 
 struct PlaybackAudioDeviceSnapshot: Equatable, Sendable {
     var enumerationSucceeded = false
+    var hardwareChangeGeneration: UInt64 = 0
     var outputs: [PlaybackAudioOutputDevice] = []
     var systemDefaultUID: String?
     var processOutputUIDs: [String]?
@@ -12,6 +13,14 @@ struct PlaybackAudioDeviceSnapshot: Equatable, Sendable {
         return outputs.first { $0.id == ids[0] }
     }
     var systemDefaultDeviceName: String? { outputs.first { $0.id == systemDefaultUID }?.name }
+
+    func routeChanged(from previous: Self, followsSourceSampleRate: Bool) -> Bool {
+        hardwareChangeGeneration != previous.hardwareChangeGeneration
+            || systemDefaultUID != previous.systemDefaultUID
+            || outputs.map(\.id) != previous.outputs.map(\.id)
+            || outputs.map(\.preferredChannels) != previous.outputs.map(\.preferredChannels)
+            || (!followsSourceSampleRate && outputs.map(\.nominalSampleRate) != previous.outputs.map(\.nominalSampleRate))
+    }
 
     /// A compressed HDMI carrier can expose two transport channels and a 192 kHz
     /// clock even though the configured PCM device is 7.1 at 48 kHz. Keep the
@@ -50,7 +59,48 @@ actor PlaybackAudioDeviceProbeWorker {
     }
     func read() -> PlaybackAudioDeviceSnapshot? {
         guard !Task.isCancelled else { return nil }
-        return PlaybackAudioDeviceProbe.read()
+        // Capture before reading: an event during enumeration remains pending
+        // for the next snapshot rather than acknowledging possibly stale data.
+        let generation = PlaybackAudioHardwareChanges.shared.generation
+        var result = PlaybackAudioDeviceProbe.read()
+        result.hardwareChangeGeneration = generation
+        return result
+    }
+}
+
+/// HAL callbacks only record a generation. The existing serial utility sampler
+/// coalesces event bursts and reads devices; no HAL enumeration runs on the UI.
+private final class PlaybackAudioHardwareChanges: @unchecked Sendable {
+    static let shared = PlaybackAudioHardwareChanges()
+    private let lock = NSLock()
+    private var revision: UInt64 = 0
+    private let queue = DispatchQueue(label: "NetVplayer.audio-hardware-events", qos: .utility)
+    private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+
+    var generation: UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        return revision
+    }
+
+    private init() {
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self else { return }
+            self.lock.lock(); self.revision &+= 1; self.lock.unlock()
+        }
+        for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultOutputDevice] {
+            var address = AudioObjectPropertyAddress(mSelector: selector,
+                mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, block) == noErr {
+                listeners.append((address, block))
+            }
+        }
+    }
+
+    deinit {
+        for listener in listeners {
+            var address = listener.0
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, listener.1)
+        }
     }
 }
 

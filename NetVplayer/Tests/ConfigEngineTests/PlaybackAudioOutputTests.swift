@@ -6,6 +6,32 @@ import Testing
 @testable import PlayerEngine
 
 @Suite(.serialized) struct PlaybackAudioOutputTests {
+    @Test func hdrSuspensionRecordsTheNullSinkSoTheOriginalDriverIsRestored() {
+        var original = PlaybackAudioOutputPlan()
+        original.device = "coreaudio/receiver"
+        original.nativeDolbyEnabled = true
+        original.channels = "7.1"
+        let suspended = original.suspendedForSystemHDR()
+        #expect(suspended.options["ao"] == "null")
+        #expect(original.options["ao"] == "coreaudio_exclusive,avfoundation,coreaudio")
+        // These are the changed writes used by the production reconciliation.
+        let changed = original.options.keys.filter { original.options[$0] != suspended.options[$0] }
+        #expect(Set(changed) == ["ao", "audio-device"])
+        #expect(suspended.options["audio-spdif"] == original.options["audio-spdif"])
+        #expect(suspended.channels == original.channels)
+    }
+
+    @Test func hardwareReenumerationReopensAnOtherwiseIdenticalAudioRouteOnce() {
+        var before = PlaybackAudioDeviceSnapshot()
+        before.enumerationSucceeded = true
+        before.systemDefaultUID = "same-HDMI-UID"
+        var after = before
+        after.hardwareChangeGeneration = 3
+        #expect(after.routeChanged(from: before, followsSourceSampleRate: true))
+        #expect(!after.routeChanged(from: after, followsSourceSampleRate: true))
+        #expect(!before.routeChanged(from: before, followsSourceSampleRate: false))
+    }
+
     @Test func rejectedCompressedOutputRecoversAfterPersistentMissingAO() {
         let stalled = PlaybackDiagnostics.Audio(codec: "truehd", inputFormat: "spdif-truehd")
         var recovery = PlaybackCompressedAudioRecovery()

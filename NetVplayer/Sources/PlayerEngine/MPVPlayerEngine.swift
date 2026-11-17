@@ -1690,11 +1690,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         guard devices.enumerationSucceeded else { return }
         let old = audioPlanningDevices
         let planning = devices.retainingPCMConfiguration(from: old)
-        let topologyChanged = old.systemDefaultUID != planning.systemDefaultUID
-            || old.outputs.map(\.id) != planning.outputs.map(\.id)
-            || old.outputs.map(\.preferredChannels) != planning.outputs.map(\.preferredChannels)
-            || (!withLock({ audioOutputPlan.followSourceSampleRate })
-                && old.outputs.map(\.nominalSampleRate) != planning.outputs.map(\.nominalSampleRate))
+        let topologyChanged = planning.routeChanged(from: old,
+            followsSourceSampleRate: withLock { audioOutputPlan.followSourceSampleRate })
         if topologyChanged {
             failedAudioDeviceUID = nil
             withLock { compressedAudioRecovery = .init() }
@@ -2573,7 +2570,10 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     @MainActor
     private func suspendAudioForSystemHDR() -> Bool {
-        withLock { systemHDRAudioSuspended = true }
+        withLock {
+            systemHDRAudioSuspended = true
+            audioOutputPlan = audioOutputPlan.suspendedForSystemHDR()
+        }
         unavailableAudioSamples = 0
         pendingAudioOutputReplies.removeAll()
         return withLock {

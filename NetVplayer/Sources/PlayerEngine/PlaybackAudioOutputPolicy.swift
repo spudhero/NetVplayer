@@ -120,6 +120,14 @@ struct PlaybackAudioOutputPlan: Equatable, Sendable {
     var trueHDObjects: PlaybackTrueHDObjectMode = .automatic
     var objectRenderingUnavailable = false
 
+    /// The temporary sink is applied state, not a change to user preferences.
+    /// Recording it ensures reconciliation writes the real AO back afterward.
+    func suspendedForSystemHDR() -> Self {
+        var result = self
+        result.device = "null"
+        return result
+    }
+
     var options: [String: String] {
         var result = ["audio-device": device, "audio-channels": channels,
          "audio-spdif": nativeDolbyEnabled
