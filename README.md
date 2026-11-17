@@ -21,13 +21,13 @@
 
 ![NetVplayer running on macOS](website/assets/home-aurora.webp)
 
-当前正式版本 / Current release: **NetVplayer 2.0.4 (build 55)**。修复网页媒体接管与 Android 脚本兼容问题，两个实现严格隔离，Android 使用完整签名运行环境。见 [2.0.4 发布说明 / Release notes](docs/releases/2.0.4.md)。
+当前正式版本 / Current release: **NetVplayer 2.0.5 (build 56)**。修复播放诊断造成的周期性卡顿与百度网盘账号校验问题，两个实现严格隔离。见 [2.0.5 发布说明 / Release notes](docs/releases/2.0.5.md)。
 
-上一正式版本 / Previous release: **NetVplayer 2.0.3 (build 54)**。Android 异步检查期间的媒体交接修复见 2.0.4 / Upgrade to 2.0.4 for the Android asynchronous media-handoff fix.
+上一正式版本 / Previous release: **NetVplayer 2.0.4 (build 55)**。本次播放卡顿和百度校验修复见 2.0.5 / Upgrade to 2.0.5 for playback-stall and Baidu verification fixes.
 
 | Component | Version |
 | --- | --- |
-| Stable application | 2.0.4 (build 55) |
+| Stable application | 2.0.5 (build 56) |
 | Python Provider | 1.1.13 |
 | Complete Android runtime | 1.2.4 |
 | Legacy Android installer | 1.1.0 (historical compatibility) |

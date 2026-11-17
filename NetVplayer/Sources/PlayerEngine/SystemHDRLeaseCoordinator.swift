@@ -69,7 +69,14 @@ struct SystemHDRDisplaySnapshot: Equatable, Sendable {
     var pendingRecovery: [SystemHDRInterruptedChange] {
         interrupted.values.sorted { $0.displayUUID.uuidString < $1.displayUUID.uuidString }
     }
-    var hasWork: Bool { !leases.isEmpty }
+    var hasWork: Bool {
+        leases.values.contains {
+            switch $0.phase {
+            case .waitingToEnable, .enabling, .waitingToRestore, .restoring: return true
+            case .active, .overridden, .failed: return false
+            }
+        }
+    }
 
     func observedHDR(for uuid: UUID) -> Bool? { readFailed ? nil : latest[uuid]?.prefersHDR }
 

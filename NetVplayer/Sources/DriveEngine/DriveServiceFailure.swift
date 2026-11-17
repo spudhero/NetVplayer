@@ -32,8 +32,18 @@ public struct DriveServiceFailure: Error, LocalizedError, Sendable {
     }
 
     public var appFailure: AppFailure { AppFailure(category: .source, reason: reason) }
+    public var presentationHint: AppFailurePresentationHint {
+        if provider == .baidu, serviceCode == "9019", reason == .credentialExpired {
+            return Self.baiduVerificationHint
+        }
+        return appFailure.presentationHint
+    }
+    public static var baiduVerificationHint: AppFailurePresentationHint {
+        .init(title: L10n.text("百度网盘要求验证当前登录会话（9019）。"),
+              suggestedAction: L10n.text("请先在百度网盘官方网页或应用中确认账号可用并完成验证，再到设置中重新扫码授权后重试。"))
+    }
     public var errorDescription: String? {
-        let hint = appFailure.presentationHint
+        let hint = presentationHint
         return hint.title + hint.suggestedAction
     }
     var pausesAccountOperation: Bool {
@@ -122,6 +132,9 @@ enum DriveFailureClassifier {
             // 32003 is evidenced by the existing personal-play protocol fixtures.
             if code == "32003", status != 403, operation == .playback { reason = .fileMissing }
         case .baidu:
+            if code == "9019", ["/share/list", "/share/verify", "/share/transfer", "/api/list", "/api/create", "/api/mediainfo"].contains(path) {
+                reason = .credentialExpired
+            }
             // -6 from /api/create is an existing-directory response in this
             // adapter. Never reuse that number as an auth error there.
             if code == "-6", path == "/api/list" { reason = .credentialExpired }

@@ -335,8 +335,9 @@ public struct PikPakDriveShareExpander: DriveShareExpanding {
 public struct BaiduDriveShareExpander: DriveShareExpanding {
     private let client: BaiduDriveClient
 
-    public init(httpClient: HTTPClient = .shared) {
-        self.client = BaiduDriveClient(httpClient: httpClient)
+    public init(httpClient: HTTPClient = .shared,
+                cookieProvider: @escaping @Sendable () -> String? = { UserPreferences.shared.baiduCookie }) {
+        self.client = BaiduDriveClient(httpClient: httpClient, shareAccountCookieProvider: cookieProvider)
     }
 
     public func canExpand(url: String) -> Bool {

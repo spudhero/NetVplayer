@@ -73,11 +73,14 @@ public struct BaiduDriveClient: Sendable {
     private let httpClient: DriveHTTPClient
     private let usesCurlShareListTransport: Bool
     private let savedFileStore: DriveSavedFileStore
+    private let shareAccountCookieProvider: @Sendable () -> String?
 
-    public init(httpClient: HTTPClient = .shared, savedFileStore: DriveSavedFileStore = .shared) {
+    public init(httpClient: HTTPClient = .shared, savedFileStore: DriveSavedFileStore = .shared,
+                shareAccountCookieProvider: @escaping @Sendable () -> String? = { nil }) {
         self.httpClient = DriveHTTPClient(httpClient, provider: .baidu)
         self.usesCurlShareListTransport = httpClient === HTTPClient.shared
         self.savedFileStore = savedFileStore
+        self.shareAccountCookieProvider = shareAccountCookieProvider
     }
 
     public func shareRequest(from rawURL: String) throws -> BaiduShareRequest {
@@ -1050,11 +1053,17 @@ public struct BaiduDriveClient: Sendable {
     }
 
     private func loadShareListResponse(url: String, shareKey: String) async throws -> HTTPResponse {
+        // Cookie handling is disabled below so concurrent shares cannot replace
+        // this share's BDCLND. Include the selected account explicitly as well.
+        let account = Self.cookiePairs(shareAccountCookieProvider() ?? "")
+            .filter { $0.name.caseInsensitiveCompare("BDCLND") != .orderedSame }
+            .map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        let cookie = mergedCookie(account, sessionCookie: shareKey.isEmpty ? nil : "BDCLND=\(shareKey)")
         if usesCurlShareListTransport, !shareKey.isEmpty {
             return try await BaiduShareListCurlTransport.get(
                 url: url,
                 userAgent: Self.userAgent,
-                cookie: "BDCLND=\(shareKey)",
+                cookie: cookie,
                 timeout: 25
             )
         }
@@ -1064,8 +1073,8 @@ public struct BaiduDriveClient: Sendable {
             "Host": "pan.baidu.com",
             "User-Agent": Self.userAgent
         ]
-        if !shareKey.isEmpty {
-            headers["Cookie"] = "BDCLND=\(shareKey)"
+        if !cookie.isEmpty {
+            headers["Cookie"] = cookie
         }
         return try await httpClient.request(
             url: url,

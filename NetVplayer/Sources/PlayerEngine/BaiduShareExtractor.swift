@@ -19,9 +19,8 @@ public final class BaiduShareExtractor: SourceExtractorProtocol {
         preferences: UserPreferences = .shared,
         savedFileStore: DriveSavedFileStore = .shared
     ) {
-        self.client = BaiduDriveClient(httpClient: httpClient, savedFileStore: savedFileStore)
         self.savedFileStore = savedFileStore
-        self.cookieProvider = cookieProvider ?? {
+        let selectedCookieProvider: @Sendable () -> String? = cookieProvider ?? {
             let values = [
                 ProcessInfo.processInfo.environment["NETVPLAYER_BAIDU_COOKIE"] ?? "",
                 preferences.baiduCookie
@@ -30,6 +29,9 @@ public final class BaiduShareExtractor: SourceExtractorProtocol {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .first { !$0.isEmpty }
         }
+        self.cookieProvider = selectedCookieProvider
+        self.client = BaiduDriveClient(httpClient: httpClient, savedFileStore: savedFileStore,
+                                      shareAccountCookieProvider: selectedCookieProvider)
         self.cookieUpdateHandler = cookieUpdateHandler ?? { preferences.baiduCookie = $0 }
     }
 

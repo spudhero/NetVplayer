@@ -59,6 +59,13 @@ import Storage
     #expect(!unknownCode.contains("raw"))
 }
 
+@Test func legacyBaiduVerificationFailureExplainsAccountRecovery() {
+    let message = UserFacingErrorPresenter.message(for: DriveEngineError.api(
+        provider: .baidu, statusCode: 200, code: 9019, message: "secret response"), context: .playback)
+    #expect(message.contains("9019") && message.contains("官方") && message.contains("重新扫码"))
+    #expect(!message.contains("提取码") && !message.contains("secret"))
+}
+
 @Test func authorizationFailuresDoNotExposeServerBodiesOrCredentialNames() {
     let errors: [Error] = [
         CloudAuthP115QRCodeLoginError.rejected("private body token=secret"),

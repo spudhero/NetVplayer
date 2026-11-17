@@ -113,7 +113,7 @@ enum UserFacingErrorPresenter {
             )
         }
         if let failure = error as? DriveServiceFailure {
-            let hint = failure.appFailure.presentationHint
+            let hint = failure.presentationHint
             return UserFacingErrorPresentation(message: hint.title, recoverySuggestion: hint.suggestedAction)
         }
         if let failure = error as? AppFailure, failure.reason != nil {
@@ -320,6 +320,10 @@ enum UserFacingErrorPresenter {
         case .transferConfirmationPending:
             return L10n.text("转存结果仍待确认。请稍后重试以核对文件，本次不会重复提交转存。")
         case .api(let provider, let statusCode, let code, _):
+            if provider == .baidu, code == 9019 {
+                let hint = DriveServiceFailure.baiduVerificationHint
+                return hint.title + hint.suggestedAction
+            }
             if !(200..<300).contains(statusCode) {
                 return httpStatusMessage(statusCode, serviceName: provider.localizedDisplayName)
             }

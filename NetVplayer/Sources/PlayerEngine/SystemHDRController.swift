@@ -35,6 +35,11 @@ extension Notification.Name {
     private var submitted = false
     private var explicitRecovery: Set<UUID> = []
     private var terminating = false
+    private struct Request: Equatable {
+        let displayID: UInt32?
+        let wantsHDR: Bool
+    }
+    private var requests: [UUID: (request: Request, status: SystemHDRStatus)] = [:]
 
     private convenience init() {
         self.init(coordinator: SystemHDRLeaseCoordinator(backend: SystemHDRMonitorPanelBackend(), journal: SystemHDRFileJournal()),
@@ -81,7 +86,18 @@ extension Notification.Name {
 
     @discardableResult
     public func update(ownerID: UUID, displayID: UInt32?, wantsHDR: Bool) -> SystemHDRStatus {
-        coordinator.update(ownerID: ownerID, displayID: displayID, wantsHDR: wantsHDR && !terminating)
+        let request = Request(displayID: displayID, wantsHDR: wantsHDR && !terminating)
+        if let previous = requests[ownerID], previous.request == request {
+            let status = coordinator.status(ownerID: ownerID)
+            return status == .inactive ? previous.status : status
+        }
+        // Decoder diagnostics repeat once a second. Display enumeration belongs
+        // to changed requests, display notifications and pending transitions.
+        requests[ownerID] = (request, .inactive)
+        let status = coordinator.update(ownerID: ownerID, displayID: displayID, wantsHDR: request.wantsHDR)
+        if status == .unavailable { requests.removeValue(forKey: ownerID) }
+        else { requests[ownerID] = (request, status) }
+        return status
     }
 
     /// Call after update/refresh; observing an already-enabled system preference
@@ -90,8 +106,14 @@ extension Notification.Name {
         coordinator.observedHDR(forDisplayID: displayID)
     }
 
-    public func release(ownerID: UUID) { coordinator.release(ownerID: ownerID) }
-    public func displayConfigurationDidChange() { coordinator.refresh() }
+    public func release(ownerID: UUID) {
+        requests.removeValue(forKey: ownerID)
+        coordinator.release(ownerID: ownerID)
+    }
+    public func displayConfigurationDidChange() {
+        requests.removeAll()
+        coordinator.refresh()
+    }
 
     /// Normal stop/close can release one owner. Before application termination,
     /// await this via applicationShouldTerminate's terminateLater path.
@@ -101,6 +123,7 @@ extension Notification.Name {
     }
 
     public func restoreAll() async {
+        requests.removeAll()
         coordinator.restoreAll()
         // A pending prepare may become unnecessary; it still needs to finish
         // its audio cleanup before a queued restore can begin.

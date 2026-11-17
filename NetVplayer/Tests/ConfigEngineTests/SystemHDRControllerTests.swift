@@ -4,6 +4,37 @@ import Testing
 @testable import PlayerEngine
 
 @Suite @MainActor struct SystemHDRControllerTests {
+    @Test func repeatedDecoderUpdatesDoNotEnumerateStableDisplays() {
+        let fixture = HDRFixture()
+        let controller = SystemHDRController(coordinator: fixture.controller, ownHDMIHog: { 0 })
+        let owner = UUID()
+        for _ in 0..<120 {
+            #expect(controller.update(ownerID: owner, displayID: 10, wantsHDR: false) == .inactive)
+        }
+        #expect(fixture.backend.readCount == 1)
+        #expect(!fixture.controller.hasWork)
+        fixture.backend.replace(enabled: true)
+        controller.displayConfigurationDidChange()
+        #expect(controller.observedHDR(forDisplayID: 10) == true)
+        #expect(fixture.backend.readCount == 2)
+        #expect(fixture.backend.writes.isEmpty)
+    }
+
+    @Test func stableHDRLeaseStopsPollingAndDisplayEventStillRevokesOwnership() {
+        let fixture = HDRFixture()
+        let owner = UUID()
+        _ = fixture.controller.update(ownerID: owner, displayID: 10, wantsHDR: true)
+        #expect(fixture.controller.hasWork)
+        fixture.controller.refresh()
+        #expect(!fixture.controller.hasWork)
+        fixture.backend.replace(enabled: false)
+        fixture.controller.refresh()
+        #expect(fixture.controller.status(ownerID: owner) == .userOverride)
+        #expect(!fixture.controller.hasWork)
+        fixture.controller.release(ownerID: owner)
+        #expect(fixture.backend.writes.map(\.enabled) == [true])
+    }
+
     private var hdrVideo: PlaybackDiagnostics.Video {
         PlaybackDiagnostics(mediaID: UUID(), properties: [
             "video-dec-params": Data(#"{"gamma":"pq"}"#.utf8)

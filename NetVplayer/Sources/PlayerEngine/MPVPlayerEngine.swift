@@ -2203,9 +2203,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     private func currentDiagnosticDisplay(context: OpaquePointer) -> PlaybackDiagnostics.Display {
         let view = withLock { renderView }
         let attached = view?.isPlaybackSurfaceActive == true && view?.window != nil && view?.displayIsAsleep == false
-        let screen = attached ? view?.window?.screen : nil
-        let displayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
-        let mode = displayID.flatMap { CGDisplayCopyDisplayMode($0) }
+        let screen = attached ? view?.diagnosticScreen : nil
+        let currentHeadroom = screen.map { Double($0.maximumExtendedDynamicRangeColorComponentValue) }
         let target = attached ? nv_mpv_render_target_format(context) : 0
         let hdr = withLock { hdrPresentation }
         let submittedHDR = target == 0x881A && view?.hdrPrototypeSurface != nil
@@ -2214,8 +2213,8 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         let submittedDV = attached && target == 0x881A && systemDV?.currentFrameSubmitted == true
         let sourceDV = submittedDV && systemDV?.metadataOrigin == "source-rpu-unmodified"
         var result = PlaybackDiagnostics.Display(
-            name: screen.map { String($0.localizedName.prefix(128)) },
-            currentEDRHeadroom: screen.map { Double($0.maximumExtendedDynamicRangeColorComponentValue) },
+            name: attached ? view?.diagnosticDisplayName : nil,
+            currentEDRHeadroom: currentHeadroom,
             potentialEDRHeadroom: screen.map { Double($0.maximumPotentialExtendedDynamicRangeColorComponentValue) },
             renderBackend: sourceDV ? "libmpv / source copy / AVSampleBufferDisplayLayer" : (submittedDV ? "libmpv / OpenGL / IOSurface / AVSampleBufferDisplayLayer" :
                 (submittedHDR ? "libmpv / OpenGL / IOSurface / Metal" : (target == 0x8058 ? "libmpv / OpenGL" : nil))),
@@ -2223,10 +2222,10 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 (submittedHDR ? "GL_RGBA16F / rgba16Float" : (target == 0x8058 ? "GL_RGBA8" : nil))),
             // EDR here records a submitted, tagged surface with CURRENT >1.
             // It does not claim calibrated luminance or a receiver HDR signal.
-            edrEnabled: submittedDV ? (systemDV?.readyForDisplay == true && (screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1) > 1.01) :
-                (submittedHDR && hdr != nil ? (hdr?.awaitingHeadroom == false && (screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1) > 1.01) : (target == 0x8058 ? false : nil)),
+            edrEnabled: submittedDV ? (systemDV?.readyForDisplay == true && (currentHeadroom ?? 1) > 1.01) :
+                (submittedHDR && hdr != nil ? (hdr?.awaitingHeadroom == false && (currentHeadroom ?? 1) > 1.01) : (target == 0x8058 ? false : nil)),
             iccSubmission: target == 0x8058 ? iccSubmission : nil,
-            timing: screen.map { _ in PlaybackDisplayTiming(configuredRefreshRateHz: mode?.refreshRate) }
+            timing: screen.map { _ in PlaybackDisplayTiming(configuredRefreshRateHz: view?.diagnosticRefreshRate) }
         )
         result.hdrPresentation = submittedHDR || submittedDV ? hdr : nil
         return result
@@ -2601,14 +2600,14 @@ public final class MPVPlayerEngine: @unchecked Sendable {
               let (spec, activeContext) = withLock({ activeSpec.flatMap { spec in context.map { (spec, $0) } } }) else { return }
         reconcilingHDR = true
         defer { reconcilingHDR = false }
-        let screen = view.window?.screen
+        let screen = view.diagnosticScreen
         let outputMode = colorPreferences.snapshot.videoOutput
         let sourceEligible = PlaybackVideoOutputPolicy.allowsHDRPresentation(
             mode: outputMode, video: video)
             && view.isPlaybackSurfaceActive && view.window != nil && !view.displayIsAsleep && videoPresentationAllowed
         let requestsSystemHDR = sourceEligible && PlaybackVideoOutputPolicy.requestsSystemHDR(mode: outputMode, video: video)
         registerForSystemHDRChanges()
-        let displayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+        let displayID = view.diagnosticDisplayID
         let mediaID = withLock { seekActivity.owner.mediaID }
         let audioDriver = playerState?.playbackDiagnostics?.audio.outputDriver
         let audioReady = playerState?.audioTracks.isEmpty == true || (audioDriver != nil && audioDriver != "null")

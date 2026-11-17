@@ -156,6 +156,28 @@ struct DriveRequestRecoveryTests {
         #expect(shareError == nil)
     }
 
+    @Test func baiduVerificationPausesAccountWithoutRetryingOrInvalidatingFiles() async throws {
+        let fixture = RecoveryFixture { _, _ in
+            .init(body: #"{"errno":9019,"errmsg":"need verify token=private"}"#)
+        }
+        let client = DriveHTTPClient(http(fixture), provider: .baidu)
+        let error = try await failure {
+            _ = try await client.get(url: "https://pan.baidu.com/share/list",
+                                     headers: ["Cookie": "BDUSS=fixture; BDCLND=share"])
+        }
+        #expect(error.reason == .credentialExpired)
+        #expect(error.pausesAccountOperation)
+        #expect(error.serviceCode == "9019")
+        #expect(fixture.count == 1)
+        #expect(!DriveEngineError.invalidatesSavedRecord(error))
+        let message = UserFacingErrorPresenter.message(for: error, context: .playback)
+        #expect(message.contains("官方") && message.contains("重新扫码"))
+        #expect(!message.contains("提取码") && !message.contains("private"))
+        let unrelated = DriveFailureClassifier.response(.init(data: Data(#"{"errno":9019}"#.utf8), statusCode: 200),
+            provider: .quark, operation: .listing, path: "/share/list")
+        #expect(unrelated == nil)
+    }
+
     @Test func retryAfterIsWaitedAndSuccessUsesSameRealTransport() async throws {
         let fixture = RecoveryFixture { _, count in count == 1 ? .init(status: 429, headers: ["Retry-After": "1"]) : .init() }
         let client = DriveHTTPClient(http(fixture), provider: .quark)

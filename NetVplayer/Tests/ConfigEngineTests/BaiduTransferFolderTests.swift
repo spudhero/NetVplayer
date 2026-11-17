@@ -6,6 +6,18 @@ import Networking
 
 @Suite(.serialized)
 struct BaiduTransferFolderTests {
+    @Test func shareListingIncludesSelectedAccountWithoutReusingAnotherShareSession() async throws {
+        let page = #"locals.mset({"shareid":"share","uk":"owner","file_list":[]});"#
+        let listing = #"{"errno":0,"share_id":"share","uk":"owner","list":[{"fs_id":"source","server_filename":"fixture.mp4","size":1,"isdir":0}]}"#
+        let fixture = FolderFixture([.json(page), .json(listing)])
+        let client = fixture.client(cookieProvider: { "BDUSS=selected; STOKEN=account; BDCLND=unrelated" })
+        let share = try client.shareRequest(from: "https://pan.baidu.com/s/1isolatedFixture")
+        let result = try await client.expandedFiles(share: share)
+        #expect(result.files.map(\.fileID) == ["source"])
+        #expect(fixture.cookies.last == "BDUSS=selected; STOKEN=account")
+        #expect(fixture.methods == ["GET", "GET"])
+    }
+
     @Test func existingDirectoryIsReusedAcrossPreparations() async throws {
         let fixture = FolderFixture([.okList, .okList, .okList, .okList])
         let client = fixture.client()
@@ -88,19 +100,23 @@ private final class FolderFixture: @unchecked Sendable {
     private var seenMethods: [String] = []
     private var seenDirectories: [String] = []
     private var forms: [[String: String]] = []
+    private var seenCookies: [String] = []
+    var cookies: [String] { lock.withLock { seenCookies } }
     var methods: [String] { lock.withLock { seenMethods } }
     var directories: [String] { lock.withLock { seenDirectories } }
     var createForms: [[String: String]] { lock.withLock { forms } }
     init(_ replies: [FolderReply]) { self.replies = replies }
-    func client() -> BaiduDriveClient {
+    func client(cookieProvider: @escaping @Sendable () -> String? = { nil }) -> BaiduDriveClient {
         FolderProtocol.fixture = self
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FolderProtocol.self]
-        return BaiduDriveClient(httpClient: HTTPClient(session: URLSession(configuration: configuration)).withExplicitProxy(nil))
+        return BaiduDriveClient(httpClient: HTTPClient(session: URLSession(configuration: configuration)).withExplicitProxy(nil),
+                               shareAccountCookieProvider: cookieProvider)
     }
     func respond(_ request: URLRequest) throws -> FolderReply {
         try lock.withLock {
             seenMethods.append(request.httpMethod ?? "GET")
+            seenCookies.append(request.value(forHTTPHeaderField: "Cookie") ?? "")
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
             if let dir = query.first(where: { $0.name == "dir" })?.value { seenDirectories.append(dir) }
             if request.httpMethod == "POST" {

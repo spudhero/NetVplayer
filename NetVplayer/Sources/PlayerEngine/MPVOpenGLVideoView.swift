@@ -38,6 +38,10 @@ public final class MPVOpenGLVideoView: NSView {
     private(set) var displayICCData: Data?
     private(set) var displayICCSource: PlaybackICCSubmission = .sRGBFallback
     private(set) var displayColorSpace: NSColorSpace = .sRGB
+    private(set) var diagnosticScreen: NSScreen?
+    private(set) var diagnosticDisplayID: UInt32?
+    private(set) var diagnosticDisplayName: String?
+    private(set) var diagnosticRefreshRate: Double?
     private var systemIsAsleep = false
     private var screensAreAsleep = false
     private var presentationTransferDepth = 0
@@ -123,6 +127,7 @@ public final class MPVOpenGLVideoView: NSView {
         screenObservers.removeDisplayObservers()
         restoreWindowColorSpace()
         guard let window else {
+            if presentationTransferDepth == 0 { cacheDiagnosticScreen(nil) }
             if presentationTransferDepth == 0 { engine.refreshVideoOutputAssessment() }
             return
         }
@@ -177,7 +182,8 @@ public final class MPVOpenGLVideoView: NSView {
     }
 
     func refreshDisplayColorProfile(resetHDRActivation: Bool = false) {
-        let screenSpace = window?.screen?.colorSpace
+        cacheDiagnosticScreen(window?.screen)
+        let screenSpace = diagnosticScreen?.colorSpace
         let screenData = screenSpace?.iccProfileData
         if let screenSpace, screenSpace.colorSpaceModel == .rgb, let screenData,
            PlaybackColorPolicy.validICC(screenData) {
@@ -191,6 +197,13 @@ public final class MPVOpenGLVideoView: NSView {
         }
         if resetHDRActivation { engine.displayConfigurationDidChange(for: self) }
         engine.updateDisplayColorProfile(for: self)
+    }
+
+    private func cacheDiagnosticScreen(_ screen: NSScreen?) {
+        diagnosticScreen = screen
+        diagnosticDisplayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+        diagnosticDisplayName = screen.map { String($0.localizedName.prefix(128)) }
+        diagnosticRefreshRate = diagnosticDisplayID.flatMap { CGDisplayCopyDisplayMode($0)?.refreshRate }
     }
 
     func tagSurfaceColorSpace(_ space: NSColorSpace) {
