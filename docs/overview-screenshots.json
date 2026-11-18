@@ -4,13 +4,13 @@
   "application_build": "57",
   "binary_uuid": "7439365D-A1E7-36F8-93F8-CF330650E6B0",
   "binary_sha256": "ca6eab83aa737a7c121bf9c1b98ac0bb619094a191fb19db1c54a1591106d2b7",
-  "note": "Real installed app captures. Player displays a self-created local demo. Empty setup forms demonstrate UI, not real-account acceptance. Private URLs and source names are masked in image pixels. Artwork and media names are blurred.",
+  "note": "Real installed app captures. Player displays a self-created local demo. Empty setup forms demonstrate UI, not real-account acceptance. Private URLs and source names are masked in image pixels. Artwork and media names use direct Gaussian blur without downsampling.",
   "images": [
     {
       "file": "website/assets/overview/home.webp",
       "width": 1863,
       "height": 1050,
-      "sha256": "97f4c281cd53ac4b848d3194a4002638487ceb8989a0f417e3bee9e2415bf193",
+      "sha256": "611368481497f51036e377713138ab084d2d1ea2fc6d58b94cc1691827198e52",
       "raw_sha256": "f03410f814fabf1d8b014d0208fe25c9b078b092b6ec198f50b9e39d6a622b14",
       "opaque_regions": [
         [
@@ -351,13 +351,16 @@
           1825,
           1029
         ]
-      ]
+      ],
+      "blur_method": "gaussian",
+      "blur_radius_pixels": 5,
+      "downsampling": false
     },
     {
       "file": "website/assets/overview/detail.webp",
       "width": 1863,
       "height": 1050,
-      "sha256": "48eb8a9e64ab00192df935725bf5942fd2a789a7cd6a29358e419a78db62a648",
+      "sha256": "057d3107474f8981a24a5c92e8227fc96a6eaab856b7fc1c42df2c63cae596e3",
       "raw_sha256": "a4f6fb78a25a1ae3b634c7557522fb19411a6f8266dfb83bcb091a643dd1647a",
       "opaque_regions": [
         [
@@ -410,7 +413,10 @@
           1260,
           542
         ]
-      ]
+      ],
+      "blur_method": "gaussian",
+      "blur_radius_pixels": 8,
+      "downsampling": false
     },
     {
       "file": "website/assets/overview/player.webp",
@@ -454,7 +460,7 @@
       "file": "website/assets/overview/search.webp",
       "width": 1863,
       "height": 1050,
-      "sha256": "cec39e7b4aa79b791854dab7233248c32d8eee435ce8b5ebf28505521ad1c8a0",
+      "sha256": "6b135ff48e4d3c22d811815be5969e239e3cda1999e3537b4a99b46059b05fff",
       "raw_sha256": "73403ffcb4d1548ff58d72dbfbe405c89f13a2b117dc88e19a0273e2957b85ce",
       "opaque_regions": [
         [
@@ -657,7 +663,10 @@
           1757,
           832
         ]
-      ]
+      ],
+      "blur_method": "gaussian",
+      "blur_radius_pixels": 3.5,
+      "downsampling": false
     },
     {
       "file": "website/assets/overview/content-sources.webp",

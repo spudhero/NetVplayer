@@ -19,7 +19,7 @@
   <a href="CHANGELOG.md">Release History</a>
 </p>
 
-![NetVplayer 原生 macOS 主界面 / Native macOS interface](website/assets/overview/home.webp)
+![NetVplayer 原生 macOS 主界面 / Native macOS interface](website/assets/overview/home.webp?v=6113684814)
 
 <p align="center">macOS 14+ · Apple Silicon · 简体中文 / English</p>
 
@@ -48,7 +48,7 @@ NetVplayer 是基于 **SwiftUI 与内嵌 libmpv** 的原生 macOS 媒体播放�
 
 | 详情、线路与资源分组 | 原生播放器与完整控制 |
 | :---: | :---: |
-| <img src="website/assets/overview/detail.webp" alt="详情页的播放线路、资源组和选集切换；影视内容已模糊" width="720"> | <img src="website/assets/overview/player.webp" alt="本地演示视频在实际播放器中的字幕、倍速、片头片尾和小窗控制" width="720"> |
+| <img src="website/assets/overview/detail.webp?v=057d310747" alt="详情页的播放线路、资源组和选集切换；影视内容已模糊" width="720"> | <img src="website/assets/overview/player.webp" alt="本地演示视频在实际播放器中的字幕、倍速、片头片尾和小窗控制" width="720"> |
 
 ### 你的网盘、NAS 和媒体库
 
