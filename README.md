@@ -21,7 +21,9 @@
 
 ![NetVplayer 原生 macOS 主界面 / Native macOS interface](website/assets/overview/home.webp)
 
-<p align="center">macOS 14+ · Apple Silicon · 简体中文 / English<br>当前正式版本 / Current release: <strong>2.0.6 (build 57)</strong> · <a href="https://github.com/spudhero/NetVplayer/releases/latest">下载 / Download</a></p>
+<p align="center">macOS 14+ · Apple Silicon · 简体中文 / English</p>
+
+当前正式版本 / Current release: **NetVplayer 2.0.6 (build 57)** · [下载 / Download](https://github.com/spudhero/NetVplayer/releases/latest) · [发布说明 / Release notes](docs/releases/2.0.6.md)
 
 ## 中文
 

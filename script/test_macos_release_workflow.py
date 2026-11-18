@@ -322,8 +322,12 @@ else:
         self.assertTrue((ROOT / release_notes).is_file())
         self.assertIn(release_notes, readme)
         expected = f"{info['CFBundleShortVersionString']} (build {info['CFBundleVersion']}) |"
-        self.assertTrue(any(f"| {kind} | {expected}" in readme
-                            for kind in ("Stable application", "Release candidate")))
+        current_release = ("当前正式版本 / Current release: "
+                           f"**NetVplayer {info['CFBundleShortVersionString']} "
+                           f"(build {info['CFBundleVersion']})**")
+        self.assertTrue(current_release in readme or any(
+            f"| {kind} | {expected}" in readme
+            for kind in ("Stable application", "Release candidate")))
 
 
 if __name__ == "__main__":
