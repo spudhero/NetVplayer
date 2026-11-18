@@ -1,0 +1,820 @@
+{
+  "captured_on": "2026-11-18",
+  "application_version": "2.0.6",
+  "application_build": "57",
+  "binary_uuid": "7439365D-A1E7-36F8-93F8-CF330650E6B0",
+  "binary_sha256": "ca6eab83aa737a7c121bf9c1b98ac0bb619094a191fb19db1c54a1591106d2b7",
+  "note": "Real installed app captures. Player displays a self-created local demo. Empty setup forms demonstrate UI, not real-account acceptance. Private URLs and source names are masked in image pixels. Artwork and media names are blurred.",
+  "images": [
+    {
+      "file": "website/assets/overview/home.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "97f4c281cd53ac4b848d3194a4002638487ceb8989a0f417e3bee9e2415bf193",
+      "raw_sha256": "f03410f814fabf1d8b014d0208fe25c9b078b092b6ec198f50b9e39d6a622b14",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ],
+        [
+          300,
+          40,
+          510,
+          68
+        ]
+      ],
+      "blur_regions": [
+        [
+          254,
+          142,
+          414,
+          381
+        ],
+        [
+          254,
+          385,
+          418,
+          412
+        ],
+        [
+          430,
+          142,
+          590,
+          381
+        ],
+        [
+          430,
+          385,
+          594,
+          412
+        ],
+        [
+          606,
+          142,
+          766,
+          381
+        ],
+        [
+          606,
+          385,
+          770,
+          412
+        ],
+        [
+          782,
+          142,
+          942,
+          381
+        ],
+        [
+          782,
+          385,
+          946,
+          412
+        ],
+        [
+          958,
+          142,
+          1118,
+          381
+        ],
+        [
+          958,
+          385,
+          1122,
+          412
+        ],
+        [
+          1134,
+          142,
+          1294,
+          381
+        ],
+        [
+          1134,
+          385,
+          1298,
+          412
+        ],
+        [
+          1310,
+          142,
+          1470,
+          381
+        ],
+        [
+          1310,
+          385,
+          1474,
+          412
+        ],
+        [
+          1485,
+          142,
+          1645,
+          381
+        ],
+        [
+          1485,
+          385,
+          1649,
+          412
+        ],
+        [
+          1661,
+          142,
+          1821,
+          381
+        ],
+        [
+          1661,
+          385,
+          1825,
+          412
+        ],
+        [
+          254,
+          451,
+          414,
+          690
+        ],
+        [
+          254,
+          694,
+          418,
+          721
+        ],
+        [
+          430,
+          451,
+          590,
+          690
+        ],
+        [
+          430,
+          694,
+          594,
+          721
+        ],
+        [
+          606,
+          451,
+          766,
+          690
+        ],
+        [
+          606,
+          694,
+          770,
+          721
+        ],
+        [
+          782,
+          451,
+          942,
+          690
+        ],
+        [
+          782,
+          694,
+          946,
+          721
+        ],
+        [
+          958,
+          451,
+          1118,
+          690
+        ],
+        [
+          958,
+          694,
+          1122,
+          721
+        ],
+        [
+          1134,
+          451,
+          1294,
+          690
+        ],
+        [
+          1134,
+          694,
+          1298,
+          721
+        ],
+        [
+          1310,
+          451,
+          1470,
+          690
+        ],
+        [
+          1310,
+          694,
+          1474,
+          721
+        ],
+        [
+          1485,
+          451,
+          1645,
+          690
+        ],
+        [
+          1485,
+          694,
+          1649,
+          721
+        ],
+        [
+          1661,
+          451,
+          1821,
+          690
+        ],
+        [
+          1661,
+          694,
+          1825,
+          721
+        ],
+        [
+          254,
+          759,
+          414,
+          998
+        ],
+        [
+          254,
+          1002,
+          418,
+          1029
+        ],
+        [
+          430,
+          759,
+          590,
+          998
+        ],
+        [
+          430,
+          1002,
+          594,
+          1029
+        ],
+        [
+          606,
+          759,
+          766,
+          998
+        ],
+        [
+          606,
+          1002,
+          770,
+          1029
+        ],
+        [
+          782,
+          759,
+          942,
+          998
+        ],
+        [
+          782,
+          1002,
+          946,
+          1029
+        ],
+        [
+          958,
+          759,
+          1118,
+          998
+        ],
+        [
+          958,
+          1002,
+          1122,
+          1029
+        ],
+        [
+          1134,
+          759,
+          1294,
+          998
+        ],
+        [
+          1134,
+          1002,
+          1298,
+          1029
+        ],
+        [
+          1310,
+          759,
+          1470,
+          998
+        ],
+        [
+          1310,
+          1002,
+          1474,
+          1029
+        ],
+        [
+          1485,
+          759,
+          1645,
+          998
+        ],
+        [
+          1485,
+          1002,
+          1649,
+          1029
+        ],
+        [
+          1661,
+          759,
+          1821,
+          998
+        ],
+        [
+          1661,
+          1002,
+          1825,
+          1029
+        ]
+      ]
+    },
+    {
+      "file": "website/assets/overview/detail.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "48eb8a9e64ab00192df935725bf5942fd2a789a7cd6a29358e419a78db62a648",
+      "raw_sha256": "a4f6fb78a25a1ae3b634c7557522fb19411a6f8266dfb83bcb091a643dd1647a",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ]
+      ],
+      "blur_regions": [
+        [
+          227,
+          30,
+          1863,
+          91
+        ],
+        [
+          1733,
+          91,
+          1863,
+          1050
+        ],
+        [
+          132,
+          991,
+          1733,
+          1050
+        ],
+        [
+          159,
+          237,
+          545,
+          990
+        ],
+        [
+          670,
+          366,
+          1260,
+          402
+        ],
+        [
+          640,
+          417,
+          799,
+          471
+        ],
+        [
+          670,
+          504,
+          1260,
+          542
+        ]
+      ]
+    },
+    {
+      "file": "website/assets/overview/player.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "3f6b6c76c530d0034be95574cc34c9bb3da13eeb5e060e539bfd8b30e6eadb62",
+      "raw_sha256": "1e9d40ba952d21526e6dd1a5a61b262a55f635b6fdf83ce823f37ddf851f559c",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ],
+        [
+          1060,
+          3,
+          1178,
+          39
+        ]
+      ],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/live-guide.webp",
+      "width": 1480,
+      "height": 833,
+      "sha256": "43479b80445c4d7e2c7414a932fc5e540925101122dbdc8c64fe9c784f63315d",
+      "raw_sha256": "599a39065202b8ec786e310b33f656609985e6712c6cd81d47bfdf7342545e88",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ]
+      ],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/search.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "cec39e7b4aa79b791854dab7233248c32d8eee435ce8b5ebf28505521ad1c8a0",
+      "raw_sha256": "73403ffcb4d1548ff58d72dbfbe405c89f13a2b117dc88e19a0273e2957b85ce",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ]
+      ],
+      "blur_regions": [
+        [
+          283,
+          475,
+          563,
+          503
+        ],
+        [
+          681,
+          475,
+          961,
+          503
+        ],
+        [
+          1076,
+          475,
+          1356,
+          503
+        ],
+        [
+          1477,
+          475,
+          1757,
+          503
+        ],
+        [
+          283,
+          523,
+          563,
+          551
+        ],
+        [
+          681,
+          523,
+          961,
+          551
+        ],
+        [
+          1076,
+          523,
+          1356,
+          551
+        ],
+        [
+          1477,
+          523,
+          1757,
+          551
+        ],
+        [
+          283,
+          569,
+          563,
+          597
+        ],
+        [
+          681,
+          569,
+          961,
+          597
+        ],
+        [
+          1076,
+          569,
+          1356,
+          597
+        ],
+        [
+          1477,
+          569,
+          1757,
+          597
+        ],
+        [
+          283,
+          617,
+          563,
+          645
+        ],
+        [
+          681,
+          617,
+          961,
+          645
+        ],
+        [
+          1076,
+          617,
+          1356,
+          645
+        ],
+        [
+          1477,
+          617,
+          1757,
+          645
+        ],
+        [
+          283,
+          663,
+          563,
+          691
+        ],
+        [
+          681,
+          663,
+          961,
+          691
+        ],
+        [
+          1076,
+          663,
+          1356,
+          691
+        ],
+        [
+          1477,
+          663,
+          1757,
+          691
+        ],
+        [
+          283,
+          711,
+          563,
+          739
+        ],
+        [
+          681,
+          711,
+          961,
+          739
+        ],
+        [
+          1076,
+          711,
+          1356,
+          739
+        ],
+        [
+          1477,
+          711,
+          1757,
+          739
+        ],
+        [
+          283,
+          757,
+          563,
+          785
+        ],
+        [
+          681,
+          757,
+          961,
+          785
+        ],
+        [
+          1076,
+          757,
+          1356,
+          785
+        ],
+        [
+          1477,
+          757,
+          1757,
+          785
+        ],
+        [
+          283,
+          804,
+          563,
+          832
+        ],
+        [
+          681,
+          804,
+          961,
+          832
+        ],
+        [
+          1076,
+          804,
+          1356,
+          832
+        ],
+        [
+          1477,
+          804,
+          1757,
+          832
+        ]
+      ]
+    },
+    {
+      "file": "website/assets/overview/content-sources.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "75b9b80c06bb1a01338769143b54f6d78ece1aae8ac5494384fd78a36f7eec7c",
+      "raw_sha256": "6d050a2f7d9f131ef66e9ba1121c0bc12a018483d7268538e9fcd721cdc2e807",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ],
+        [
+          784,
+          313,
+          1002,
+          337
+        ],
+        [
+          784,
+          534,
+          1014,
+          556
+        ]
+      ],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/extensions.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "0b14370fc0f9c35c03b51ff775803d97e25639d20346732da7e827d9c16273de",
+      "raw_sha256": "fc70a9c129d928734eeb0948d9f5ad72dd7416dfcb353ba794d3129e0dbe1e9c",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ],
+        [
+          1254,
+          226,
+          1382,
+          253
+        ]
+      ],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/file-services.webp",
+      "width": 660,
+      "height": 689,
+      "sha256": "ca63ac9fde40124b510aa26e5d32de69225c7ec31241a9c4b16d7837ac985372",
+      "raw_sha256": "c88067f4b5fb76229d61231b381924dfc6931675708be65e91e032d7c26e11b8",
+      "opaque_regions": [],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/cloud-folders.webp",
+      "width": 600,
+      "height": 290,
+      "sha256": "d0ff873e4cbafec9d5cafe4e250e14af3882e65bb384416b147b48f473833bb1",
+      "raw_sha256": "24241c2af2ec41e3352cca7b0bdee40afeeaf7e62e111a51262a333a628286bd",
+      "opaque_regions": [],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/media-servers.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "3133d5966754295e1ec1f10c9e7c9bdd296920857250013488cc4787beefe659",
+      "raw_sha256": "206822dbaecb02897604e56a491a99b46fd1e5304feb7efd189338e7d1d8d1d1",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ]
+      ],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/subtitles.webp",
+      "width": 600,
+      "height": 680,
+      "sha256": "4566071e906501e1ac2ef50b2212c50cbbe9881c05b42f83e85b013728fe75bb",
+      "raw_sha256": "20f739fbbeb1e960f2a983e95961ed54fe3b1106c3e8b48d7ae5012b42c363cb",
+      "opaque_regions": [],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/video-output.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "c7b94f9e920a06097bbbbe57600fe9a87f98c373207edd852905be1b7be31486",
+      "raw_sha256": "92517c7713456e92e28c6c4ac39da317cde9a511512e2a3a721ad7dbc539e506",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ]
+      ],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/dialogue.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "65db905b860d7745a168a714f16b99acadef85b1b2db14f51976ff75de5fdf04",
+      "raw_sha256": "44b879d9582250bc74c6e937b54b5394db305f71f85493cf4a61b994a8e62eae",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ]
+      ],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/settings-search.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "82d4d7157199f742f622d00d7539e4f4f45e1fefdb94af49326e8d2a00bc4dc5",
+      "raw_sha256": "60f1cbcbbdf729e97b121019756976a0d75ef71649d36c0c5b8819dac9dbf02f",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ]
+      ],
+      "blur_regions": []
+    },
+    {
+      "file": "website/assets/overview/themes.webp",
+      "width": 1863,
+      "height": 1050,
+      "sha256": "3c448843adbb23bd76650bdd90c172b201d98bca0979cf80483b1633fa17b314",
+      "raw_sha256": "48de5eedb849311b36ceaf939da3fcd66d72f59c56191e88471468f473f3b9d0",
+      "opaque_regions": [
+        [
+          0,
+          0,
+          76,
+          29
+        ]
+      ],
+      "blur_regions": []
+    }
+  ]
+}

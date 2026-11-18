@@ -14,143 +14,177 @@
   <a href="#english">English</a> |
   <a href="https://spudhero.github.io/NetVplayer/">Website</a> |
   <a href="https://github.com/spudhero/NetVplayer/releases/latest">Download</a> |
-  <a href="CHANGELOG.md">Release History</a> |
-  <a href="https://github.com/spudhero/NetVplayer-Provider-Distribution/releases">Provider Releases</a> |
-  <a href="provider-sdk/README.md">Provider SDK</a>
+  <a href="docs/guide.md">使用指南 / Guide</a> |
+  <a href="ARCHITECTURE.md">Architecture</a> |
+  <a href="CHANGELOG.md">Release History</a>
 </p>
 
-![NetVplayer running on macOS](website/assets/home-aurora.webp)
+![NetVplayer 原生 macOS 主界面 / Native macOS interface](website/assets/overview/home.webp)
 
-当前正式版本 / Current release: **NetVplayer 2.0.6 (build 57)**。修复临时 HDR 切换后的音频恢复，详情页选集显示已知网盘文件大小。见 [2.0.6 发布说明 / Release notes](docs/releases/2.0.6.md)。
-
-上一正式版本 / Previous release: **NetVplayer 2.0.5 (build 56)**。播放卡顿和百度账号校验修复已保留 / Includes the playback-stall and Baidu authorization fixes from 2.0.5.
-
-| Component | Version |
-| --- | --- |
-| Stable application | 2.0.6 (build 57) |
-| Python Provider | 1.1.14 |
-| Complete Android runtime | 1.2.4 |
-| Legacy Android installer | 1.1.0 (historical compatibility) |
+<p align="center">macOS 14+ · Apple Silicon · 简体中文 / English<br>当前正式版本 / Current release: <strong>2.0.6 (build 57)</strong> · <a href="https://github.com/spudhero/NetVplayer/releases/latest">下载 / Download</a></p>
 
 ## 中文
 
-NetVplayer 是基于 SwiftUI 与内嵌 libmpv 的原生 macOS 媒体播放器，支持点播、直播、云盘和自有文件。适用于 **macOS 14+ / Apple Silicon**，界面支持简体中文和 English。
+NetVplayer 是基于 **SwiftUI 与内嵌 libmpv** 的原生 macOS 媒体播放器。把在线点播、电视直播、个人网盘、NAS、本机文件和媒体服务器放进同一套浏览与播放体验：找内容、看详情、选剧集、调字幕，再从历史记录接着看。
 
-公开应用不内置视频源、目录、直播列表、账号或媒体内容。内容入口由用户自行添加，并应具有相应访问权限。
+内容由你添加。应用不附带视频源、直播列表、账号或媒体；截图中的来源信息已打码，影视海报和名称已模糊，播放器使用自制本地演示视频。
 
-### 项目背景
+### 从内容到播放，一处完成
 
-FongMi/TV、OK影视、影视仓、TVBox 等工具主要服务 Android 生态。我一直没有找到符合自己使用习惯的 macOS 版本，于是从 SwiftUI 与 libmpv 开始，写了 NetVplayer。
+| 你想做什么 | NetVplayer 提供什么 |
+| --- | --- |
+| 浏览与找片 | 分类与筛选、跨已连接来源搜索、影片详情、TMDB 资料、收藏与历史续播 |
+| 选择播放内容 | 多线路选集、宫格／列表、正倒序、网盘资源分组；目录提供时显示文件大小 |
+| 看直播 | JSON／M3U／TXT 列表、Xtream、频道分组、频道搜索、节目单与线路切换 |
+| 打开个人网盘 | 夸克、UC、阿里云盘、百度网盘、115 的个人目录，多选文件夹加入媒体库 |
+| 连接文件服务 | SMB、WebDAV、AList、OpenList、FTP／FTPS、SFTP，以及本机文件夹和直接打开文件 |
+| 连接媒体服务器 | Emby、Jellyfin、Plex、极影视、飞牛影视；浏览服务端媒体并进入原生播放 |
+| 整理媒体库 | 电影、剧集与混合海报墙；本地资料优先，支持 TMDB、豆瓣及手动匹配 |
+| 调整观看体验 | 主副字幕、音轨、倍速、比例、章节、片头片尾、小窗置顶；HDR 策略、音频设备与对白清晰度 |
+| 处理字幕 | 文本字幕本机翻译、双语字幕及导出，图片字幕／音频识别入口，在线字幕搜索 |
+| 按自己的习惯使用 | 14 种主题、设置搜索、配置备份、应用内更新与脱敏问题反馈 |
 
-项目将内容浏览、搜索、选集和播放组织成原生 Mac 桌面体验。感谢 [FongMi/TV](https://github.com/FongMi/TV) 等开源实践提供的兼容性参考；NetVplayer 使用独立的 Swift/macOS 实现，与这些项目没有隶属或官方合作关系。
-
-### 主要功能
-
-支持直接添加夸克、UC、阿里、百度、115 的个人网盘目录，复用海报、详情和原片播放。真实账号验收待完成，见[使用与验证](docs/releases/2.0.0.md)。
-
-2.0 新增 Plex、FTP／SFTP，并补齐 WebDAV、Alist、OpenList 的应用内实测；范围与限制见[发布说明](docs/releases/2.0.0.md)。
-
-极影视／飞牛影视接入也已实现，并完成独立模拟 HTTP 与原生播放验证；真实 NAS 和完整播放窗口截图仍待验。见[发布说明与限制](docs/releases/2.0.0.md)。
-
-- **浏览与搜索**：影片详情、多线路选集、跨已连接来源搜索。
-- **点播与直播**：字幕、音轨、倍速、画面比例、章节预览、频道分组与节目单。
-- **云盘与文件**：连接受支持云盘、WebDAV、AList/OpenList、SMB 和本机文件夹。
-- **媒体库**：电影、剧集和混合海报墙，支持本地资料、TMDB、豆瓣及手动匹配。
-- **桌面体验**：播放历史、收藏、续播、紧凑窗口与主题切换。
-
-| 影片详情与选集 | 播放控制 |
+| 详情、线路与资源分组 | 原生播放器与完整控制 |
 | :---: | :---: |
-| <img src="website/assets/screen-detail.webp" alt="影片详情与选集" width="720"> | <img src="website/assets/screen-player.webp" alt="点播播放控制" width="720"> |
+| <img src="website/assets/overview/detail.webp" alt="详情页的播放线路、资源组和选集切换；影视内容已模糊" width="720"> | <img src="website/assets/overview/player.webp" alt="本地演示视频在实际播放器中的字幕、倍速、片头片尾和小窗控制" width="720"> |
 
-### 安装
+### 你的网盘、NAS 和媒体库
 
-1. 从[最新 GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest)下载 `macos-arm64.zip`。
-2. 解压，将 `NetVplayer.app` 拖入“应用程序”。
-3. 首次启动在 Finder 中右键选择“打开”。当前应用使用社区 ad-hoc 签名；如仍被拦截，在“系统设置 → 隐私与安全性”确认应用后选择“仍要打开”。
-4. 等待“设置 → 扩展支持”显示就绪。首次安装和扩展更新需要能访问 GitHub。
-5. 在“设置 → 内容来源”添加自己的配置、账号或文件位置，即可开始使用。
+文件服务与媒体服务器分别接入：前者直接浏览文件夹，后者使用服务器已有的媒体资料和目录。连接 NAS 后，可以一次选择多个文件夹，分别整理电影与剧集；个人网盘目录也能进入海报媒体库。
 
-应用会在侧栏和设置页的版本号旁提示更新，确认后在后台下载与校验，正常退出后安装。版本说明与历史请查看 [CHANGELOG](CHANGELOG.md#中文)、[按版本发布说明](docs/releases/README.md)或 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
+| 个人网盘目录 | NAS 与文件连接 |
+| :---: | :---: |
+| <img src="website/assets/overview/cloud-folders.webp" alt="添加个人网盘目录，下一步可多选文件夹" width="600"> | <img src="website/assets/overview/file-services.webp" alt="实际连接表单中的本机、SMB、WebDAV、AList、OpenList、FTP 和 SFTP 选项" width="600"> |
 
-### 使用
+### 音画与字幕，按当前设备调整
 
-- **在线内容**：在“设置 → 内容来源 → 在线内容”加载影视配置或 JSON、M3U、TXT 直播列表；Xtream 服务填写服务方提供的地址和账号。
-- **云盘**：在“网盘账号”完成所需授权，再打开自己的文件或分享。
-- **NAS / 本地**：在“视频文件位置”添加服务器或文件夹，测试并保存后从首页选择该服务；切到“媒体库”可添加电影或剧集目录。
-- **播放**：打开详情选择线路和剧集，在播放器调整字幕、音轨和倍速；历史记录可继续上次播放。
+播放器提供字幕与音轨切换、主副字幕、进度跳转、倍速、画面比例、章节和小窗置顶。播放偏好中可选择“跟随系统”“临时 HDR”或“SDR 映射”，查看实际输出，并调整音频设备与对白清晰度。
 
-TMDB 由正式应用提供项目凭据，普通用户无需填写令牌。配置与账号保存在本机，导出备份不包含密码、Token 或 Cookie。
+文本字幕翻译可跟随播放或处理整份字幕，并导出译文或双语字幕。**Apple 本机翻译需要 macOS 15+ 及可用的语言资源**；图片字幕识别、音频识别和在线搜索有各自的系统、权限或服务要求。弹幕默认关闭，按需手动开启。
 
-### 扩展与开发
+| 文本字幕翻译与导出 | 色彩与视频输出 |
+| :---: | :---: |
+| <img src="website/assets/overview/subtitles.webp" alt="Apple 本机翻译、跟随播放、整份字幕和双语导出面板" width="600"> | <img src="website/assets/overview/video-output.webp" alt="跟随系统、临时 HDR 和 SDR 映射设置" width="720"> |
 
-兼容的签名 Provider 由应用自动下载、验证和更新，异常时在“设置 → 扩展支持”选择“重新检查”。包版本与兼容说明见 [Provider Releases](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases)。主程序和 SDK 公开，站点业务 Provider 实现源码保持私有。
+HDR／杜比视界素材的实际呈现取决于片源、显示器和当前输出路径；片名或格式标记不代表设备已启用对应输出。服务登录、原片持续播放和不同 NAS 的兼容性也取决于服务端与网络，详见[使用条件与限制](docs/guide.md#使用条件与限制)。
 
-Android 通用 Java／JNI 桥接、兼容层和构建实现已获准公开，连同固定上游对应源码、构建说明和许可证作为[完整 Android 环境的源码附件](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.4-arm64)提供；站点业务 Provider 实现继续私有。选择 Mac 实现不会准备 Android 环境；明确选择 Android 原版并重启后，首次只下载、验证和激活完整签名环境，JVM、框架和宿主不再在客户端分别下载组装。来源 JAR 仍按用户配置下载，不包含在应用或环境包中。完整环境使用独立 `android/runtime/index.json`，旧 `android/index.json` 保留历史兼容。公开播放器中的兼容规则资源是固定摘要生成物。
+### 两种来源解析方式，同一套 Mac 体验
 
-使用 Xcode 和 Homebrew libmpv 依赖从源码构建：
+在“**设置 → 扩展支持 → 来源解析方式**”选择：
+
+- **Mac 实现**：使用 Mac 原生适配或签名扩展，不准备 Android 环境。
+- **Android 原版**：在独立兼容环境中执行用户配置引用的原始 JAR；目录、详情和播放解析沿用同一实现。首次使用下载、验证并激活完整签名环境，来源 JAR 由用户配置提供。
+
+更改后重启应用生效，两种方式不自动互相回退。本机文件、媒体服务器和标准内容接口不受此选择影响。**Android 原版是内容解析方式，应用界面与媒体播放仍为原生 macOS。** 原生网盘账号与 Android 来源内授权分别保存。
+
+![来源解析方式与签名扩展支持](website/assets/overview/extensions.webp)
+
+### 安装与第一次使用
+
+1. 从[最新 GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest)下载名称包含 `macos-arm64.zip` 的安装包。
+2. 解压，把 `NetVplayer.app` 拖入“应用程序”。当前提供 **Apple Silicon / macOS 14+** 构建。
+3. 当前社区包使用 ad-hoc 签名。首次打开如被拦截，确认来自本项目后，在“系统设置 → 隐私与安全性”选择“仍要打开”；系统允许时也可使用 Finder 右键“打开”。
+4. 打开“设置 → 扩展支持”，等待所需扩展就绪。首次安装和扩展更新需要能访问 GitHub。
+5. 在“设置 → 内容来源”添加自己的内容。没有添加内容时，空白首页是正常状态。
+
+| 内容在什么地方 | 从哪里开始 |
+| --- | --- |
+| 影视配置／直播列表 | 内容来源 → 在线内容 → 填入自己的链接 → 加载影视／加载直播 |
+| Xtream 服务 | 内容来源 → 在线内容 → 影视与直播账号 → 验证并连接 |
+| Emby／Jellyfin／Plex／极影视／飞牛影视 | 内容来源 → 在线内容 → 媒体服务器 → 选择类型并登录 |
+| 个人网盘文件夹 | 内容来源 → 网盘账号 → 登录 → 添加网盘目录 → 选择文件夹 |
+| NAS／文件服务器／本机文件夹 | 内容来源 → NAS / 本地 → 添加连接 → 测试连接 → 连接并选择文件夹 |
+| 单个本机视频 | 菜单栏 → 文件 → 打开文件，或把视频拖入应用；如出现“待打开的文件”，选择其中的文件 |
+
+配置成功后回到点播首页，从来源菜单选择已添加的入口。打开详情，选择线路与剧集；历史记录可继续上次播放。找不到设置时，在设置页顶部输入关键词，点击结果直接定位。
+
+完整图文说明：[使用指南](docs/guide.md) · [官网功能介绍](https://spudhero.github.io/NetVplayer/)。版本号旁会提示应用更新，确认后后台下载与校验，正常退出后安装；具体变更见 [CHANGELOG](CHANGELOG.md) 与[发布说明](docs/releases/README.md)。
+
+### 新版架构
+
+主程序、内容扩展和签名分发独立维护。原生界面负责浏览与交互，内容层把不同服务的结果整理为统一播放输入，再交给 libmpv。
+
+```mermaid
+flowchart TB
+    Input[用户配置 · 网盘 · NAS · 媒体服务器 · 本机文件] --> App[原生 Mac 应用 · SwiftUI]
+    App --> Content[内容与媒体库层]
+    Content --> Mac[Mac 原生／签名扩展]
+    Content --> Android[Android 原版兼容环境]
+    Content --> Standard[文件与标准服务接口]
+    Distribution[签名分发 · 校验 · 独立更新] -.-> Mac
+    Distribution -.-> Android
+    Mac --> Play[统一 PlaySpec]
+    Android --> Play
+    Standard --> Play
+    Play --> Player[原生播放器 · libmpv]
+```
+
+图中的 Mac／Android 是主动选择的独立路径。公开应用和 [Provider SDK](provider-sdk/README.md) 位于 [NetVplayer](https://github.com/spudhero/NetVplayer)，站点业务 Provider 源码保持私有，签名包与索引由 [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) 提供。通用 Android Java／JNI 兼容层、固定上游对应源码和构建说明随[完整环境发布附件](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.4-arm64)公开。更多模块、数据流与信任边界见 [ARCHITECTURE](ARCHITECTURE.md)。
+
+### 项目背景与开发
+
+FongMi/TV、OK影视、影视仓、TVBox 等工具主要服务 Android 生态。我一直没有找到符合自己使用习惯的 macOS 版本，于是从 SwiftUI 与 libmpv 开始，写了 NetVplayer。感谢 [FongMi/TV](https://github.com/FongMi/TV) 等开源实践提供的兼容性参考；本项目独立实现，与这些项目没有隶属或官方合作关系。
+
+按[贡献指南](CONTRIBUTING.md)准备 Xcode、Homebrew libmpv 与所需依赖后，在公开仓库根目录执行：
 
 ```bash
 swift build --package-path NetVplayer
 swift test --package-path NetVplayer --disable-sandbox --no-parallel
 ```
 
-详细说明：[架构](ARCHITECTURE.md) · [Provider SDK](provider-sdk/README.md) · [Runner](provider-runners/README.md) · [打包凭据配置](TMDB_SETUP.md) · [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md)。
+配置与账号保存在本机，导出备份不包含密码、Token 或 Cookie。正式应用提供 TMDB 项目凭据，普通用户无需填写令牌。可在“设置 → 问题反馈”生成脱敏信息或关闭自动诊断。
 
-遇到问题可通过应用内“问题反馈”生成脱敏信息，并说明复现步骤。自动诊断可在“设置 → 问题反馈”中关闭。项目采用 [MIT License](LICENSE)，第三方组件适用各自许可证。
+[Provider SDK](provider-sdk/README.md) · [Runner](provider-runners/README.md) · [打包配置](TMDB_SETUP.md) · [安全说明](SECURITY.md) · [MIT License](LICENSE)（第三方组件适用各自许可证）。
 
 ---
 
 ## English
 
-NetVplayer is a native macOS media player built with SwiftUI and embedded libmpv, supporting on-demand video, live channels, cloud drives, and your own files. It runs on **macOS 14+ / Apple Silicon**, with Simplified Chinese and English interfaces.
+NetVplayer is a **native macOS media player built with SwiftUI and embedded libmpv**. Browse on-demand video, watch live channels, open personal cloud folders, connect your NAS or media server, and play local files in one desktop experience. It runs on **macOS 14+ / Apple Silicon**, in Simplified Chinese and English.
 
-The public app contains no bundled content sources, catalogs, channel lists, accounts, or media. Users add their own entry points and must be authorized to access them.
+You supply the content. The app includes no source configuration, channel list, account, or media. Screenshots mask private source details and blur artwork and media names; the player shows a self-created local demo.
 
-### Project background
+### Your content, in one place
 
-FongMi/TV, OK影视, 影视仓, and TVBox primarily serve Android. I could not find a macOS version that matched how I wanted to use a desktop media app, so I started NetVplayer with SwiftUI and libmpv.
+| Experience | Capabilities |
+| --- | --- |
+| Browse and discover | Categories, filters, search across connected sources, details, TMDB metadata, favorites and resume history |
+| Routes and episodes | Multiple routes, grid/list views, sorting, grouped cloud resources, and file sizes when supplied by the directory |
+| Live TV | JSON/M3U/TXT lists, Xtream, channel groups, search, programme guides and route selection |
+| Personal cloud folders | Quark, UC, Aliyun, Baidu and 115; select folders for the poster library |
+| File services | SMB, WebDAV, AList, OpenList, FTP/FTPS, SFTP and local folders, plus direct file opening |
+| Media servers | Emby, Jellyfin, Plex, Zspace Media and FnOS Media |
+| Poster libraries | Movies, TV shows and mixed libraries; local metadata, TMDB, Douban and manual matching |
+| Playback | Main/secondary subtitles, audio tracks, speed, aspect ratio, chapters, intro/outro skip and a floating player |
+| Picture, audio and subtitles | HDR policy, SDR mapping, actual output status, audio devices, dialogue enhancement, local subtitle translation and bilingual export |
+| Desktop experience | 14 themes, settings search, configuration backup, in-app updates and redacted problem reports |
 
-The project brings browsing, search, episode selection, and playback into a native Mac experience. Thanks to [FongMi/TV](https://github.com/FongMi/TV) and other open-source projects for compatibility references. NetVplayer uses an independent Swift/macOS implementation and has no affiliation or official partnership with those projects.
+The real-app screenshots above show details, playback, cloud folders, file connections, subtitle translation, video output and extension management. [The illustrated guide](docs/guide.md#english) explains the entry points and steps.
 
-### Features
+### Getting started
 
-The app supports adding personal folders from Quark, UC, Aliyun, Baidu, and 115 to the existing poster library, details, and original-file playback. Real-account acceptance is pending; see the [usage and validation notes](docs/releases/2.0.0.md).
+1. Download the versioned `macos-arm64.zip` from the [latest Release](https://github.com/spudhero/NetVplayer/releases/latest), extract it, and move `NetVplayer.app` to Applications.
+2. Community builds use ad-hoc signing. If macOS blocks first launch, confirm the download source and use System Settings → Privacy & Security → Open Anyway; Finder → Open is available on supported system versions.
+3. Wait for Settings → Verified Extensions to finish preparation. First installation and updates require access to GitHub.
+4. Under Settings → Content Sources, add your own configuration/channel list, Xtream or media-server account, personal cloud folder, or NAS/local connection. For individual local videos, use File → Open or drag them into the app, then select any pending file entry.
+5. Select the added source on the home screen, open details, choose a route and episode, and adjust playback controls. Resume from History later.
 
-Version 2.0 adds Plex, FTP, and SFTP, with native-app acceptance evidence for WebDAV, Alist, and OpenList. See the [release notes](docs/releases/2.0.0.md) for scope and limitations.
+For file services, test the connection and select one or more folders. For personal cloud folders, authorize the account first. Media servers use their own server-side catalog and metadata. Official builds supply the TMDB application credential.
 
-Zspace Media and FnOS Media integration is implemented and verified with independent synthetic HTTP services and native playback. Real NAS acceptance and complete playback-window screenshots remain pending; see the [release notes and limitations](docs/releases/2.0.0.md).
+### Mac and original Android execution
 
-- **Browse and search:** details, multiple playback routes, episode selection, and search across connected sources.
-- **Video and live TV:** subtitles, audio tracks, playback speed, aspect ratio, chapter previews, channel groups, and programme guides.
-- **Cloud drives and files:** supported drive accounts, WebDAV, AList/OpenList, SMB, and local folders.
-- **Media libraries:** movie, TV, and mixed poster libraries with local metadata, TMDB, Douban, and manual matching.
-- **Desktop controls:** history, favorites, resume playback, compact windows, and themes.
+Settings → Verified Extensions → Source Execution selects **Mac implementation** or **Original Android**. Restart after changing it. Mac mode uses native adapters or signed extensions without preparing Android. Original Android executes the JAR referenced by your configuration in an independent compatibility environment, with one selected implementation handling catalog, details and playback resolution.
 
-### Installation
+The app verifies and activates a complete signed Android environment on first use. Content JARs come from user configuration. There is no automatic cross-mode fallback; local files, media servers and standard content APIs are independent of this setting. **The interface and media player remain native macOS in both modes.** Native cloud credentials and Android source authorization are stored separately.
 
-1. Download `macos-arm64.zip` from the [latest GitHub Release](https://github.com/spudhero/NetVplayer/releases/latest).
-2. Extract it and move `NetVplayer.app` to Applications.
-3. On first launch, right-click the app in Finder and choose Open. The community build uses ad-hoc signing; if macOS blocks it, confirm the app under System Settings → Privacy & Security and choose Open Anyway.
-4. Wait for Settings → Verified Extensions to report ready. Initial preparation and extension updates require access to GitHub.
-5. Add your own configuration, accounts, or file locations under Settings → Content Sources.
+### Architecture and development
 
-The app marks available updates beside its version in the sidebar and Settings. Confirm an update to download and verify it in the background; installation happens on normal exit. See the [CHANGELOG](CHANGELOG.md#english), [versioned release notes](docs/releases/README.md), and [GitHub Releases](https://github.com/spudhero/NetVplayer/releases) for release history.
+The public app, private business Providers and signed distribution are maintained as separate components. Content engines normalize source, cloud, file and server results into a single `PlaySpec`; the native player passes it to libmpv. Extensions and complete Android environments update independently of the app. See the [architecture diagrams](ARCHITECTURE.md), [Provider SDK](provider-sdk/README.md) and [Runners](provider-runners/README.md).
 
-### Usage
+The application and SDK are public. Business Provider sources remain private. Generic Android Java/JNI compatibility and build sources, pinned upstream sources and licenses are available as [complete-runtime release attachments](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.4-arm64).
 
-- **Online content:** load a video configuration or JSON, M3U, or TXT channel list under Settings → Content Sources → Online Content. For Xtream services, enter the address and account supplied by your service.
-- **Cloud drives:** authorize the required account under Cloud Drive Accounts, then open your files or shares.
-- **NAS / local:** add a server or folder under Video File Locations, test and save it, then select it from the home source menu. Switch to Media Libraries to add movie or TV directories.
-- **Playback:** choose a route and episode in the details view, adjust subtitles, audio, and speed in the player, and resume from History.
+Apple local translation requires **macOS 15+** and available language resources. OCR, speech recognition, online subtitles, HDR and audio output depend on system support, permissions, content and hardware. Service integrations are not a guarantee that every account, NAS or long playback session has passed acceptance. Read the [usage conditions](docs/guide.md#conditions-and-limits).
 
-Official builds supply the TMDB application credential; ordinary users do not need a token. Configurations and accounts stay on the Mac. Exported backups exclude passwords, tokens, and cookies.
+Prepare dependencies using [Contributing](CONTRIBUTING.md), then run the build/test commands above from the public repository root. Configurations and credentials stay on your Mac; backups exclude passwords, tokens and cookies. Automatic Diagnostics can be disabled under Settings → Problem Report.
 
-### Extensions and development
-
-The app automatically downloads, verifies, and updates compatible signed Providers. Use Settings → Verified Extensions → Check Again if preparation fails. See [Provider Releases](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) for versions and compatibility. The main application and SDK are public; business Provider implementation sources remain private.
-
-Generic Android Java/JNI bridge, compatibility and build sources are public as [complete-runtime source attachments](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.4-arm64), together with fixed upstream sources, build instructions and licenses. Business Provider implementations remain private. Mac mode does not prepare Android. After explicitly selecting original Android and restarting, the app downloads and verifies a complete signed environment, without assembling JVM/framework/host dependencies on the client. Source JARs still come from user configuration and are excluded from the app and runtime. Complete runtimes use the independent `android/runtime/index.json`; the legacy `android/index.json` is preserved. The player compatibility resource remains a pinned generated artifact.
-
-Build from source with Xcode and the Homebrew libmpv dependencies using the commands above. Further documentation: [Architecture](ARCHITECTURE.md) · [Provider SDK](provider-sdk/README.md) · [Runners](provider-runners/README.md) · [Packaging credentials](TMDB_SETUP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md).
-
-Use the in-app Problem Report flow to generate redacted diagnostics and describe reproduction steps. Automatic Diagnostics can be disabled under Settings → Problem Report. The project uses the [MIT License](LICENSE); third-party components retain their own licenses.
+Inspired by the compatibility work of [FongMi/TV](https://github.com/FongMi/TV) and other Android projects, NetVplayer is independently implemented with no official affiliation. [MIT License](LICENSE); third-party components retain their own licenses. Release changes belong in the [CHANGELOG](CHANGELOG.md) and [versioned notes](docs/releases/README.md).

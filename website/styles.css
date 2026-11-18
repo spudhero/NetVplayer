@@ -527,6 +527,85 @@ h2 {
   text-align: center;
 }
 
+.screenshot-note {
+  margin: 18px auto 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.feature-details {
+  width: min(100%, 820px);
+  margin: 48px auto 0;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.8;
+}
+
+.feature-details p + p {
+  margin-top: 18px;
+}
+
+.feature-details strong {
+  color: var(--fg);
+}
+
+.feature-details .text-link {
+  margin-top: 20px;
+}
+
+.architecture-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: min(100%, var(--content-width));
+  margin: 80px auto 0;
+  padding: 0;
+  list-style: none;
+}
+
+.architecture-flow li {
+  position: relative;
+  padding: 28px 24px 0;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.architecture-flow li + li::before {
+  position: absolute;
+  top: -14px;
+  left: -14px;
+  width: 28px;
+  background: var(--bg);
+  color: var(--muted);
+  content: "→";
+}
+
+.architecture-flow span {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-family: var(--mono-font);
+  font-size: 13px;
+}
+
+.architecture-flow strong {
+  font-family: var(--display-font);
+  font-size: 20px;
+}
+
+.architecture-flow p {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.extension-support-media .portrait-capture {
+  width: min(100%, 520px);
+  margin-inline: auto;
+}
+
 .section-heading > p:last-child {
   margin: 28px auto 0;
 }
@@ -1278,6 +1357,22 @@ code {
 }
 
 @media (max-width: 760px) {
+  .architecture-flow {
+    grid-template-columns: 1fr;
+    gap: 28px;
+    margin-top: 48px;
+  }
+
+  .architecture-flow li + li::before {
+    top: -14px;
+    left: calc(50% - 14px);
+    content: "↓";
+  }
+
+  .feature-details {
+    font-size: 16px;
+  }
+
   :root {
     --nav-height: 52px;
   }

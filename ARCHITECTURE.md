@@ -1,247 +1,168 @@
 # NetVplayer Architecture
 
-[中文](#中文) | [English](#english) | [Provider SDK](provider-sdk/README.md)
-
-> [!IMPORTANT]
-> The official public source and release application are source-free. They contain no video catalog, live channel list, default source address, site-specific Provider, account, credential, or media payload. Every content entry point is supplied explicitly by the user.
+[中文](#中文) · [English](#english) · [使用指南](docs/guide.md) · [Provider SDK](provider-sdk/README.md)
 
 ## 中文
 
-### 系统边界
+### 整体设计
 
-NetVplayer 将应用决策、平台能力、扩展执行和媒体播放分成独立层。公开应用负责配置解释、状态管理、安全检查和播放；用户负责提供自己有权访问的配置、服务和账号。
+NetVplayer 将原生桌面体验、内容接入、扩展执行和媒体播放分开。SwiftUI 应用负责浏览、搜索、详情、账号入口与窗口；不同内容接口输出稳定模型；播放器只接收统一的 `PlaySpec`，由内嵌 libmpv 完成实际媒体播放。
+
+用户提供自己的配置、云盘、文件位置、媒体服务器与访问权限。公开应用不附带视频源、直播列表、站点业务 Provider、账号或媒体。
 
 ```mermaid
 flowchart TB
-    User[用户自有配置、账号与服务]
-
-    subgraph App[NetVplayer 无源应用]
-        UI[NetVplayerApp<br>SwiftUI + AppState]
-        Core[ApplicationCore<br>状态、命令与 reducer]
-        Models[Models<br>跨模块数据合同]
-        Content[Config / Search / Spider / Drive / Live / Parse]
-        SDK[ProviderSDK<br>Wire + Manifest + Catalog + Distribution]
-        Runtime[ProviderRuntime<br>验证、安装、激活与回滚]
-        Proxy[ProxyServer<br>受限 loopback 路由]
-        Player[PlayerEngine<br>PlaySpec + libmpv]
-        Diagnostics[Diagnostics<br>隐私过滤后的崩溃与性能诊断]
-    end
-
-    subgraph Extension[独立签名 Provider 包]
-        Sandbox[ProviderSandboxLauncher.app]
-        Runner[包内 Runner<br>Java / Node.js / QuickJS / Python]
-        Provider[Provider adapter]
-    end
-
-    User -->|主动导入或登录| UI
-    UI --> Core
-    Core --> Models
-    UI --> Content
-    Content --> Models
-    Content --> SDK
-    SDK --> Runtime
-    Runtime --> Sandbox
-    Sandbox --> Runner
-    Runner --> Provider
-    Provider -->|JSONL result / proxy payload| Content
-    Content -->|统一 PlaySpec| Player
-    Content -->|需要受限中转| Proxy
+    User[用户配置与自有服务] --> UI[NetVplayerApp · SwiftUI / AppState]
+    UI --> Core[ApplicationCore + Models]
+    UI --> Catalog[ConfigEngine / SpiderEngine / SearchEngine / LiveEngine]
+    UI --> Files[DriveEngine / FileServiceEngine / MediaServerEngine]
+    Files --> Library[MediaLibraryEngine · 目录与海报资料]
+    Catalog --> Choice{启动时选定的来源解析方式}
+    Choice -->|Mac 实现| Native[Mac 原生适配 / 签名 Provider]
+    Choice -->|Android 原版| Android[独立 Android 兼容环境 / 用户配置 JAR]
+    Catalog -->|标准内容接口| Standard[标准协议适配]
+    Native --> Resolve[ParseEngine · 播放结果归一化]
+    Android --> Resolve
+    Standard --> Resolve
+    Files --> Resolve
+    Resolve --> Spec[PlaySpec · URL / 请求头 / 字幕 / 格式]
+    Spec --> Player[PlayerEngine / MPVShim · libmpv]
+    Resolve -->|需要受限中转| Proxy[ProxyServer · loopback / Range]
     Proxy --> Player
-    UI -->|错误码、阶段与有限操作步骤| Diagnostics
+    Subtitle[SubtitleEngine · 翻译 / 识别 / 导出] --> Player
 ```
 
-### 模块职责
+图中的两种来源执行路径按用户选择运行，不会在失败后互相回退。本机文件、媒体服务器和标准内容接口独立于这个选择。Android 原版指内容组件的执行环境；界面、窗口和媒体播放器始终属于 Mac 应用。
+
+### 三个发布组件
+
+| 组件 | 维护内容 | 公开范围 |
+| --- | --- | --- |
+| [NetVplayer](https://github.com/spudhero/NetVplayer) | 原生应用、通用内容集成、SDK／Runner、构建工具、使用文档与官网 | 主程序和通用协议公开，采用 MIT；第三方组件遵循各自许可证 |
+| NetVplayer-Providers | 站点业务适配、私有构建与测试、Android 兼容环境构建 | 业务 Provider 实现保持私有；获准公开的通用 Android Java／JNI、兼容层与固定上游对应源码随完整环境发布提供 |
+| [NetVplayer-Provider-Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution) | 签名分发索引、公钥、发行元数据与独立发布包 | 发布包与索引公开；私钥、账号和用户来源 JAR 不属于分发输入 |
+
+应用与扩展使用各自的版本及发布节奏。更新内容适配或 Android 环境时，不必把整个应用重新发布；组件兼容性和验签仍由应用执行。当前通用 Android 源码与复现材料见[完整环境附件](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.4-arm64)。
+
+### 应用模块
 
 | 层 | 模块 | 职责 |
 | --- | --- | --- |
-| 模型与决策 | `Models`, `ApplicationCore` | 定义配置、目录、搜索、直播、播放、历史和错误模型；执行不依赖平台副作用的状态转换 |
-| 基础设施 | `Networking`, `Storage` | 受控 HTTP、URL 归一化、本地持久化、命名空间磁盘缓存、偏好和可移植备份 |
-| 内容入口 | `ConfigEngine`, `SpiderEngine`, `DriveEngine` | 解释用户配置、选择内容适配器、处理受支持的文件与云盘入口 |
-| 聚合与解析 | `SearchEngine`, `LiveEngine`, `ParseEngine` | 有界并发与硬截止的渐进搜索、直播列表/节目单解析、播放候选解析和错误归因 |
-| 扩展合同 | `ProviderSDK` | 定义 protocol v1、manifest、source binding、catalog、distribution 和诊断格式 |
-| 扩展执行 | `ProviderRuntime`, `QuickJSRuntime` | 验证签名包、管理安装/回滚、启动沙盒 Runner、提供受控 QuickJS host capability |
-| 本地数据面 | `ProxyServer` | 提供受限本地代理、流式 Range、解析页、注册文件、缓存和健康路由 |
-| 播放 | `PlayerEngine`, `MPVShim` | 将 `PlaySpec` 交给 libmpv，管理视频表面、播放状态、错误和会话生命周期 |
-| 诊断 | `Diagnostics` | 将允许的错误码、固定数字维度、版本和有限恢复步骤投影到 Sentry；可恢复故障保留为 breadcrumb，恢复耗尽后才创建 Issue；拒绝凭据、内容名、媒体地址、原始错误正文和完整日志 |
-| 辅助体验 | `DanmakuEngine`, `WebHomeEngine` | 提供默认关闭的弹幕与受限 WebHome 能力 |
-| 应用组合 | `NetVplayerApp` | SwiftUI 界面、AppState、目录/详情/海报缓存协调、窗口、设置、命令执行、统一用户错误映射和所有用户可见入口 |
+| 界面与组合 | `NetVplayerApp` | SwiftUI、AppState、内容选择、详情／海报缓存协调、窗口、设置、命令执行和用户可见错误映射 |
+| 决策与合同 | `ApplicationCore`, `Models` | 稳定模型、状态、命令与不依赖平台副作用的状态转换 |
+| 网络与存储 | `Networking`, `Storage` | 受控请求、本机持久化、缓存、偏好与不含敏感凭据的备份 |
+| 配置与内容 | `ConfigEngine`, `SpiderEngine` | 解释用户配置、选择精确绑定的适配器、调用当前执行方式 |
+| 搜索与直播 | `SearchEngine`, `LiveEngine` | 有界并发与渐进搜索、直播列表、频道分组和 EPG |
+| 云盘与文件 | `DriveEngine`, `FileServiceEngine` | 网盘账号与目录、SMB／WebDAV／AList／OpenList／FTP／SFTP、本机文件及受限流式读取 |
+| 媒体服务器 | `MediaServerEngine` | Emby／Jellyfin／Plex／极影视／飞牛影视的账号、目录、详情和播放输入 |
+| 媒体库与资料 | `MediaLibraryEngine` | 电影／剧集／混合库、扫描、海报、优先本地资料、TMDB／豆瓣与手动匹配 |
+| 扩展协议与生命周期 | `ProviderSDK`, `ProviderRuntime` | Wire／manifest／distribution 合同、签名校验、安装、激活、回滚及沙盒进程 |
+| 通用脚本能力 | `QuickJSRuntime`, `NodeBundleRuntime` | 通用脚本执行及受控宿主能力，业务适配由独立组件维护 |
+| 解析与数据面 | `ParseEngine`, `ProxyServer` | 播放候选解析、受限本地路由、Range、注册文件及必要的清单／请求中转 |
+| 播放与输出 | `PlayerEngine`, `MPVShim`, `NativePIP` | libmpv、视频表面、播放状态、音画输出、设备与窗口能力 |
+| 字幕与弹幕 | `SubtitleEngine`, `DanmakuEngine` | 字幕处理、本机翻译／识别／导出，以及默认关闭的手动弹幕入口 |
+| 诊断 | `Diagnostics` | 隐私过滤后的错误、崩溃与性能维度；有限恢复过程与终局错误分开处理 |
 
-Swift Package 的产品和 target 关系以 [`NetVplayer/Package.swift`](NetVplayer/Package.swift) 为准。
+产品与 target 的准确依赖以 [`NetVplayer/Package.swift`](NetVplayer/Package.swift) 为准；上表按用户能力归纳，不代表所有模块直接互相依赖。
 
-### 配置与内容数据流
+### Mac 与 Android 的独立执行
 
-1. 用户主动添加兼容配置、文件服务或受支持账号。
-2. `ConfigEngine` 拉取并解析配置，保留站点、直播、解析器和请求策略等结构。
-3. `SpiderEngine` 根据站点类型和精确 binding 选择原生适配器、公开协议适配器或已验证 Provider。
-4. `SearchEngine`、`LiveEngine` 和内容提供器把结果转换为 `Models` 中的稳定类型。
-5. 未支持的平台依赖返回明确的兼容性错误，不伪装为可用能力；普通界面通过场景映射显示问题和建议动作，底层类型名只进入日志或高级诊断。
+来源解析偏好在应用启动时固定。在“设置 → 扩展支持 → 来源解析方式”更改后，必须重启才能应用；本轮运行继续使用启动时的选择。
 
-公开应用不会自动插入默认站点、直播列表或隐藏内容入口。Provider 只有在用户配置与签名 manifest 的 `source_bindings` 精确匹配后才会参与处理。
+| 路径 | 内容组件如何执行 | 账号与失败行为 |
+| --- | --- | --- |
+| Mac 实现 | 原生适配或已验证签名 Provider；不准备、不调用 Android 环境 | 原生网盘账号用于该路径与个人目录；不支持时返回明确错误 |
+| Android 原版 | 在独立兼容环境执行用户配置引用的原始 JAR；目录、详情和播放解析使用同一路径 | 来源内授权独立保存；失败不会改为 Mac 适配 |
 
-启动时先从 `active-version` 恢复并验签本机 Provider，再对照首次安装完成记录和当时的已安装组件清单。没有有效完成记录时，用户保存或新填写的点播源须等待签名目录同步与首次安装成功；失败进入重试状态。已有有效组件时，配置解析与首页加载只等待本地注册，在线检查和升级在后台进行。已识别但未完成的升级版本单独持久化，不覆盖仍可用的 active version；本地组件丢失或验签失败才触发修复门控。
+Android 首次准备从独立的 `android/runtime/index.json` 选择兼容的完整签名环境，下载、验签、校验资产并激活。JVM、框架、宿主等作为已构建环境交付，客户端不再分别下载后组装。用户配置引用的来源 JAR 仍单独获取，不包含在应用或完整环境里。旧 `android/index.json` 保留历史兼容用途。
 
-首页在构造 `AppState` 时同步读取保存的点播配置是否存在：没有配置才显示添加入口，已有配置从首帧显示准备或加载状态。扩展支持页分别呈现构建未配置、首次安装未完成、本地包失效、更新检查失败和待升级，不以在线检查结果推断本地播放能力。
+应用中的公开兼容规则是按固定摘要生成的资源。通用环境源码公开并不改变站点业务实现的私有边界。
 
-目录缓存以配置 revision、站点、首页/分类、规范化筛选和页码为键，在会话内保存最多 64 页：5 分钟内直接命中，5 至 30 分钟保留当前列表并后台刷新，过期冷请求也不会先清空旧内容。详情缓存保留 10 分钟、最多 32 项，并与 250ms 悬停预取合并请求；签名扩展和本机玩偶详情先返回元数据和不可点击的 pending 线路，后台并发展开网盘目录后由 generation 校验更新同一页面。海报原始数据写入 `Caches/NetVplayer/Posters-v2`，按 256 MiB / 7 天裁剪，解码图使用 64 MiB 内存缓存。性能缓存清理只删除这些可重建数据与 WebKit 缓存；Cookie、LocalStorage、配置、历史、收藏、反馈和 Provider 保留，网页会话由独立操作删除。
-
-### Provider 信任边界
+### Provider 生命周期与信任
 
 ```mermaid
 sequenceDiagram
-    participant App as NetVplayerApp
-    participant Index as 固定 HTTPS 索引
+    participant App as Mac 应用
+    participant Index as 固定 HTTPS 分发索引
     participant Runtime as ProviderRuntime
-    participant Sandbox as ProviderSandboxLauncher
-    participant Runner as 包内 Runner
-    participant Provider as Provider adapter
-
-    App->>Index: 获取签名 distribution index
-    App->>Runtime: 候选 release
-    Runtime->>Runtime: 验证索引签名、归档哈希、manifest 签名、兼容性和吊销状态
-    Runtime->>Runtime: 验证声明资源、许可证和包内路径
-    Runtime->>Sandbox: 启动 Provider 专属沙盒
-    Sandbox->>Runner: 执行签名 runtime + runner + entrypoint
-    Runner->>Provider: handshake / init / operation
-    Provider-->>Runner: result 或 proxy payload
-    Runner-->>App: protocol v1 JSONL response
+    participant Sandbox as 独立沙盒 Runner
+    App->>Runtime: 恢复并校验已安装的 active version
+    App->>Index: 首次准备 / 后台更新检查
+    Index-->>Runtime: 已签名候选与兼容信息
+    Runtime->>Runtime: 校验索引、归档 SHA-256、manifest、资产与许可证
+    Runtime->>Runtime: 检查兼容性、路径与吊销状态
+    Runtime->>Sandbox: 激活并启动已验证组件
+    App->>Sandbox: 选定来源上下文与操作请求
+    Sandbox-->>App: protocol v1 JSONL result / proxy payload
 ```
 
-信任边界包含以下约束：
+- 只接受固定 HTTPS 索引中的签名发行物；索引签名、归档摘要、manifest 和声明资产分别检查。
+- 签名 Provider 的运行时、Runner、入口、依赖和许可证在包内声明；每个 Provider 使用独立状态目录和受限 launcher。
+- `source_bindings` 精确匹配用户提供的配置，自动安装只激活 `source_policy=user-configured-only` 的包。
+- QuickJS 宿主能力由 manifest 声明；开发者自建密钥不受官方应用信任。
+- 有效本机组件先恢复，在线检查在后台进行；首次准备未完成或本机包失效时进入修复／重试状态。
+- 待升级版本与当前可用版本分别保存，失败的下载或更新不覆盖最后一个已验证的 active version。
 
-- 应用只接受固定 HTTPS 索引中的已签名 release。
-- manifest、distribution index 和归档哈希分别验证。
-- runtime、Runner、Provider、依赖和许可证必须全部位于签名包内并逐项声明。
-- 每个 Provider 使用独立状态目录和 App Sandbox launcher。
-- QuickJS 只能调用 manifest 声明的 host capabilities。
-- `source_bindings` 使用精确匹配，不解释通配模式。
-- 自动安装和手动重试只激活 `source_policy=user-configured-only` 的 Provider。
-- 开发者自行生成的密钥不受官方应用信任。
+### 目录、媒体库与播放数据流
 
-### 播放数据流
+文件服务、云盘目录与媒体服务器共用稳定媒体模型，但保留各自接入方式。文件服务读取用户授权的目录，媒体库层补充本地或在线资料；媒体服务器直接提供服务端已有的目录与资料。账号凭据不会作为媒体标题、文件身份或备份内容传播。
 
-```mermaid
-sequenceDiagram
-    participant UI as NetVplayerApp
-    participant Content as Content Provider
-    participant Drive as DriveEngine
-    participant Parse as ParseEngine
-    participant Proxy as ProxyServer
-    participant Player as PlayerEngine
-    participant MPV as libmpv
+内容层取得详情、播放候选或文件计划，经过网盘与解析处理后整理为 `PlaySpec`。它包含规范化 URL、必要请求头、格式、字幕、DRM 信息和内存态播放计划。播放器不解释外部配置、站点业务或 Provider manifest。
 
-    UI->>Content: 请求详情或 player result
-    Content-->>UI: 结构化 result 和候选
-    UI->>Drive: 解析受支持的文件/云盘入口
-    Drive-->>UI: 可选播放计划与候选
-    UI->>Parse: 解析需要处理的播放结果
-    Parse-->>UI: URL、headers、format、字幕和 DRM
-    UI->>UI: 归一化为 PlaySpec
-    alt 需要本地中转或改写
-        UI->>Proxy: 注册受限路由
-        Proxy-->>Player: loopback URL
-    else 可直接播放
-        UI->>Player: PlaySpec
-    end
-    Player->>MPV: 加载媒体与选项
-```
+标准 HLS／MP4 在不需要中转时直接交给 libmpv。Provider callback、需要改写的清单、远端 Range 流和注册本机文件才进入受限 `ProxyServer`，主要路由包括 `/proxy`、`/stream`、`/parse`、`/file`、`/cache`、`/health` 与 `/webResource`。代理只绑定 loopback；通用远端代理目标与用户明确授权的文件／NAS 连接分别受各自访问策略约束。
 
-`PlaySpec` 是播放器的唯一输入边界。它携带规范化 URL、请求头、格式、字幕、DRM、音频封面和必要的内存态播放计划。播放器不直接解释外部配置或 Provider manifest。
+来源要求手动验证时，通过类型化交互返回经过校验的验证页，由用户完成后重新请求同一内容。这类交互不进入 `PlaySpec`，也不由播放器绕过。
 
-Provider 的 player result 也可以返回受限的 `PlaybackInteraction`。当前 `manual_verification` 只携带经过公开 HTTP(S) 目标校验的验证页、交互类型和用户消息，不携带媒体 URL；`SiteApi` 将其转换为类型化中断，`AppState` 显示用户驱动的 WebView，收到源站成功回调后重新请求原集数。该状态不会进入 `PlaySpec`，也不会由播放器或自动化绕过。
+### 音画、字幕与桌面体验
 
-交互结果必须能改变同一 Provider 的后续请求。海绵保留 AES catalog 接口提供 6 个业务分类、筛选、首页和搜索；详情阶段用“精确标题 + 海报文件名”把 catalog 的不透明 ID 映射到 DESede 无验证码播放库，因为两套服务会把相同数字 ID 分配给不同影片。player 使用 `/api/user/init -> /api/vod/play_url`，把上游原始域替换为已验证的播放域，再由 `hmys-hls-v1` 为主清单和子资源动态签名。发布验收要求 HLS 总时长超过 120 秒，从合同层拒绝 11 秒升级提示片。该描述符仍只在海绵 API 绑定上获准本地化，避免把聚合包权限扩大到其它站点。
+音画输出层将素材信息、设备能力与当前实际输出区分。HDR 策略提供跟随系统、临时 HDR 和 SDR 映射；输出恢复和设备变化由播放层管理。素材带 HDR／杜比视界标记，不意味着显示或音频链路获得对应认证。
 
-标准 HLS/MP4 在不需要改写时直接交给 libmpv。Spider callback、清单改写、注册文件、远端 Range 流或其它明确需要中转的输入才进入 `ProxyServer`。
+`SubtitleEngine` 与应用翻译面板负责字幕文件、时间轴、翻译会话、识别与导出；Apple Translation 在 macOS 15+ 的可用分支运行。图片字幕和音频识别有独立输入与权限要求。小窗、章节、字幕、音轨及播放控制由原生界面组合呈现。
 
-### 本地代理路由
+目录、详情与海报使用有界缓存及合并请求，列表刷新保留已有内容，异步返回通过 generation 校验后更新。性能缓存清理与账号／网页会话清理是独立操作，避免删除可重建缓存时连带移除配置或登录状态。
 
-`ProxyServer` 只绑定 loopback，并对远端目标执行访问策略检查。主要路由为：
+### 状态、隐私与开发
 
-| 路由 | 合同 |
-| --- | --- |
-| `/proxy` | 处理 Provider proxy payload 或受控远端请求，清理 hop-by-hop 和重复长度/类型响应头 |
-| `/stream` | 为已注册远端文件提供 Range、缓存、增量转发、生命周期和资源上限 |
-| `/parse` | 提供本地解析页面，由应用显式传入目标和解析器 |
-| `/file` | 只读取应用已注册的本地文件 ID，支持 Range、ETag 和条件请求 |
-| `/cache` | 读写进程内受限缓存 |
-| `/health` | 返回脱敏运行状态、活跃流、缓存和最近错误 |
-| `/webResource` | 为 WebHome 提供受限 HTTP(S) 资源访问、Range、CORS 和必要请求头 |
+配置、账号与授权只在用户明确添加后使用。凭据存于本机；Provider 使用其来源上下文及不透明凭据引用，不直接读取其他 Provider 的状态或应用凭据存储。历史记录使用稳定内容身份，不持久化短效媒体 URL 或敏感请求头。
 
-目标校验拒绝本地文件、localhost、内网、link-local 和 multicast 远端地址。大型媒体使用流式路径；有界 buffered 路径用于清单和控制响应。
+普通界面通过统一错误映射显示问题与下一步动作；诊断过滤账号、内容名、媒体地址、原始错误正文与完整日志。可恢复故障记录有限过程，恢复耗尽后才形成终局错误。自动诊断可在设置关闭。
 
-### 状态、凭据与隐私
-
-- 配置、账号和访问凭据由用户提供，不属于应用发布内容。
-- Provider 接收用户选择的站点上下文和不透明 `credential_ref`，不直接读取其它 Provider 状态或应用 Keychain 明文。
-- 播放历史保存稳定内容身份，不持久化短效媒体 URL、Cookie 或 Authorization。
-- 诊断输出会脱敏 URL 和敏感请求头；公开 issue 只应包含最小复现信息。
-- 普通错误提示不直接透传底层 `localizedDescription`。`UserFacingErrorPresenter` 负责配置、来源、播放、直播、授权、存储、扩展、更新、反馈和页面场景，内部错误继续供本地日志与隐私过滤后的远端诊断使用。远端流、播放器和直播列表的初始失败只形成 breadcrumb；线路刷新、候选降级和重试都耗尽后，应用才发送终局错误。诊断维度只允许固定整数，如阶段、重试次数、HTTP 状态、网络错误、网盘类型和播放线路。
-- Provider 进程退出、超时或验证失败不会覆盖最后一个可用的已验证版本。
-
-### 扩展开发
-
-第三方 Provider 使用 JSON Schema 和语言 Runner 实现，不需要链接应用 UI 或播放器模块。接口、快速入门、manifest、打包和发行要求见 [Provider SDK 指南](provider-sdk/README.md)；各运行时的进程约束见 [Provider Runners](provider-runners/README.md)。
+Provider 开发与发行见 [SDK](provider-sdk/README.md)、[Runner](provider-runners/README.md)；应用构建见[贡献指南](CONTRIBUTING.md)。功能与用法见[使用指南](docs/guide.md)，具体验收范围留在[按版本发布说明](docs/releases/README.md)。架构描述不等于所有服务或硬件已完成验收。
 
 ## English
 
-### System boundary
+### System design
 
-NetVplayer separates application decisions, platform capabilities, extension execution, and media playback. The public application interprets user configuration, manages state, enforces trust checks, and plays media. Users supply and remain responsible for every configuration, service, account, and access right.
+NetVplayer separates its native desktop interface, content integrations, extension execution and media playback. SwiftUI and AppState compose browsing, search, details, settings and windows. Content engines normalize results into stable models and a single `PlaySpec`, which the native player passes to embedded libmpv.
 
-The diagram in the Chinese section defines the same boundary in full. The main layers are:
+Users supply configurations, accounts, files and services. The public app contains no bundled content source, live list, business Provider, account or media. The Chinese diagrams above describe the same component and playback boundaries.
 
-| Layer | Modules | Responsibility |
-| --- | --- | --- |
-| Models and decisions | `Models`, `ApplicationCore` | Stable data contracts and state transitions without platform side effects |
-| Infrastructure | `Networking`, `Storage` | Controlled HTTP, URL normalization, local persistence, namespaced disk caches, preferences, and portable backup |
-| Content entry | `ConfigEngine`, `SpiderEngine`, `DriveEngine` | Interpret user configuration and select supported content/file/cloud adapters |
-| Aggregation and parsing | `SearchEngine`, `LiveEngine`, `ParseEngine` | Progressive search with bounded real operations and hard deadlines, live/EPG parsing, playback resolution, and error attribution |
-| Extension contract | `ProviderSDK` | Protocol v1, manifest, source binding, catalog, distribution, and diagnostics |
-| Extension execution | `ProviderRuntime`, `QuickJSRuntime` | Verify, install, activate, roll back, and run sandboxed Providers |
-| Local data plane | `ProxyServer` | Restricted loopback proxy, Range streaming, parser page, registered files, cache, and health routes |
-| Playback | `PlayerEngine`, `MPVShim` | `PlaySpec`, libmpv integration, video surface, playback state, errors, and session lifecycle |
-| Diagnostics | `Diagnostics` | Privacy-filtered crash and performance reporting with fixed error codes and numeric dimensions; recoverable failures remain breadcrumbs and only exhausted recovery creates issues |
-| Application composition | `NetVplayerApp` | SwiftUI, AppState, catalog/detail/poster cache coordination, windows, settings, command execution, user-facing error translation, and visible entry points |
+### Independent publication components
 
-The package products and target dependencies are defined by [`NetVplayer/Package.swift`](NetVplayer/Package.swift).
+| Component | Responsibility |
+| --- | --- |
+| Public NetVplayer application | Native UI/player, generic content integration, SDK/Runners, build tools, documentation and website |
+| Private business Providers | Site-specific implementations, their builds/tests and Android environment construction; approved generic Android Java/JNI, compatibility/build sources and pinned upstream sources are published as complete-runtime attachments |
+| Public Provider Distribution | Signed indexes, public keys, release metadata and independent packages; no private signing keys, user accounts or user source JARs |
 
-### Configuration and content flow
+The app, Providers and Android environments have independent version and update schedules. Compatibility and signature checks remain enforced by the app.
 
-The user explicitly adds a compatible configuration, file service, or supported account. `ConfigEngine` parses it, and `SpiderEngine` selects an adapter or a verified Provider from the exact site identity. Search, live, and content modules convert results into stable `Models` types. Unsupported platform dependencies return an explicit compatibility error, and the application maps that internal failure to a plain-language problem and next action before rendering it.
+### Execution and playback
 
-The public application never inserts a default site, live list, or hidden content entry point. A Provider participates only when user configuration exactly matches its signed `source_bindings`.
+Source execution is fixed at startup. Mac mode selects native adapters or verified Providers without preparing Android. Original Android executes the JAR referenced by user configuration in an independent compatibility environment, with the same implementation handling catalog, details and resolution. Changing mode requires restart; errors do not trigger cross-mode fallback. Local files, media servers and standard content APIs are independent of the setting. Both paths use the native Mac interface and player.
 
-At startup, active local Provider versions are restored and verified before comparing them with the recorded initial-install completion and installed-package snapshot. Without a valid completion record, a saved or newly entered VOD source waits for the first signed-catalog installation; failure offers retry. With valid local packages, configuration and home loading wait only for local registration while online update checks continue independently. Pending upgrade versions are persisted separately from the active version; a missing or invalid local package triggers repair.
+Complete Android environments come from `android/runtime/index.json`. The client downloads, verifies and activates the built environment rather than assembling JVM/framework/host inputs separately. Source JARs remain user-configured downloads. The legacy `android/index.json` is retained for historical compatibility.
 
-`AppState` reads whether a VOD configuration was saved before the first home-screen render. Only a truly unconfigured install shows the add-source prompt; a saved source shows preparation or loading immediately. Extension Settings distinguishes an unconfigured build, incomplete first install, invalid local package, failed update check, and pending upgrade without treating online status as a playback-health test.
+Cloud drives, file services and media servers preserve distinct integrations while sharing stable media models. `MediaLibraryEngine` handles folder libraries and metadata. `ParseEngine` normalizes resolved media into `PlaySpec`, carrying URLs, scoped headers, format, subtitles and other required playback information. `PlayerEngine` does not interpret business Provider logic or external configuration. Direct streams bypass `ProxyServer` when mediation is unnecessary; registered files, Range streaming, callbacks and required rewrites use restricted loopback routes.
 
-Catalog cache keys include the configuration revision, site, home/category identity, normalized filters, and page. A session keeps at most 64 pages: entries are fresh for five minutes, remain visible with background refresh for thirty minutes, and preserve existing content during an expired reload. The ten-minute, 32-entry detail cache coalesces clicks with 250ms hover prefetch. Signed extensions and local WoGG return metadata and disabled pending routes before concurrent cloud-drive expansion completes, then generation checks update the same detail view. Poster bytes live under `Caches/NetVplayer/Posters-v2` with a 256 MiB seven-day disk policy and a 64 MiB decoded-image memory cache. Performance cleanup removes only reproducible caches and WebKit cache data; cookies, LocalStorage, configurations, history, favorites, reports, and Providers remain until their dedicated controls remove them.
+### Module map
 
-### Provider trust boundary
+`ApplicationCore` / `Models` define decisions and contracts. `Networking` / `Storage` provide requests, persistence and caches. `ConfigEngine` / `SpiderEngine` select integrations; `SearchEngine` / `LiveEngine` handle search, channels and EPG. `DriveEngine`, `FileServiceEngine`, `MediaServerEngine` and `MediaLibraryEngine` implement owned-media access and organization. `ProviderSDK` / `ProviderRuntime` define and enforce extension contracts. `QuickJSRuntime` / `NodeBundleRuntime` expose generic script capabilities. `PlayerEngine` / `MPVShim` / `NativePIP` manage native playback and windows. `SubtitleEngine`, `DanmakuEngine` and `Diagnostics` provide their scoped supporting features. Exact target dependencies are defined in [Package.swift](NetVplayer/Package.swift).
 
-`ProviderRuntime` accepts releases only from the pinned HTTPS distribution index. It verifies the index signature, archive SHA-256, manifest signature, shell/macOS/architecture compatibility, declared assets, license payload, sandbox launcher, and revocation state before activation.
+### Trust, state and privacy
 
-The sandbox launches only the package-local runtime, Runner, and Provider entrypoint. QuickJS receives only declared host capabilities. Provider state is isolated by Provider ID. Automatic installation and manual retry activate only packages with `source_policy=user-configured-only`. A locally generated development key is never trusted by the official application.
+The runtime verifies the fixed HTTPS index signature, archive hash, manifest, declared assets, licenses, compatibility and revocation state before activation. Providers use package-local runtimes/Runners, isolated state and a restricted launcher. Source bindings match exactly; automatic installation accepts only user-configured-only packages. Valid local versions are restored before independent online update checks, and failed updates preserve the last active verified version.
 
-### Playback flow
+Native cloud credentials and Android authorization are separate. Backups exclude passwords, tokens and cookies; playback history stores stable identity rather than transient URLs or sensitive headers. User-driven upstream verification is modeled separately from `PlaySpec`. UI error mapping and diagnostic filtering keep credentials, media names, raw errors and complete logs out of public reports. Automatic Diagnostics can be disabled.
 
-Content results, drive plans, parser output, headers, subtitles, DRM, and format metadata are normalized into `PlaySpec`. `PlayerEngine` accepts that single input contract and passes it to libmpv.
-
-A Provider player result may instead request a bounded `PlaybackInteraction`. The current `manual_verification` form carries only a validated public HTTP(S) verification page, an interaction kind, and a user-facing message; it exposes no media URL. `SiteApi` raises a typed interruption, `AppState` presents a user-driven WebView, and the selected episode is requested again only after the upstream success callback. This state never becomes a `PlaySpec` and automation does not bypass it.
-
-An interaction result must change a later request in the same Provider session. Hmys keeps the AES catalog API for six business categories, filters, home, and search. At detail time, an opaque catalog ID is mapped to the no-challenge DESede playback catalog by exact title and poster filename because the services reuse numeric IDs for different titles. Playback then uses `/api/user/init -> /api/vod/play_url`, replaces the advisory origin with the verified playback host, and lets `hmys-hls-v1` refresh signatures for manifests and child resources. Release verification requires more than 120 seconds of HLS media. The descriptor remains restricted to Hmys API bindings.
-
-Direct HLS/MP4 bypasses the local proxy when no rewrite or mediation is required. Spider callbacks, playlist rewriting, registered files, remote Range streams, and other explicitly mediated inputs use `ProxyServer`. The server binds only to loopback and rejects local-file, localhost, private-network, link-local, and multicast remote targets.
-
-### State and privacy
-
-- User configurations, accounts, and credentials are not release payloads.
-- Providers receive selected site context and opaque credential references, not another Provider's state or raw application Keychain values.
-- Playback history stores stable content identity instead of short-lived media URLs or sensitive headers.
-- Diagnostics reject URLs, sensitive headers, media titles, raw error text, and full logs. Only fixed numeric failure dimensions and bounded recovery steps cross the remote-reporting boundary.
-- Ordinary UI errors never expose raw Android compatibility names, Provider/runtime types, player internals, or unfiltered `localizedDescription`; those details remain in local or privacy-filtered diagnostics.
-- Failed verification, launch, or update leaves the last active verified Provider version available.
-
-### Extension development
-
-Third-party Providers use the JSON Schemas and language Runners without linking the application UI or player modules. See the [Provider SDK guide](provider-sdk/README.md) for the interface, quick start, manifest, packaging, and distribution requirements, and [Provider Runners](provider-runners/README.md) for runtime process constraints.
+HDR and audio output depend on actual media and devices. Apple subtitle translation is gated to macOS 15+; recognition and external services have independent requirements. These architecture descriptions do not establish complete acceptance for every source, account, NAS or hardware path. See the [user guide](docs/guide.md#english), [Contributing](CONTRIBUTING.md), [SDK](provider-sdk/README.md), [Runners](provider-runners/README.md) and [release notes](docs/releases/README.md).

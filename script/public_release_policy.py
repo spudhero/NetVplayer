@@ -1,6 +1,8 @@
 """Shared file boundary for public source exports and their independent audit."""
 
 PUBLIC_RELEASE_DOCUMENTS = {
+    "docs/guide.md",
+    "docs/overview-screenshots.json",
     "docs/data/provider-public-boundary-v1.json",
     "docs/data/torrent-bridge-license-audit-2026-08-18.json",
     "docs/design/player-ui/assets/w700d1q75cms.jpg",

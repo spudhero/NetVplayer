@@ -16,6 +16,9 @@ on:
       - main
     paths:
       - "README.md"
+      - "ARCHITECTURE.md"
+      - "docs/guide.md"
+      - "docs/overview-screenshots.json"
       - "CONTRIBUTING.md"
       - "docs/releases/**"
       - "script/runtime/README.md"

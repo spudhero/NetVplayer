@@ -41,6 +41,8 @@ def public_fixture(root: Path) -> Path:
     (repo / "script").mkdir(parents=True)
     (repo / "LICENSE").write_text("MIT License\n", encoding="utf-8")
     (repo / "provider-sdk/LICENSE").write_text("MIT License\n", encoding="utf-8")
+    (repo / "docs/guide.md").write_text("# User guide\n", encoding="utf-8")
+    (repo / "docs/overview-screenshots.json").write_text("{}\n", encoding="utf-8")
     (repo / ".github/workflows/provider-public-shell.yml").write_text("name: public\n", encoding="utf-8")
     (repo / ".github/workflows/release-macos.yml").write_text("name: release\n", encoding="utf-8")
     (repo / ".github/ISSUE_TEMPLATE/user-feedback.yml").write_text(
@@ -82,6 +84,8 @@ class ProviderPublicReleaseAuditTests(unittest.TestCase):
             root = Path(directory)
             source = public_fixture(root)
             documents = {
+                "docs/guide.md": "# User guide\n",
+                "docs/overview-screenshots.json": "{}\n",
                 "docs/releases/2.0.0.md": "# Release 2.0.0\n",
                 "docs/releases/README.md": "# Release notes\n",
                 "docs/releases-internal/planning.md": "internal planning\n",
@@ -97,7 +101,8 @@ class ProviderPublicReleaseAuditTests(unittest.TestCase):
             output = root / "export"
             export_public_shell(source, output)
 
-            for relative in ("docs/releases/2.0.0.md", "docs/releases/README.md"):
+            for relative in ("docs/guide.md", "docs/overview-screenshots.json",
+                             "docs/releases/2.0.0.md", "docs/releases/README.md"):
                 self.assertEqual((output / relative).read_bytes(), (source / relative).read_bytes())
             self.assertFalse((output / "docs/releases-internal").exists())
             self.assertFalse((output / "docs/internal-notes.md").exists())

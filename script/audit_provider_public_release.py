@@ -19,6 +19,8 @@ from android_compatibility import RESOURCE_PATH as COMPATIBILITY_RESOURCES, vali
 
 
 REQUIRED_FILES = (
+    "docs/guide.md",
+    "docs/overview-screenshots.json",
     "LICENSE",
     "provider-sdk/LICENSE",
     "NetVplayer/Sources/ProviderSandboxLauncher/main.swift",
