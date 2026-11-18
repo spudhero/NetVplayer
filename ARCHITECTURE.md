@@ -115,7 +115,13 @@ sequenceDiagram
 
 ### 音画、字幕与桌面体验
 
-音画输出层将素材信息、设备能力与当前实际输出区分。HDR 策略提供跟随系统、临时 HDR 和 SDR 映射；输出恢复和设备变化由播放层管理。素材带 HDR／杜比视界标记，不意味着显示或音频链路获得对应认证。
+音画输出层分别记录素材信息、设备能力与当前帧／音频输出证据。HDR 策略提供跟随系统、临时 HDR 和 SDR 映射；输出恢复和设备变化由播放层管理。
+
+**杜比视界**由内嵌 libmpv／libplacebo 与 `MPVShim` 协作：P5／P8 使用逐帧 RPU 进行色彩重建与动态映射，P7 支持 BL＋EL 双层解码及 FEL 重建；通过 FP16／IOSurface／Metal EDR 等路径按设备输出 HDR 或映射到 SDR。`PlaybackDolbyVision` 根据当前轨道、RPU 与实际帧重建结果判断状态，播放器的 Dolby Vision 映射标记来自当前输出证据。macOS 15+ 的系统 DV 呈现为独立、默认关闭的实验路径；常规重建呈现与兼容 P8 原始元数据模式分别约束，系统提交不替代接收端 DV 格式确认。
+
+**杜比全景声**由音频策略根据片源、运行库与设备选择：DD+／E-AC-3 JOC 使用原生压缩音频输出，在兼容 HDMI／DP 链路保留对象信息；TrueHD Atmos 通过 MAT 传输至兼容接收端。`PlaybackAudioOutputPolicy` 管理原生输出、压缩直通与 PCM；倍速或音频处理需要 PCM，恢复条件后重新选择原生路径。`PlaybackCompressedAudioAssessment` 与输出状态组合实际 AO／codec／profile 证据，避免以文件名作为 Atmos 输出依据。
+
+**TrueHD 对象渲染（实验）**在原播放时钟内解码对象与 OAMD，经声道渲染输出 7.1.4 PCM，或经 Apple HRTF 输出耳机双声道；追踪模式使用兼容耳机运动姿态，没有有效姿态时使用固定渲染。7.1.4 要求设备真实扬声器位置匹配；对象 PCM 路径与 TrueHD MAT 直通分别选择，不承担 DD+ JOC 对象软件解码或 PCM→Atmos／MAT 对象编码。具体用法见[杜比音画指南](docs/guide.md#杜比视界与杜比全景声)。
 
 `SubtitleEngine` 与应用翻译面板负责字幕文件、时间轴、翻译会话、识别与导出；Apple Translation 在 macOS 15+ 的可用分支运行。图片字幕和音频识别有独立输入与权限要求。小窗、章节、字幕、音轨及播放控制由原生界面组合呈现。
 
@@ -154,6 +160,12 @@ Source execution is fixed at startup. Mac mode selects native adapters or verifi
 Complete Android environments come from `android/runtime/index.json`. The client downloads, verifies and activates the built environment rather than assembling JVM/framework/host inputs separately. Source JARs remain user-configured downloads. The legacy `android/index.json` is retained for historical compatibility.
 
 Cloud drives, file services and media servers preserve distinct integrations while sharing stable media models. `MediaLibraryEngine` handles folder libraries and metadata. `ParseEngine` normalizes resolved media into `PlaySpec`, carrying URLs, scoped headers, format, subtitles and other required playback information. `PlayerEngine` does not interpret business Provider logic or external configuration. Direct streams bypass `ProxyServer` when mediation is unnecessary; registered files, Range streaming, callbacks and required rewrites use restricted loopback routes.
+
+### Dolby picture and audio paths
+
+Embedded libmpv/libplacebo and `MPVShim` reconstruct Dolby Vision P5/P8 using per-frame RPU metadata and support P7 BL+EL/FEL reconstruction, with HDR/EDR or SDR-mapped presentation. `PlaybackDolbyVision` assesses the selected track and current reconstructed frame. Experimental system DV presentation on macOS 15+ is independently gated and disabled by default; system submission and receiver recognition remain separate states.
+
+`PlaybackAudioOutputPolicy` chooses native compressed DD+ JOC output, compatible TrueHD Atmos MAT passthrough or PCM from stream, runtime and device capabilities. Processing and playback-rate changes require PCM; restoring the conditions allows native output again. Actual AO/codec/profile evidence feeds compressed-audio status. Experimental TrueHD object/OAMD decoding shares the playback clock, rendering to a correctly configured 7.1.4 PCM layout or Apple headphone HRTF, optionally driven by compatible headphone motion. These modes are separate from receiver passthrough and do not implement DD+ JOC object decoding or PCM-to-Atmos encoding. See [setup and device requirements](docs/guide.md#dolby-vision-and-dolby-atmos).
 
 ### Module map
 

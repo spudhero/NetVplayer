@@ -27,7 +27,7 @@
 
 ## 中文
 
-NetVplayer 是基于 **SwiftUI 与内嵌 libmpv** 的原生 macOS 媒体播放器。把在线点播、电视直播、个人网盘、NAS、本机文件和媒体服务器放进同一套浏览与播放体验：找内容、看详情、选剧集、调字幕，再从历史记录接着看。
+NetVplayer 是基于 **SwiftUI 与内嵌 libmpv** 的原生 macOS 媒体播放器。把在线点播、电视直播、个人网盘、NAS、本机文件和媒体服务器放进同一套浏览与播放体验：找内容、看详情、选剧集、调字幕，再从历史记录接着看。支持 **Dolby Vision 杜比视界动态映射与 P7 FEL 双层重建、Dolby Atmos 杜比全景声直通**，按显示器、功放或耳机选择音画输出。
 
 内容由你添加。应用不附带视频源、直播列表、账号或媒体；截图中的来源信息已打码，影视海报和名称已模糊，播放器使用自制本地演示视频。
 
@@ -43,12 +43,29 @@ NetVplayer 是基于 **SwiftUI 与内嵌 libmpv** 的原生 macOS 媒体播放�
 | 连接媒体服务器 | Emby、Jellyfin、Plex、极影视、飞牛影视；浏览服务端媒体并进入原生播放 |
 | 整理媒体库 | 电影、剧集与混合海报墙；本地资料优先，支持 TMDB、豆瓣及手动匹配 |
 | 调整观看体验 | 主副字幕、音轨、倍速、比例、章节、片头片尾、小窗置顶；HDR 策略、音频设备与对白清晰度 |
+| 享受杜比音画 | 杜比视界 P5／P8 动态映射、P7 FEL 双层重建；DD+ JOC／TrueHD Atmos 直通，实验性 TrueHD 对象渲染 |
 | 处理字幕 | 文本字幕本机翻译、双语字幕及导出，图片字幕／音频识别入口，在线字幕搜索 |
 | 按自己的习惯使用 | 14 种主题、设置搜索、配置备份、应用内更新与脱敏问题反馈 |
 
 | 详情、线路与资源分组 | 原生播放器与完整控制 |
 | :---: | :---: |
 | <img src="website/assets/overview/detail.webp?v=057d310747" alt="详情页的播放线路、资源组和选集切换；影视内容已模糊" width="720"> | <img src="website/assets/overview/player.webp" alt="本地演示视频在实际播放器中的字幕、倍速、片头片尾和小窗控制" width="720"> |
+
+### 杜比视界与杜比全景声
+
+从显示器到家庭影院，也照顾耳机观看。NetVplayer 支持读取杜比视界逐帧动态元数据进行画面重建；连接兼容设备时，可将杜比全景声交给功放或回音壁解码。
+
+| 能力 | 实现与输出 |
+| --- | --- |
+| **Dolby Vision P5／P8** | 读取 RPU 动态元数据，进行色彩重建与动态映射；按设备输出 HDR 或映射到 SDR |
+| **Dolby Vision P7 FEL** | 支持 BL＋EL 双层解码与 FEL 重建，结合动态元数据呈现画面 |
+| **Dolby Atmos：DD+ JOC** | 原生压缩音频输出，在兼容 HDMI／DisplayPort 链路保留 JOC 对象信息供接收端解码 |
+| **Dolby Atmos：TrueHD** | 支持通过 MAT 传输 TrueHD Atmos 至兼容功放／回音壁，保留片源无损音频与对象信息 |
+| **TrueHD 对象渲染（实验）** | 对象解码后输出 7.1.4 PCM，或使用耳机 HRTF 空间渲染；兼容耳机可开启头部追踪 |
+
+在“**设置 → 播放偏好 → 色彩与视频输出**”选择跟随系统、临时 HDR 或 SDR 映射。Atmos 在“**音频输出与设备 → 音频直通**”选择默认“自动（保留无损音质）”或“开启（优先直通）”；保留原速并关闭对白增强等音频处理，直通时用功放调节音量。
+
+7.1.4 PCM 需要实际配置了对应扬声器位置的 12 声道设备；耳机头部追踪需要兼容设备与运动权限，没有姿态数据时使用固定空间渲染。TrueHD 对象模式位于“高级设置 → 实验功能”，与 Atmos 原码直通分别选择。常规杜比视界输出可显示“Dolby Vision · HDR 映射／SDR 映射”；另有默认关闭的“系统杜比视界呈现”实验功能（macOS 15+），电视是否收到 DV 仍以接收端为准。完整步骤与模式区别见[杜比音画用法](docs/guide.md#杜比视界与杜比全景声)。
 
 ### 你的网盘、NAS 和媒体库
 
@@ -68,7 +85,7 @@ NetVplayer 是基于 **SwiftUI 与内嵌 libmpv** 的原生 macOS 媒体播放�
 | :---: | :---: |
 | <img src="website/assets/overview/subtitles.webp" alt="Apple 本机翻译、跟随播放、整份字幕和双语导出面板" width="600"> | <img src="website/assets/overview/video-output.webp" alt="跟随系统、临时 HDR 和 SDR 映射设置" width="720"> |
 
-HDR／杜比视界素材的实际呈现取决于片源、显示器和当前输出路径；片名或格式标记不代表设备已启用对应输出。服务登录、原片持续播放和不同 NAS 的兼容性也取决于服务端与网络，详见[使用条件与限制](docs/guide.md#使用条件与限制)。
+播放中可查看当前实际画面与声音输出，帮助确认 HDR 映射、Atmos 直通或 PCM 渲染。设备兼容性、服务登录和原片持续播放条件见[使用指南](docs/guide.md#使用条件与限制)。
 
 ### 两种来源解析方式，同一套 Mac 体验
 
@@ -142,7 +159,7 @@ swift test --package-path NetVplayer --disable-sandbox --no-parallel
 
 ## English
 
-NetVplayer is a **native macOS media player built with SwiftUI and embedded libmpv**. Browse on-demand video, watch live channels, open personal cloud folders, connect your NAS or media server, and play local files in one desktop experience. It runs on **macOS 14+ / Apple Silicon**, in Simplified Chinese and English.
+NetVplayer is a **native macOS media player built with SwiftUI and embedded libmpv**. Browse on-demand video, watch live channels, open personal cloud folders, connect your NAS or media server, and play local files in one desktop experience. It supports **Dolby Vision dynamic mapping and P7 FEL reconstruction, plus Dolby Atmos passthrough**, with output choices for displays, home theaters and headphones. It runs on **macOS 14+ / Apple Silicon**, in Simplified Chinese and English.
 
 You supply the content. The app includes no source configuration, channel list, account, or media. Screenshots mask private source details and blur artwork and media names; the player shows a self-created local demo.
 
@@ -159,9 +176,20 @@ You supply the content. The app includes no source configuration, channel list, 
 | Poster libraries | Movies, TV shows and mixed libraries; local metadata, TMDB, Douban and manual matching |
 | Playback | Main/secondary subtitles, audio tracks, speed, aspect ratio, chapters, intro/outro skip and a floating player |
 | Picture, audio and subtitles | HDR policy, SDR mapping, actual output status, audio devices, dialogue enhancement, local subtitle translation and bilingual export |
+| Dolby picture and sound | Dolby Vision P5/P8 mapping and P7 FEL reconstruction; DD+ JOC/TrueHD Atmos passthrough, experimental TrueHD object rendering |
 | Desktop experience | 14 themes, settings search, configuration backup, in-app updates and redacted problem reports |
 
 The real-app screenshots above show details, playback, cloud folders, file connections, subtitle translation, video output and extension management. [The illustrated guide](docs/guide.md#english) explains the entry points and steps.
+
+### Dolby Vision and Dolby Atmos
+
+**Dolby Vision P5/P8** uses per-frame RPU metadata for reconstruction and dynamic mapping to HDR or SDR. **P7 FEL** supports dual-layer BL+EL decoding and FEL reconstruction. Choose Follow System, Temporary HDR or SDR Mapping under Playback Preferences → Color & Video Output.
+
+**DD+ JOC Atmos** uses native compressed audio output and preserves JOC information on compatible HDMI/DisplayPort routes. **TrueHD Atmos** can be transported over MAT to compatible receivers or soundbars. Under Audio Output & Devices → Audio Passthrough, use the default automatic lossless mode or prefer passthrough. Keep playback at normal speed with audio processing disabled; the receiver controls volume during passthrough.
+
+**Experimental TrueHD object rendering** offers 7.1.4 PCM, fixed headphone HRTF and compatible headphone head tracking. A correctly configured 12-channel speaker layout is required for 7.1.4; tracking requires compatible headphones and motion permission, with fixed rendering when pose data is unavailable. These PCM modes are separate from receiver Atmos passthrough.
+
+The player reports actual output, including Dolby Vision HDR/SDR mapping. Experimental System Dolby Vision Presentation is also available on macOS 15+ with HDR, disabled by default; receiver-side DV recognition still requires device confirmation. See [Dolby setup and output modes](docs/guide.md#dolby-vision-and-dolby-atmos).
 
 ### Getting started
 

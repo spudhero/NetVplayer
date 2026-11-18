@@ -69,7 +69,8 @@
         <p class="eyebrow">原生 macOS 媒体播放器</p>
         <h1 id="hero-title" data-od-id="hero-title">NetVplayer</h1>
         <p class="hero-tagline" data-od-id="hero-tagline">你的内容，你的 Mac，你的播放方式</p>
-        <p class="hero-summary">在线点播、电视直播、个人网盘与 NAS，同一套原生 Mac 体验。从浏览、选集到字幕与音画输出，让自己的内容各就其位。</p>
+        <p class="hero-summary">在线点播、电视直播、个人网盘与 NAS，同一套原生 Mac 体验。支持杜比视界动态映射与杜比全景声直通，从浏览、选集到字幕与音画输出，让自己的内容各就其位。</p>
+        <a class="text-link" href="#dolby">Dolby Vision · Dolby Atmos <span aria-hidden="true">↓</span></a>
         <p class="compatibility">稳定应用 <span data-release-version>2.0.6</span> · macOS 14+ · Apple Silicon</p>
       </div>
 
@@ -139,7 +140,33 @@
       </div>
     </section>
 
-    <section class="content-section" id="content" aria-labelledby="content-title" data-od-id="owned-content-section">
+    <section class="content-section" id="dolby" aria-labelledby="dolby-title" data-od-id="dolby-capabilities-section">
+      <div class="section-heading reveal">
+        <p class="eyebrow">Dolby Vision · Dolby Atmos</p>
+        <h2 id="dolby-title">杜比视界。<br>杜比全景声。</h2>
+        <p>逐帧动态映射与 FEL 双层重建，配合保留对象信息的 Atmos 直通。按你的显示器、功放、回音壁或耳机，选择合适的音画输出。</p>
+      </div>
+      <ul class="content-capabilities reveal" aria-label="杜比音画支持能力">
+        <li><strong>杜比视界动态映射</strong><span>P5／P8 使用逐帧 RPU 动态元数据重建色彩；P7 支持 BL＋EL 双层解码与 FEL 重建，按设备呈现 HDR 或映射到 SDR。</span></li>
+        <li><strong>杜比全景声直通</strong><span>DD+ JOC 保留对象信息，TrueHD Atmos 通过 MAT 传输；在兼容 HDMI／DisplayPort 链路交给功放或回音壁解码。</span></li>
+        <li><strong>TrueHD 对象渲染 · 实验</strong><span>支持 7.1.4 PCM、耳机 HRTF 空间渲染与兼容耳机头部追踪；没有姿态数据时使用固定空间渲染。</span></li>
+      </ul>
+      <div class="extension-support-guide reveal">
+        <figure class="extension-support-media">
+          <a class="extension-support-image-link" href="assets/overview/video-output.webp" target="_blank" rel="noopener" title="查看色彩与视频输出设置"><img src="assets/overview/video-output.webp" width="1863" height="1050" loading="lazy" alt="实际色彩与视频输出页面中的跟随系统、临时 HDR、SDR 映射及高级设置入口"></a>
+          <figcaption>色彩与视频输出。播放中可查看当前实际画面和声音，确认映射、直通或 PCM 渲染状态。</figcaption>
+        </figure>
+        <div class="extension-support-copy">
+          <p class="eyebrow">按设备选择输出</p><h3>画面有策略，<br>声音有去向。</h3>
+          <p>“设置 → 播放偏好 → 色彩与视频输出”选择跟随系统、临时 HDR 或 SDR 映射。播放器会显示 Dolby Vision 的实际 HDR／SDR 映射结果。</p>
+          <p>“音频输出与设备 → 音频直通”选择默认自动或优先直通。保持 1× 原速并关闭对白增强等处理，直通时用功放调节音量；电视转发与 eARC 链路需支持相应音频格式。</p>
+          <p>TrueHD 对象渲染在“高级设置 → 实验功能”开启：7.1.4 需要正确配置的 12 声道设备，耳机追踪需要兼容设备与运动权限。另有 macOS 15+ 系统杜比视界呈现实验，默认关闭，电视接收格式需在设备端确认。</p>
+          <a class="text-link" href="https://github.com/spudhero/NetVplayer/blob/main/docs/guide.md#杜比视界与杜比全景声">查看杜比音画设置与模式区别 <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="content-section section-surface" id="content" aria-labelledby="content-title" data-od-id="owned-content-section">
       <div class="section-heading reveal">
         <p class="eyebrow">你的媒体空间</p>
         <h2 id="content-title" data-od-id="owned-content-title">网盘、NAS 与本机文件，<br>都能成为自己的媒体库。</h2>
@@ -310,6 +337,8 @@
         <details><summary>Mac 实现和 Android 原版如何选择？</summary><p>在“设置 → 扩展支持 → 来源解析方式”选择并重启。Mac 模式使用原生适配或签名扩展；Android 模式执行自己配置引用的原始 JAR，首次准备完整签名环境。两者独立运行，不自动互相回退。</p></details>
         <details><summary>只看 NAS、网盘目录或本机视频，需要影视配置吗？</summary><p>不需要。可以直接添加个人网盘目录、NAS／文件连接或媒体服务器；单个本机视频可通过“文件 → 打开文件”或拖入应用打开。</p></details>
         <details><summary>字幕翻译和 HDR 有什么使用条件？</summary><p>Apple 本机字幕翻译需要 macOS 15+ 和可用语言资源。HDR、杜比视界和音频实际输出依赖素材、系统和设备，以实际输出状态为准；图片字幕／音频识别也有各自的权限与资源要求。</p></details>
+        <details><summary>支持哪些杜比视界能力？</summary><p>支持 P5／P8 的逐帧 RPU 动态映射，以及 P7 的 BL＋EL 双层解码与 FEL 重建，按显示器与偏好输出 HDR 或映射到 SDR。macOS 15+ 另有默认关闭的系统杜比视界呈现实验；电视实际收到 DV 需接收端确认。<a href="#dolby">查看杜比音画介绍</a>。</p></details>
+        <details><summary>怎样播放杜比全景声？耳机也能用吗？</summary><p>连接兼容 HDMI／DisplayPort 音频链路，选择 DD+ JOC 或 TrueHD Atmos 音轨，在“音频输出与设备”使用自动或优先直通，保持原速并关闭音频处理。DD+ 保留 JOC 信息，TrueHD Atmos 经 MAT 交给功放／回音壁解码。耳机可选择实验性 TrueHD 对象 HRTF 渲染；兼容耳机配合运动权限支持头部追踪。<a href="https://github.com/spudhero/NetVplayer/blob/main/docs/guide.md#杜比视界与杜比全景声">查看步骤与设备条件</a>。</p></details>
         <details>
           <summary>支持 Intel Mac 吗？</summary>
           <p>当前不支持。公开版本只提供 Apple Silicon arm64 构建，需要 Apple M 系列芯片。</p>

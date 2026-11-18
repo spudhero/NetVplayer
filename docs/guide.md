@@ -95,6 +95,41 @@
 
 Apple 本机翻译需要 **macOS 15+** 和可用语言资源；macOS 14 可使用原字幕及其导出功能。对白增强使用音频处理，并不分离人声与音乐。临时 HDR、HDR／杜比视界呈现及音频格式的实际输出都依赖当前素材、系统、显示器和音频链路；以实际输出状态为准。
 
+### 杜比视界与杜比全景声
+
+#### 杜比视界：动态映射与双层重建
+
+支持 **Dolby Vision P5／P8 的逐帧 RPU 动态映射**，以及 **P7 的 BL＋EL 双层解码与 FEL 重建**。根据显示器能力与所选策略，将重建画面输出为 HDR 或映射到 SDR；SDR 屏幕也可观看经过动态映射的画面。
+
+1. 打开自己的杜比视界媒体，选择对应视频与音轨。
+2. 在“设置 → 播放偏好 → 色彩与视频输出”选择“跟随系统”“临时 HDR”或“SDR 映射”。跟随系统使用当前显示模式；临时 HDR 在支持的设备上尝试切换，播放结束恢复。
+3. 在播放器的“当前实际画面”查看结果。“Dolby Vision · HDR 映射／SDR 映射”表示已使用当前帧的杜比视界重建结果；仅在片名或素材信息中看到 DV，不等于电视已进入 Dolby Vision 模式。
+
+![色彩与视频输出中的 HDR 策略与实际输出](../website/assets/overview/video-output.webp)
+
+“高级设置 → 实验功能”另有默认关闭的“**系统杜比视界呈现**”，需要 macOS 15+、可用运行库与 HDR 输出。常规路径将重建画面交给系统呈现；其中“保留兼容片源的动态元数据”可尝试部分 P8.1／P8.4 原始 RPU 路径，字幕、画面变换或不兼容时使用重建画面。系统提交状态会提示“待设备确认”，电视实际接收格式仍需在接收端检查；它不等于 HDMI 原始 DV 码流直通。
+
+#### 杜比全景声：交给家庭影院解码
+
+支持 **DD+／E-AC-3 JOC Atmos** 与 **TrueHD Atmos** 原码输出：兼容链路上保留 DD+ 的 JOC 对象信息，TrueHD Atmos 则通过 MAT 传输至功放或回音壁。设备能力、电视转发与 eARC 配置会影响最终可用格式。
+
+1. 连接支持目标格式的 HDMI／DisplayPort 音频设备；经过电视转发时，确认电视和 eARC 链路也支持该格式。在媒体中选择实际带 Atmos 的音轨。
+2. 打开“设置 → 播放偏好 → 音频输出与设备 → 音频直通”。默认“**自动（保留无损音质）**”按片源和设备选择；也可选“**开启（优先直通）**”。播放器音量面板提供相同选择。
+3. 保持 **1× 原速**，关闭对白增强与音频滤镜。直通时使用功放／回音壁调节音量；需要应用内音量或处理时，可选“关闭（PCM）”。恢复原速并关闭处理后，会重新尝试原生音频输出。
+4. 查看“当前实际声音”和“技术信息”，再核对功放／回音壁的 Atmos 显示。设备不支持目标格式时使用可用的 PCM 输出；普通多声道 PCM 本身不代表 Atmos 对象输出。
+
+#### TrueHD 对象渲染：扬声器与耳机（实验功能）
+
+在“**音频输出与设备 → 高级设置 → 实验功能 → TrueHD 对象渲染**”选择。默认“自动（使用原生输出）”保留原生音频路径；下列模式使用 TrueHD 对象解码与 PCM 渲染。
+
+| 模式 | 用法与设备条件 |
+| --- | --- |
+| **7.1.4 PCM** | 向已正确配置 7.1.4 扬声器位置的 12 声道设备输出，包含四个高度声道；仅有 8 声道 HDMI PCM 或“12 声道”计数还不够 |
+| **耳机空间音频（固定）** | 将 TrueHD 对象音频经 HRTF 渲染为双声道耳机输出；请佩戴耳机 |
+| **耳机空间音频（头部追踪）** | 根据兼容耳机的姿态调整空间渲染，需要运动权限；没有有效姿态数据时使用固定空间渲染 |
+
+这些模式可使用应用内音量与对白增强，属于本机 PCM 渲染。DD+ JOC 的支持路径是前述压缩音频输出；此处的对象解码专用于 TrueHD。它们与向功放发送原片 TrueHD Atmos 的 MAT 直通分别工作，不把普通 PCM 重新编码成 Atmos。当前实验模式已有软件链路验证，实体 7.1.4 布局与耳机追踪仍需按具体设备确认。
+
 ### 选择 Mac 实现或 Android 原版
 
 1. 打开“设置 → 扩展支持 → 来源解析方式”。
@@ -122,7 +157,7 @@ Mac 模式不下载或调用 Android 环境；Android 模式在兼容环境中�
 
 - 需要自己有权访问的配置、服务与媒体。配置加载成功或目录展开不代表每一条线路都可播放。
 - 网盘登录、个人目录、原片持续播放、不同 NAS／服务端版本、全部来源和 macOS 14 实机的完整验收仍有未覆盖范围。部分服务可能返回空结果、验证要求、限速或媒体请求拒绝。
-- HDR／杜比视界标签说明素材或格式信息，实际显示取决于设备和当前输出路径。音频输出能力同样不能仅从文件名判断。
+- 杜比视界动态映射／FEL 重建与 Atmos 直通按上文的片源和设备条件工作；实际播放状态与接收端格式分别确认。系统 DV 呈现及 TrueHD 对象渲染为实验功能。
 - 本机翻译、图片／音频识别、在线字幕和弹幕需要相应的系统能力、权限、语言资源或外部服务；没有对应数据时不会凭空生成字幕或节目内容。
 - 图文介绍说明当前功能与用法；具体版本修复和验证范围见[发布说明](releases/README.md)。
 
@@ -162,6 +197,16 @@ The live player provides channel groups, channel search, programme guides, route
 The native player exposes subtitles, main/secondary tracks, audio tracks, speed, aspect ratio, chapter navigation, intro/outro skipping, floating mode and fullscreen. Playback Preferences contains subtitle appearance, video output, audio devices and dialogue enhancement.
 
 For text translation, open Player → Subtitles → Text Subtitle Translation, choose an SRT/ASS/SSA/VTT file, languages, and follow-playback or whole-document translation. Export the original at any time, or the completed translation, optionally bilingual. Apple local translation requires **macOS 15+** and available language resources. The subtitle menu also provides image-subtitle/audio recognition and online search, each subject to its own requirements. Danmaku is disabled by default and uses manual search when enabled.
+
+### Dolby Vision and Dolby Atmos
+
+**Dolby Vision P5/P8** supports per-frame RPU reconstruction and dynamic mapping; **P7 FEL** supports BL+EL decoding and enhancement-layer reconstruction. Open Playback Preferences → Color & Video Output and choose Follow System, Temporary HDR or SDR Mapping. Inspect the player's actual picture status: Dolby Vision HDR/SDR mapping describes the reconstructed output. Temporary HDR restores the display mode after playback.
+
+Experimental **System Dolby Vision Presentation** is disabled by default and requires macOS 15+, a compatible runtime and HDR output. It presents reconstructed frames through the system; its optional source-metadata mode tries compatible P8.1/P8.4 RPU input and falls back to reconstruction when incompatible or altered by subtitles/transforms. A successful system submission still requires receiver confirmation of DV; it is not HDMI original-DV bitstream passthrough.
+
+For **DD+ / E-AC-3 JOC Atmos** and **TrueHD Atmos**, connect a compatible HDMI/DisplayPort receiver or soundbar, select the Atmos track, and use Audio Output & Devices → Audio Passthrough. The default automatic lossless mode selects native output; prefer passthrough is also available. DD+ retains JOC information; TrueHD Atmos uses MAT transport. A TV/eARC route must support the relevant format throughout. Keep normal speed with dialogue enhancement and audio filters disabled, and control passthrough volume on the receiver. Inspect actual audio output and the receiver's Atmos display. Unsupported routes use available PCM output; restore normal speed and disable processing to retry native output.
+
+Under Advanced Settings → Experimental Features → **TrueHD Object Rendering**, the default preserves native output. Experimental alternatives decode TrueHD objects to **7.1.4 PCM** on a correctly configured 12-channel speaker layout, **fixed headphone HRTF**, or **head-tracked headphone HRTF**. Tracking requires compatible headphones and motion permission; missing pose data uses fixed rendering. These PCM modes allow app volume and dialogue processing. They apply to TrueHD object decoding; DD+ JOC uses the compressed path above. They neither re-encode PCM to Atmos nor replace receiver passthrough. Software-path checks are complete; physical 7.1.4 layouts and actual headphone tracking require device-specific validation.
 
 ### Choose source execution
 
