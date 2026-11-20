@@ -6,6 +6,18 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [2.0.7](https://github.com/spudhero/NetVplayer/releases/tag/2.0.7)（2026-11-20）
+
+正式构建 **58**。修复网盘切线后的加载提示、Android helper 媒体端口归属、HDR Vivid 暗部反相和来源目录浏览。配套原生 Python 1.1.19／Java 1.1.4，恢复部分原生适配并新增三种实现；上游不可用与个别转码偏色限制继续保留。见[发布说明](docs/releases/2.0.7.md)。
+
+### [2.0.6](https://github.com/spudhero/NetVplayer/releases/tag/2.0.6)（2026-11-18）
+
+正式构建 **57**。恢复临时 HDR 切换后的音频输出驱动，响应设备变化；详情选集显示目录提供的文件大小。见[发布说明](docs/releases/2.0.6.md)。
+
+### [2.0.5](https://github.com/spudhero/NetVplayer/releases/tag/2.0.5)（2026-11-17）
+
+正式构建 **56**。修复重复 HDR 显示器探测引起的周期性画面停顿，以及百度分享账号和会话处理。见[发布说明](docs/releases/2.0.5.md)。
+
 ### [2.0.4](https://github.com/spudhero/NetVplayer/releases/tag/2.0.4)（2026-11-17）
 
 正式构建 **55**。修复原版 Android 的异步来源检查与 WebKit 页面取消之间的竞争，保留来源拒绝、用户取消及超时。继续严格隔离两种实现，复用完整环境 1.2.4。见[发布说明](docs/releases/2.0.4.md)。
@@ -278,6 +290,18 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [2.0.7](https://github.com/spudhero/NetVplayer/releases/tag/2.0.7) (2026-11-20)
+
+Build **58** fixes cloud-fallback loading, Android helper media ownership, HDR Vivid shadow decoding and source folder navigation. Native Python 1.1.19 / Java 1.1.4 restore adapters and add three native implementations. Upstream availability and a separate transcode color issue remain scoped limitations. See the [release notes](docs/releases/2.0.7.md).
+
+### [2.0.6](https://github.com/spudhero/NetVplayer/releases/tag/2.0.6) (2026-11-18)
+
+Build **57** restores audio output after temporary HDR switching, refreshes changed devices and displays file sizes supplied by episode directories. See the [release notes](docs/releases/2.0.6.md).
+
+### [2.0.5](https://github.com/spudhero/NetVplayer/releases/tag/2.0.5) (2026-11-17)
+
+Build **56** fixes periodic stalls from repeated HDR display probing and isolates authorized Baidu share sessions. See the [release notes](docs/releases/2.0.5.md).
 
 ### [2.0.4](https://github.com/spudhero/NetVplayer/releases/tag/2.0.4) (2026-11-17)
 
