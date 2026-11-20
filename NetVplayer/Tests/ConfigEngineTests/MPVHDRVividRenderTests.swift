@@ -99,7 +99,7 @@ import Testing
         var report: [[String: Any]] = []
         for transfer in ["pq", "hlg"] {
             var images: [String: [UInt8]] = [:]
-            for variant in ["plain", "a", "b", "saturation", "authored", "spline", "bad-base", "unsupported", "a", "plain"] {
+            for variant in ["plain", "a", "b", "saturation", "authored", "spline", "shadow-spline", "bad-base", "unsupported", "a", "plain"] {
                 let result = try await load("\(transfer)-\(variant).mp4")
                 let expected: UInt64 = variant == "plain" ? 0 : ["bad-base", "unsupported"].contains(variant) ? 80 : 48
                 #expect(result.flags & 112 == expected, "\(transfer)-\(variant): \(result.flags)")
@@ -112,7 +112,7 @@ import Testing
             let metadataDelta = difference(a, b), saturationDelta = difference(a, saturation)
             #expect(metadataDelta > 2 && saturationDelta > 2)
             if transfer == "pq" {
-                for variant in ["a", "b"] {
+                for variant in ["a", "b", "shadow-spline"] {
                     let pixels = try #require(images[variant])
                     for patch in try #require(grayReference[variant]) {
                         let x = try #require(patch["x"]), y = try #require(patch["y"]), expected = try #require(patch["rgb8"])
@@ -122,6 +122,13 @@ import Testing
                         }
                     }
                 }
+            }
+            // A legal shadow spline must not turn increasing neutral input
+            // into a negative-like brightness reversal on the actual GPU.
+            let shadow = try #require(images["shadow-spline"])
+            for channel in 0..<3 {
+                let grays = (0..<8).map { Int(shadow[(90*640+40+80*$0)*4+channel]) }
+                #expect(zip(grays, grays.dropFirst()).allSatisfy { pair in pair.0 <= pair.1 + 1 })
             }
             for variant in ["bad-base", "unsupported"] {
                 #expect(difference(try #require(images[variant]), plain) <= 1)
@@ -183,6 +190,13 @@ import Testing
             let delta = zip(captures[0], captures[1]).map { abs($0-$1) }.max() ?? 0
             let replay = zip(captures[0], captures[2]).map { abs($0-$1) }.max() ?? 1
             #expect(delta > 0.01 && replay < 0.001)
+            _ = try await load("\(transfer)-shadow-spline.mp4")
+            let shadow = gl.readFloat(framebuffer: currentFramebuffer, width: 640, height: 360)
+            #expect(shadow.allSatisfy { $0.isFinite && $0 >= -0.001 && $0 < 5 })
+            for channel in 0..<3 {
+                let grays = (0..<8).map { shadow[(90*640+40+80*$0)*4+channel] }
+                #expect(zip(grays, grays.dropFirst()).allSatisfy { pair in pair.0 <= pair.1 + 0.001 })
+            }
             hdrResults.append(["transfer":transfer, "maximumLinearValue":captures[0].max() ?? 0,
                                "maximumMetadataDelta":delta, "maximumReplayDelta":replay])
         }

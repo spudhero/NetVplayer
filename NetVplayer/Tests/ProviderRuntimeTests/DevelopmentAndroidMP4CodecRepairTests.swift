@@ -79,16 +79,15 @@ private actor SDKMP4Output {
 }
 
 @Test func developmentAndroidMP4RepairRunsThroughPlayerAndStreamingRoute() async throws {
-    let http = try AndroidHLSHTTPFixture(body: sdkMP4(), contentType: "video/mp4")
-    defer { http.stop() }
-    let port = try await http.start()
     let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
+    try FileManager.default.createDirectory(at: fixture.state, withIntermediateDirectories: true)
+    try sdkMP4().write(to: fixture.state.appendingPathComponent("sdk-media-body.fixture"))
     let site = Site(key: "AiDj", name: "AI", type: 3, api: "csp_AiDjGuard", ext: "original")
     try fixture.writeManifest(changes: ["bindings": [["key": site.key, "api": site.api, "className": "com.github.catvod.spider.AiDjGuard"]]], repairsSDKMedia: true)
     let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
     let provider = DevelopmentAndroidSiteProvider(runtime: runtime, binding: runtime.manifest.bindings[0], stateDirectory: fixture.state)
     do {
-        let result = try await provider.playerContent(site: site, flag: "AI", id: "sdk-media-\(port)")
+        let result = try await provider.playerContent(site: site, flag: "AI", id: "sdk-owned-1")
         let url = try #require(URLComponents(string: result.url))
         let parameters = Dictionary(uniqueKeysWithValues: (url.queryItems ?? []).map { ($0.name, $0.value ?? "") })
         #expect(parameters["android_route"] != nil && parameters["siteKey"] == "AiDj")
@@ -97,10 +96,11 @@ private actor SDKMP4Output {
             #expect(head.contentLength == sdkMP4().count)
         }, sendBody: { await output.append($0) })
         #expect(await output.value() == sdkMP4(entry: "hvc1"))
-        let requests = http.observedRequests()
+        let requests = try String(contentsOf: fixture.state.appendingPathComponent("sdk-http.jsonl"), encoding: .utf8)
+            .split(separator: "\n").map { try JSONDecoder().decode([String: String].self, from: Data($0.utf8)) }
         #expect(requests.count == 2)
-        #expect(requests.allSatisfy { $0.contains("GET /proxy?do=hg&vid=1234567890123456789 HTTP/1.1") && $0.contains("SDK fixture") })
-        #expect(requests[0].contains("bytes=0-65535"))
+        #expect(requests.allSatisfy { $0["path"] == "/proxy?do=hg&vid=fixture" && $0["user_agent"] == "SDK fixture" })
+        #expect(requests[0]["range"] == "bytes=0-65535")
     } catch { await provider.shutdown(); throw error }
     await provider.shutdown()
 }

@@ -15,10 +15,22 @@ on:
     branches:
       - main
     paths:
+      - ".netvplayer-workspace.json"
+      - "NetVplayer/NetVplayer/Sources/**"
+      - "NetVplayer/NetVplayer/Tests/**"
+      - "NetVplayer/NetVplayer/Package.*"
+      - "NetVplayer/script/**"
+      - "NetVplayer/provider-runners/**"
+      - "NetVplayer/provider-sdk/**"
+      - "NetVplayer/android-presentation/**"
       - "README.md"
       - "ARCHITECTURE.md"
       - "docs/guide.md"
       - "docs/overview-screenshots.json"
+      - "NetVplayer/README.md"
+      - "NetVplayer/ARCHITECTURE.md"
+      - "NetVplayer/docs/guide.md"
+      - "NetVplayer/docs/overview-screenshots.json"
       - "CONTRIBUTING.md"
       - "docs/releases/**"
       - "script/runtime/README.md"
@@ -96,7 +108,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Select application source tree
+        id: source-root
+        shell: bash
+        run: |
+          if [[ -f .netvplayer-workspace.json ]]; then
+            target="$RUNNER_TEMP/netvplayer-checked-public"
+            python3 script/export_provider_public_shell.py --repo "$GITHUB_WORKSPACE" --output "$target"
+          else
+            target="$GITHUB_WORKSPACE"
+          fi
+          echo "path=$target" >> "$GITHUB_OUTPUT"
+
       - name: Verify build volume capacity
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: |
           python3 - <<'PY'
           import shutil
@@ -112,6 +137,7 @@ jobs:
           python-version: "3.12"
 
       - name: Verify native asynchronous application termination
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: python3 script/verify_app_termination.py --output "$RUNNER_TEMP/application-termination"
 
       - name: Set up Node.js
@@ -120,6 +146,7 @@ jobs:
           node-version: "22.20.0"
 
       - name: Verify WebKit fixture delegate dispatch
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -162,15 +189,18 @@ jobs:
           java-version: "21"
 
       - name: Use OpenSSL 3 for Ed25519 fixtures
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
 
       - name: Install playback and file transfer development files
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: |
           brew install mpv libssh2
           echo "NETVPLAYER_FILE_TRANSFER_RUNTIME=$(brew --prefix libssh2)" >> "$GITHUB_ENV"
 
       - name: Fetch pinned Java fixture dependency
         shell: bash
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: |
           set -euo pipefail
           gson="$RUNNER_TEMP/gson-2.11.0.jar"
@@ -185,6 +215,7 @@ jobs:
       - name: Install and audit WebTorrent runtime dependencies
         env:
           npm_config_cache: ${{ runner.temp }}/netvplayer-npm-cache
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: |
           npm ci \
             --prefix NetVplayer/Resources/TorrentBridge \
@@ -197,19 +228,23 @@ jobs:
             --check docs/data/torrent-bridge-license-audit-2026-08-18.json
 
       - name: Run public Provider gate
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: python3 script/test_provider_public_shell.py --gson-jar "$NETVPLAYER_GSON_JAR"
 
       - name: Verify the CI regression runner
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: python3 -m unittest script/test_run_swift_regression.py
 
       # Fail early on the WebKit diagnostic contract before the complete suite.
       # SwiftPM reuses this build for the complete regression below.
       - name: Verify WebKit rule diagnostic ordering
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: >-
           swift test --package-path NetVplayer --disable-sandbox --no-parallel
           --filter diagnosticsHashRuleScriptsAndRecordRejectedChecks
 
       - name: Run serial SwiftPM regression
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: >-
           python3 script/run_swift_regression.py --require-summary --
           swift test --package-path NetVplayer --disable-sandbox --no-parallel
@@ -217,9 +252,11 @@ jobs:
       - name: Verify signed sandbox home isolation
         env:
           NETVPLAYER_RUN_SIGNED_SANDBOX_HOME_TEST: "1"
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: >-
           swift test --package-path NetVplayer --skip-build --disable-sandbox --no-parallel
           --filter signedSandboxAuditExecutesHomeWithoutReadingOrChangingOrdinaryState
 
       - name: Check patch formatting
+        working-directory: ${{ steps.source-root.outputs.path }}
         run: git diff --check

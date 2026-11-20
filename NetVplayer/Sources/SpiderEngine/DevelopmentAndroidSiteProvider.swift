@@ -383,14 +383,27 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         try validateContentAccess(site, epoch: epoch)
         var decoded = decoded
         let routeID = UUID().uuidString
-        if DevelopmentAndroidMP4CodecRepair.accepts(decoded.url, site: site, binding: binding, policy: runtime.compatibilityPolicy) {
+        let repairsCodec = DevelopmentAndroidMP4CodecRepair.accepts(
+            decoded.url, site: site, binding: binding, policy: runtime.compatibilityPolicy)
+        if repairsCodec || Self.isSDKMediaAddress(decoded.url) {
             let lease = WebMediaLease(epoch: epoch, helper: helperGeneration, playback: webMediaGeneration,
                 configuration: try JSONEncoder.providerCanonical.encode(site))
             let listeners = await client?.listeningTCPPorts()
             try validateWebMediaLease(lease, site: site)
-            let sdkPorts = listeners?.filter { (6677..<7000).contains($0) } ?? []
-            if sdkPorts.count == 1, let port = sdkPorts.first,
-               var address = URLComponents(string: decoded.url), address.port != port {
+            guard let listeners, var address = URLComponents(string: decoded.url) else {
+                throw Self.unverifiedSDKMediaServer()
+            }
+            let sdkPorts = listeners.filter { (6677..<7000).contains($0) }
+            if sdkPorts.isEmpty {
+                // A different source may still be serving the cached port. Do
+                // not send this source's media parameters to that other helper.
+                try await retireDisconnectedSDKServer(site: site, lease: lease)
+                throw Self.unverifiedSDKMediaServer()
+            }
+            if !sdkPorts.contains(address.port ?? 0) {
+                guard sdkPorts.count == 1, let port = sdkPorts.first else {
+                    throw Self.unverifiedSDKMediaServer()
+                }
                 // SDK discovery can cache a different helper's port just before shutting it down.
                 // Correct only the port, using the current child's actual listening socket.
                 address.port = port
@@ -398,6 +411,10 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
                 decoded.url = corrected
                 DiagnosticLog.write("[ANDROID_SDK_MEDIA_PORT] ownership=current_helper corrected=true")
             }
+        }
+        if repairsCodec {
+            let lease = WebMediaLease(epoch: epoch, helper: helperGeneration, playback: webMediaGeneration,
+                configuration: try JSONEncoder.providerCanonical.encode(site))
             let patches: [Int64]
             do {
                 patches = try await probeSDKMedia(decoded.url, decoded.header)
@@ -440,6 +457,18 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             return route.result
         }
         return try RemoteProviderPlayerResultAdapter.localize(decoded, site: site, providerID: providerID)
+    }
+
+    private static func isSDKMediaAddress(_ raw: String) -> Bool {
+        guard raw.utf8.count <= 128 * 1024, let url = URLComponents(string: raw), url.scheme == "http",
+              ["127.0.0.1", "localhost", "::1", "[::1]"].contains(url.host ?? ""),
+              let port = url.port, (6677..<7000).contains(port),
+              url.user == nil, url.password == nil, url.fragment == nil else { return false }
+        return true
+    }
+
+    private static func unverifiedSDKMediaServer() -> ProviderErrorPayload {
+        ProviderErrorPayload(code: "android_sdk_media_unverified", message: L10n.text("无法连接到服务地址。"))
     }
 
     private func retireDisconnectedSDKServer(site: Site, lease: WebMediaLease) async throws {

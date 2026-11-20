@@ -1417,13 +1417,18 @@ for raw in sys.stdin:
                                 'url': 'http://127.0.0.1:9978/proxy?do=ssa&csp=FixtureGuard&track=1&token=secret-fixture-lyrics'},
                                {'name': 'Remote', 'format': 'srt', 'url': 'https://subtitle.example.test/remote.srt'},
                                {'name': 'Inline', 'format': 'ass', 'url': 'data:text/x-ssa;base64,Zml4dHVyZQ=='}]}
-        elif args.get('id', '').startswith('sdk-recover-'):
-            if not loaded_sdk_recovery:
+        elif args.get('id', '').startswith(('sdk-recover-', 'sdk-owned-')):
+            owns_server = args['id'].startswith('sdk-owned-') or loaded_sdk_recovery
+            if not owns_server:
                 sdk_recovery.write_text('saved SDK session')
             elif sdk_server is None:
                 class SDKHandler(http.server.BaseHTTPRequestHandler):
                     def do_GET(self):
-                        data = b'SDK media fixture'
+                        body = Path('sdk-media-body.fixture')
+                        data = body.read_bytes() if body.exists() else b'SDK media fixture'
+                        with open('sdk-http.jsonl', 'a') as log:
+                            log.write(json.dumps({'path': self.path, 'range': self.headers.get('Range', ''),
+                                                  'user_agent': self.headers.get('User-Agent', '')}) + '\n')
                         self.send_response(200)
                         self.send_header('Content-Type', 'video/mp4')
                         self.send_header('Content-Length', str(len(data)))
@@ -1438,7 +1443,8 @@ for raw in sys.stdin:
                 assert sdk_server is not None
                 threading.Thread(target=sdk_server.serve_forever, daemon=True).start()
             # A new SDK instance still reports a stale port. Only its owned listener is valid.
-            result = {'url': 'http://127.0.0.1:1/proxy?do=hg&vid=fixture',
+            reported_port = int(args['id'].rsplit('-', 1)[1])
+            result = {'url': f'http://127.0.0.1:{reported_port}/proxy?do=hg&vid=fixture',
                       'parse': 0, 'header': {'User-Agent': 'SDK fixture'}}
         elif args.get('id', '').startswith('sdk-media-'):
             port = int(args['id'].removeprefix('sdk-media-'))

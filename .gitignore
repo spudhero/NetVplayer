@@ -20,6 +20,7 @@ node_modules/
 
 # Local Debug / Scratch
 NetVplayer/scratch/
+NetVplayer/NetVplayer/scratch/
 /.codex/
 /.codebase-memory/
 __pycache__/

@@ -198,6 +198,16 @@ detection are disabled for an already adapted Vivid frame. Temporal interpolatio
 is disabled for Vivid frames to keep each curve attached to its own decoded frame.
 Screenshots and chapter previews use the same adaptation.
 
+Mode-0 `th_enable_mb` is a packed byte: the six most significant bits encode
+the slope divided by 63 (range 0–1); the two least significant bits encode
+the dark offset times 0.1/3. Extract the slope with `raw >> 2`, not merely
+`raw & 0xfc`. See T/UWA 005.1-2022 §7.4.23: the abbreviated mask expression
+in GY/T 358-2022's parameter list must not be interpreted as a 0–4 slope.
+The scalar regression exhausts all 256 packed values and checks the reported
+shadow spline for monotonic output at SDR 203 and HDR 800 nits. Generated
+`shadow-spline` fixtures additionally check actual GPU gray-patch ordering in
+PQ/HLG SDR and FP16 HDR, plus an independent dark-patch SDR reference.
+
 The existing version-1 render telemetry ABI gains capability bit `16`. Current
 frame bits `16`, `32`, `64` mean Vivid side data, successfully mapped Vivid, and
 Vivid fallback, respectively. Reset/reconfigure clears frame proof. Unsupported

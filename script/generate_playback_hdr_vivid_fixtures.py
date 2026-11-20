@@ -33,6 +33,14 @@ class Bits:
 def metadata(variant):
     b = Bits()
     b.put(2 if variant == 'unsupported' else 1, 8)
+    if variant == 'shadow-spline':
+        # Reported legal metadata, attached only to our original test pixels.
+        for value in (385,1966,2607,2836): b.put(value,12)
+        for value,width in [(1,1),(0,1),(3160,12),(1,1),(6796,14),(24,6),
+                            (960,10),(113,10),(10,6),(1,2),(1,2),(1,4),(6,3),(10,7),
+                            (1,1),(0,1),(0,2),(252,8),(268,12),(533,10),(533,10),(137,8),(0,1)]:
+            b.put(value,width)
+        return bytes([0x26, 0, 4, 0, 5]) + b.data()
     stats = (0, .45, .45, .90) if variant != 'b' else (0, .25, .08, .75)
     for value in stats:
         b.put(round(value * 4095), 12)
@@ -92,6 +100,11 @@ def inject(data, variant):
 
 
 def gray_reference(variant):
+    if variant == 'shadow-spline':
+        # This quantized dark patch is below TH0. The six MSBs of 252 are
+        # 63, so its slope is exactly one and the low-bit offset is zero.
+        q = (round(64+876*pq_encode(.1))-64)/876
+        return [{'x':120,'y':90,'rgb8':round(255*srgb_encode(pq_decode(q)/203))}]
     # Independent scalar reference for the un-splined base interval, GY/T
     # 358-2022 §11.2. Values are derived from the quantized Y samples, rather
     # than the unquantized input. The display black point is unspecified, so
@@ -144,7 +157,7 @@ def main():
                  '-i','pipe:0','-vf','loop=loop=71:size=1:start=0','-frames:v','72','-c:v','libx265',
                  '-x265-params',f'log-level=error:pools=2:lossless=1:keyint=24:bframes=0:colorprim=9:transfer={code}:colormatrix=9:range=limited:master-display=G(8500,39850)B(6550,2300)R(35400,14600)WP(15635,16450)L(10000000,1):max-cll=1000,400',
                  '-f','hevc',str(base),'-n'],input=data.tobytes())
-            for variant in ['plain','a','b','saturation','authored','spline','bad-base','unsupported','changing','missing']:
+            for variant in ['plain','a','b','saturation','authored','spline','shadow-spline','bad-base','unsupported','changing','missing']:
                 hevc = out/f'{transfer}-{variant}.hevc'
                 hevc.write_bytes(base.read_bytes() if variant == 'plain' else inject(base.read_bytes(), variant))
                 media = hevc.with_suffix('.mp4')
@@ -159,7 +172,7 @@ def main():
     (out/'manifest.json').write_text(json.dumps({'schema':1,'rights':'Original pixels and generated HDR Vivid SEI.',
         'scope':'Synthetic integration fixtures, not a certified HDR Vivid master.', 'commands':commands,
         'patches':[{'x':40+80*(i%8),'y':90+180*(i//8),'sourcePQ':c} for i,c in enumerate(rgb)],
-        'grayReference':{variant:gray_reference(variant) for variant in ['a','b']},
+        'grayReference':{variant:gray_reference(variant) for variant in ['a','b','shadow-spline']},
         'samples':samples},indent=2)+'\n')
 
 

@@ -38,15 +38,19 @@ private func mapAndroidManifest(_ body: String, mime: String = "application/vnd.
     }
 }
 
-@Test func developmentAndroidPlayerPreservesHelperMediaServerPorts() async throws {
+@Test func developmentAndroidPlayerUsesItsOwnHelperMediaServerPort() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
     let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
     let provider = DevelopmentAndroidSiteProvider(runtime: runtime, binding: runtime.manifest.bindings[0], stateDirectory: fixture.state)
     do {
         for port in [6677, 6678] {
-            let result = try await provider.playerContent(site: fixture.site, flag: "fixture", id: "sdk-media-\(port)")
-            #expect(result.url == "http://127.0.0.1:\(port)/proxy?do=hg&vid=1234567890123456789")
+            let result = try await provider.playerContent(site: fixture.site, flag: "fixture", id: "sdk-owned-\(port)")
+            let address = try #require(URLComponents(string: result.url))
+            #expect((6677..<7000).contains(address.port ?? 0))
+            #expect(address.path == "/proxy" && address.percentEncodedQuery == "do=hg&vid=fixture")
             #expect(result.parse == 0 && result.header == ["User-Agent": "SDK fixture"])
+            let (body, _) = try await URLSession.shared.data(from: #require(address.url))
+            #expect(body == Data("SDK media fixture".utf8))
         }
     } catch {
         await provider.shutdown()

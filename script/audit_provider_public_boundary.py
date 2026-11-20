@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from source_workspace import tracked_paths as workspace_tracked_paths, source_file, logical_relative
 import subprocess
 import sys
 from typing import Any
@@ -59,7 +60,7 @@ def git(repo: Path, *arguments: str) -> str:
 
 
 def tracked_paths(repo: Path) -> list[str]:
-    return sorted(path for path in git(repo, "ls-files", "-z").split("\0") if path)
+    return workspace_tracked_paths(repo)
 
 
 def forbidden_history(repo: Path) -> list[str]:
@@ -81,7 +82,7 @@ def content_digest(repo: Path, paths: list[str]) -> str:
     digest = hashlib.sha256()
     root = repo.resolve(strict=True)
     for relative in sorted(paths):
-        path = repo / relative
+        path = source_file(repo, relative)
         if path.is_symlink():
             raise BoundaryAuditError(f"boundary source cannot be a symlink: {relative}")
         if not path.is_file():

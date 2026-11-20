@@ -69,7 +69,7 @@ private func sdkRecoveryEvents(_ fixture: DevelopmentAndroidBridgeFixture) throw
         let provider = DevelopmentAndroidSiteProvider(runtime: runtime, binding: runtime.manifest.bindings[0],
             stateDirectory: fixture.state, probeSDKMedia: { _, _ in throw URLError(code) })
         do {
-            do { _ = try await provider.playerContent(site: site, flag: "AI", id: "sdk-media-6677"); Issue.record("Expected probe failure") }
+            do { _ = try await provider.playerContent(site: site, flag: "AI", id: "sdk-owned-1"); Issue.record("Expected probe failure") }
             catch let error as URLError { #expect(error.code == code) }
             _ = try await provider.homeContent(site: site)
             #expect(Set(try sdkRecoveryEvents(fixture).compactMap { $0["pid"] }).count == 1)
@@ -94,7 +94,7 @@ private actor SDKProbeGate {
     let runtime = try sdkRecoveryRuntime(fixture), site = sdkRecoverySite(), gate = SDKProbeGate()
     let provider = DevelopmentAndroidSiteProvider(runtime: runtime, binding: runtime.manifest.bindings[0],
         stateDirectory: fixture.state, probeSDKMedia: { _, _ in try await gate.wait() })
-    let pending = Task { try await provider.playerContent(site: site, flag: "AI", id: "sdk-media-6677") }
+    let pending = Task { try await provider.playerContent(site: site, flag: "AI", id: "sdk-owned-1") }
     do {
         for _ in 0..<300 { if await gate.entered { break }; try await Task.sleep(for: .milliseconds(10)) }
         try #require(await gate.entered)
@@ -106,5 +106,47 @@ private actor SDKProbeGate {
         #expect(Set(try sdkRecoveryEvents(fixture).compactMap { $0["pid"] }).count == 1)
     } catch { await gate.refuseConnection(); pending.cancel(); await provider.shutdown(); throw error }
     await provider.shutdown()
+}
+
+@Test func developmentAndroidSDKServerRecoveryRejectsAnotherSourcesLiveServer() async throws {
+    let foreign = try DevelopmentAndroidBridgeFixture(); defer { foreign.remove() }
+    let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
+    let foreignRuntime = try sdkRecoveryRuntime(foreign)
+    let foreignProvider = DevelopmentAndroidSiteProvider(runtime: foreignRuntime,
+        binding: foreignRuntime.manifest.bindings[0], stateDirectory: foreign.state)
+    // This source has no MP4 repair policy: ownership must be checked for all
+    // original Android SDK media, independently of codec compatibility.
+    let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
+    let provider = DevelopmentAndroidSiteProvider(runtime: runtime,
+        binding: runtime.manifest.bindings[0], stateDirectory: fixture.state)
+    do {
+        let foreignResult = try await foreignProvider.playerContent(site: sdkRecoverySite(), flag: "AI", id: "sdk-owned-1")
+        let foreignPort = try #require(URLComponents(string: foreignResult.url)?.port)
+        let input = "sdk-recover-\(foreignPort)"
+        do {
+            _ = try await provider.playerContent(site: fixture.site, flag: "fixture", id: input)
+            Issue.record("A live foreign source server must not be accepted as this source's media")
+        } catch let error as ProviderErrorPayload {
+            #expect(error.code == "android_sdk_media_disconnected" && error.retryable)
+        }
+        let oldPID = try #require(try sdkRecoveryEvents(fixture).first?["pid"].flatMap(Int32.init))
+        #expect(kill(oldPID, 0) == -1 && errno == ESRCH)
+        let result = try await provider.playerContent(site: fixture.site, flag: "fixture", id: input)
+        let address = try #require(URLComponents(string: result.url))
+        #expect(address.port != foreignPort && (6677..<7000).contains(address.port ?? 0))
+        #expect(address.path == "/proxy" && address.percentEncodedQuery == "do=hg&vid=fixture")
+        #expect(result.header == foreignResult.header)
+        let (body, _) = try await URLSession.shared.data(from: #require(address.url))
+        #expect(body == Data("SDK media fixture".utf8))
+        let players = try sdkRecoveryEvents(fixture).filter { $0["operation"] == "player" }
+        #expect(players.count == 2 && Set(players.compactMap { $0["pid"] }).count == 2)
+        #expect(Set(players.compactMap { $0["id"] }) == [input])
+        #expect(Set(players.compactMap { $0["state_sha256"] }).count == 1)
+        // Recovery must neither retire nor borrow the other source's helper.
+        let foreignPID = try #require(try sdkRecoveryEvents(foreign).first?["pid"].flatMap(Int32.init))
+        #expect(kill(foreignPID, 0) == 0)
+    } catch { await provider.shutdown(); await foreignProvider.shutdown(); throw error }
+    await provider.shutdown()
+    await foreignProvider.shutdown()
 }
 #endif

@@ -9,7 +9,8 @@ fi
 APP_BUNDLE="$1"
 EXECUTABLE_PATH="$2"
 FRAMEWORKS_DIR="$APP_BUNDLE/Contents/Frameworks"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 LICENSE_FALLBACK_ROOT="$SCRIPT_DIR/../NetVplayer/Resources/ThirdPartyLicenses"
 mkdir -p "$FRAMEWORKS_DIR"
 

@@ -212,7 +212,11 @@ static inline bool nv_vivid_prepare(const AVDynamicHDRVivid *v, double peak,
             d2[slot] = .25 * nv_vivid_rational(s->th_delta2, 1, &ok);
             double raw = slot == 0 || s->th_mode == 2
                 ? round(255 * nv_vivid_rational(s->th_enable_mb, 1, &ok)) : 0;
-            mb[slot] = slot == 0 ? ((int)raw & 0xfc) / 63.0 : raw * 1.1 / 255;
+            // Mode 0 packs a six-bit slope and a two-bit dark offset. Extract
+            // the six MSBs before normalizing (T/UWA 005.1 §7.4.23, range 0..1).
+            // Masking alone leaves the slope four times too large, folding
+            // the shadow spline back on itself for legal authored metadata.
+            mb[slot] = slot == 0 ? ((int)raw >> 2) / 63.0 : raw * 1.1 / 255;
             strength[slot] = nv_vivid_clip((255 * nv_vivid_rational(s->enable_strength, 1, &ok) - 127) / 127, -1, 1);
             if (slot == 0) c->offset = ((int)raw & 3) * .1 / 3;
             if (!ok || d1[slot] <= 0 || d2[slot] <= 0) return false;

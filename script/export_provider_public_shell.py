@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+from source_workspace import tracked_paths as workspace_tracked_paths, source_file, logical_relative
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,12 @@ PRIVATE_TEST_FILES = {
     "NetVplayer/Tests/ConfigEngineTests/WoggMirrorFallbackTests.swift",
 }
 INTERNAL_MIGRATION_FILES = {
+    "docs/android-runtime-1.2.4.md",
+    "docs/native-catalog-1.1.14.md",
+    "docs/native-catalog-1.1.15.md",
+    "script/export_source_workspace.py",
+    "script/test_export_source_workspace.py",
+    ".github/workflows/source-workspace.yml",
     "script/build_android_bootstrap_release.py",
     "script/publish_android_bootstrap_release.py",
     "script/test_android_bootstrap.py",
@@ -66,6 +73,8 @@ INTERNAL_MIGRATION_FILES = {
     "script/test_diagnostic_release.py",
     "script/build_configurable_provider_release.py",
     "script/build_catalog_python_provider_release.py",
+    "script/verify_configured_native_sources.py",
+    "script/native_media_decode.py",
     "script/build_catalog_java_provider_release.py",
     "script/build_catalog_script_provider_release.py",
     "script/publish_configurable_provider_release.py",
@@ -262,9 +271,8 @@ def swift_test_environment(home: Path) -> dict[str, str]:
     return environment
 
 
-def tracked_paths(source: Path) -> list[str]:
-    output = run(["git", "ls-files", "-z"], cwd=source)
-    return sorted(path for path in output.split("\0") if path)
+def tracked_paths(repo: Path) -> list[str]:
+    return workspace_tracked_paths(repo)
 
 
 def require_clean_source(source: Path) -> None:
@@ -307,7 +315,7 @@ def copy_tracked_public_files(source: Path, destination: Path) -> dict[str, Any]
             excluded.setdefault(reason, []).append(relative)
             continue
         template = PUBLIC_WORKFLOW_TEMPLATES.get(relative)
-        source_path = source / (template if template in paths else relative)
+        source_path = source_file(source, template if template in paths else relative)
         if source_path.is_symlink():
             raise PublicExportError(f"tracked symlinks require explicit review: {relative}")
         if not source_path.is_file():

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_PATH="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "${BASH_SOURCE[0]}")"
+ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 OUTPUT_DIR="${1:-$ROOT_DIR/artifacts/visual-regression/player-hud}"
 INSTALL_DIR="/Applications"
 APP_BINARY="$INSTALL_DIR/NetVplayer.app/Contents/MacOS/NetVplayerApp"

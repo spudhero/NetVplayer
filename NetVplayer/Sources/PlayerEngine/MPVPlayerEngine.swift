@@ -3620,6 +3620,11 @@ public final class MPVPlayerEngine: @unchecked Sendable {
 
     @MainActor
     private func markMediaReady() {
+        if playerState?.isMediaLoading == true {
+            let position = playerState?.position ?? 0
+            let initialStart = playerState?.currentSpec?.initialStartPositionSeconds ?? 0
+            DiagnosticLog.write("[MPV_MEDIA_READY] position=\(position) initialStart=\(initialStart) seeking=\(playerState?.isSeeking == true)")
+        }
         qualityMetrics.mediaReady()
         cancelSeekTransferMetrics()
         playerState?.isMediaLoading = false

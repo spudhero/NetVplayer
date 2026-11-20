@@ -526,6 +526,41 @@ import ProviderSDK
     #expect(guardState.canPresentFrame(at: 40))
 }
 
+@Test func testInitialStartWithOffsetLandingFinishesLoadingAfterConfirmedPlayback() {
+    var guardState = PlaybackPostSeekEndGuard()
+    guardState.begin(targetSeconds: 0.48)
+    // A transcode replacement need not use the original file's keyframe landing.
+    for position in [11.0, 12, 13, 14] {
+        guardState.observePosition(position)
+    }
+    #expect(!guardState.canPresentFrame(at: 14))
+
+    guardState.markPlaybackRestarted()
+    for position in [11.0, 12, 13] {
+        guardState.observePosition(position)
+        #expect(!guardState.canPresentFrame(at: position))
+    }
+    guardState.observePosition(14)
+    #expect(guardState.canPresentFrame(at: 14))
+    guardState.markFramePresented()
+    #expect(guardState.canPresentFrame(at: 40))
+}
+
+@Test func testInitialStartDoesNotCountClockJumpsOrReplacedMediaAsPlayback() {
+    var guardState = PlaybackPostSeekEndGuard()
+    guardState.begin(targetSeconds: 1)
+    guardState.markPlaybackRestarted()
+    for position in [11.0, 30, 29, 30, 31] {
+        guardState.observePosition(position)
+        #expect(!guardState.canPresentFrame(at: position))
+    }
+    guardState.begin(targetSeconds: 2)
+    #expect(!guardState.canPresentFrame(at: 31))
+    guardState.markPlaybackRestarted()
+    guardState.observePosition(31)
+    #expect(!guardState.canPresentFrame(at: 31))
+}
+
 @Test func testMPVCacheMetricsRejectUnavailableValuesAndClampProgress() {
     #expect(MPVPlaybackActivityPolicy.normalizedCacheSpeed(1_024, hasValue: true) == 1_024)
     #expect(MPVPlaybackActivityPolicy.normalizedCacheSpeed(0, hasValue: true) == nil)

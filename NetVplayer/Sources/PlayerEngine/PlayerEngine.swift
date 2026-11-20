@@ -334,7 +334,7 @@ struct PlaybackPostSeekEndGuard: Equatable, Sendable {
     }
 
     mutating func observePosition(_ positionSeconds: Double) {
-        guard positionSeconds.isFinite, isProtecting else { return }
+        guard positionSeconds.isFinite, isProtecting || pendingFrameTargetSeconds != nil else { return }
         if !didRestartPlayback {
             didRestartPlayback = true
             lastPositionSeconds = positionSeconds
@@ -360,9 +360,12 @@ struct PlaybackPostSeekEndGuard: Equatable, Sendable {
     func canPresentFrame(at positionSeconds: Double, confirmedSeek: Bool = false) -> Bool {
         guard let targetSeconds = pendingFrameTargetSeconds else { return true }
         guard didReceivePlaybackRestart, positionSeconds.isFinite, positionSeconds >= 0 else { return false }
-        // Keyframe seeks may legitimately land far from the requested position.
-        // Only an owned native seek/restart sequence may bypass the initial-load guard.
-        if confirmedSeek { return true }
+        // A replacement stream can land on a different keyframe/timestamp origin.
+        // An owned seek or sustained progress after RESTART confirms playback even
+        // when the initial position never enters the requested target's tolerance.
+        if confirmedSeek || continuousForwardProgressSeconds >= Self.requiredForwardProgressSeconds {
+            return true
+        }
         let tolerance = max(2, min(10, targetSeconds * 0.2))
         return abs(positionSeconds - targetSeconds) <= tolerance
     }

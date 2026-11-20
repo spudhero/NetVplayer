@@ -1,6 +1,13 @@
 import Models
 
 public enum VodCardRoutingPolicy {
+    public static func providerFolderCategory(site: Site, vod: Vod) -> VodClass? {
+        guard site.type == SiteType.spider.rawValue,
+              vod.siteKey.isEmpty || vod.siteKey == site.key,
+              vod.vodId.lowercased().hasSuffix("/@folder") else { return nil }
+        return VodClass(typeId: vod.vodId, typeName: vod.vodName)
+    }
+
     public static func mediaServerFolderCategory(site: Site, vod: Vod) -> VodClass? {
         // Legacy cached cards only recorded the server's type in remarks.
         guard vod.isFolder || ["Folder", "CollectionFolder", "BoxSet", "Playlist"].contains(vod.vodRemarks),
@@ -22,6 +29,5 @@ public enum VodCardRoutingPolicy {
         return globalSearchAPIs.contains(api)
             || site.key == "点我切源"
             || vod.vodId.lowercased().hasPrefix("msearch:")
-            || vod.vodId.lowercased().hasSuffix("/@folder")
     }
 }

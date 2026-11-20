@@ -3267,7 +3267,8 @@ final class AppState: ObservableObject {
             handleConfigurationCenterAction(action)
             return
         }
-        if let category = site.allliveCategory(for: vod) {
+        if let category = VodCardRoutingPolicy.providerFolderCategory(site: site, vod: vod)
+            ?? site.allliveCategory(for: vod) {
             self.isDetailPresented = false
             self.isDetailLoading = false
             await selectCategory(category)
