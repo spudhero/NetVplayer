@@ -2,6 +2,8 @@
 
 PUBLIC_RELEASE_DOCUMENTS = {
     "docs/guide.md",
+    "docs/marketing/xiaohongshu/update-2.0.7-20261120/README.md",
+    "docs/marketing/xiaohongshu/update-2.0.7-20261120/copy.md",
     "docs/overview-screenshots.json",
     "docs/data/provider-public-boundary-v1.json",
     "docs/data/torrent-bridge-license-audit-2026-08-18.json",
