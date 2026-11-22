@@ -201,14 +201,15 @@ final class PlayerChapterPreviewStore: ObservableObject {
             return Frame(image: image)
         }
         pending[seconds] = Pending(id: id, task: task, isSpeculative: isSpeculative)
+        let cancelSpeculativeRequest: @MainActor @Sendable () -> Void = { [weak self] in
+            guard let request = self?.pending[seconds], request.id == id, request.isSpeculative else { return }
+            request.task.cancel()
+        }
         let result = await withTaskCancellationHandler {
             await task.value
-        } onCancel: { [weak self] in
+        } onCancel: {
             guard isSpeculative else { return }
-            Task { @MainActor in
-                guard let request = self?.pending[seconds], request.id == id, request.isSpeculative else { return }
-                request.task.cancel()
-            }
+            Task { await cancelSpeculativeRequest() }
         }
         return Task.isCancelled ? nil : result?.image
     }
