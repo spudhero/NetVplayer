@@ -5,6 +5,10 @@ import ProxyServer
 /// Some SDK responses replace an encrypted sample entry with avc1 even when
 /// its codec configuration is HEVC. Repair only that structural contradiction.
 enum DevelopmentAndroidMP4CodecRepair {
+    enum ProbeFailure: Error {
+        case sdkHTTP500
+    }
+
     static func accepts(_ raw: String, site: Site, binding: DevelopmentAndroidRuntimeManifest.Binding,
                         policy: AndroidCompatibilityPolicy? = nil) -> Bool {
         guard binding.key == site.key, binding.api == site.api else { return false }
@@ -23,7 +27,11 @@ enum DevelopmentAndroidMP4CodecRepair {
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         return try await withTaskCancellationHandler {
             let (bytes, response) = try await session.bytes(for: request)
-            guard let http = response as? HTTPURLResponse, [200, 206].contains(http.statusCode),
+            guard let http = response as? HTTPURLResponse else { return [] }
+            if http.statusCode == 500, http.url == request.url {
+                throw ProbeFailure.sdkHTTP500
+            }
+            guard [200, 206].contains(http.statusCode),
                   http.mimeType == "video/mp4",
                   http.statusCode != 206 || http.value(forHTTPHeaderField: "Content-Range")?.hasPrefix("bytes 0-") == true else { return [] }
             var prefix = Data()

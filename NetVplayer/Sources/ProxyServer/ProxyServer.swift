@@ -1497,9 +1497,12 @@ struct RemoteStreamInFlight: Sendable {
 }
 
 actor RemoteStreamBuffer {
+    static let chapterMetadataWindow: Int64 = 512 * 1024
     private let id: String
     private let configuration: RemoteStreamBufferConfiguration
     private var chunks: [RemoteStreamChunk] = []
+    private var chapterHeader: RemoteStreamChunk?
+    private var chapterTail: RemoteStreamChunk?
     private var inFlight: [RemoteStreamRange: RemoteStreamInFlight] = [:]
     private var cachedBytes: Int64 = 0
     private var deliveredBytes: Int64 = 0
@@ -1524,7 +1527,7 @@ actor RemoteStreamBuffer {
                 RemoteStreamRange(start: $0.range.start, end: min($0.range.end, $0.range.start + Int64($0.data.count) - 1))
             }.sorted { $0.start < $1.start },
             inFlightRanges: Array(inFlight.keys).sorted { $0.start < $1.start },
-            cachedBytes: cachedBytes,
+            cachedBytes: cachedBytes + chapterMetadataBytes,
             deliveredBytes: deliveredBytes,
             receivedBytes: receivedBytes
         )
@@ -1547,6 +1550,8 @@ actor RemoteStreamBuffer {
         }
         inFlight.removeAll()
         chunks.removeAll()
+        chapterHeader = nil
+        chapterTail = nil
         cachedBytes = 0
         generation += 1
         prefetchTargetEnd = -1
@@ -1562,8 +1567,31 @@ actor RemoteStreamBuffer {
             removed += Int64(chunk.data.count); count += 1
         }
         cachedBytes -= removed
+        if removed < target, chapterMetadataBytes > 0 {
+            removed += chapterMetadataBytes
+            chapterHeader = nil
+            chapterTail = nil
+        }
         recordEviction(chunkCount: count, byteCount: removed, reason: "global-budget")
         return removed
+    }
+
+    private var chapterMetadataBytes: Int64 {
+        Int64(chapterHeader?.data.count ?? 0) + Int64(chapterTail?.data.count ?? 0)
+    }
+
+    private func retainChapterMetadata(_ chunk: RemoteStreamChunk, phase: PlaybackTransferPhase) {
+        guard phase == .preview, Int64(chunk.data.count) == chunk.range.count,
+              chunk.range.count <= Self.chapterMetadataWindow else { return }
+        // Each preview reader reopens the container. Keep its header and index
+        // tail across readers even after playback has moved past those ranges.
+        if chunk.range.start == 0, chunk.range.count >= (chapterHeader?.range.count ?? 0) {
+            chapterHeader = chunk
+        }
+        if let length = chunk.totalLength, chunk.range.end == length - 1,
+           chunk.range.count >= (chapterTail?.range.count ?? 0) {
+            chapterTail = chunk
+        }
     }
 
     func response(
@@ -1577,8 +1605,13 @@ actor RemoteStreamBuffer {
         try Task.checkCancellation()
         guard !closed else { throw CancellationError() }
         let phase = readerPhase ?? PlaybackReadScope.owner?.purpose.phase ?? (isPriming ? .preload : .playback)
+        if phase == .preview,
+           let metadata = [chapterHeader, chapterTail].compactMap({ $0 }).first(where: { $0.range.contains(requestedRange) }) {
+            return proxyResponse(from: metadata, requestedRange: requestedRange, method: method)
+        }
         if let cached = assembledCachedChunk(containing: requestedRange),
            !isPriming || cached.range.contains(requestedRange) {
+            retainChapterMetadata(cached, phase: phase)
             DiagnosticLog.write("[REMOTE_STREAM_PREFETCH_HIT] id=\(id), range=\(requestedRange.headerValue)")
             if !isPriming {
                 advancePlaybackStart(to: requestedRange.start)
@@ -1593,6 +1626,7 @@ actor RemoteStreamBuffer {
             try Task.checkCancellation()
             guard !closed else { throw CancellationError() }
             removeCompletedMarker(marker)
+            retainChapterMetadata(chunk, phase: phase)
             if marker.kind != .prefetch {
                 processDemandChunk(
                     chunk,
@@ -1635,6 +1669,7 @@ actor RemoteStreamBuffer {
             }
             let chunk = RemoteStreamChunk(range: requestedRange, data: data, headers: headers,
                 contentType: contentType, totalLength: totalLength)
+            retainChapterMetadata(chunk, phase: phase)
             processDemandChunk(chunk, requestedRange: requestedRange, markerGeneration: generation,
                 stream: stream, isPriming: isPriming, fetch: fetch)
             return proxyResponse(from: chunk, requestedRange: requestedRange, method: method)
@@ -1648,6 +1683,7 @@ actor RemoteStreamBuffer {
             phase: phase,
             fetch: fetch
         )
+        retainChapterMetadata(chunk, phase: phase)
         processDemandChunk(
             chunk,
             requestedRange: requestedRange,
@@ -3185,7 +3221,8 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             from: range,
             configuration: stream.bufferConfiguration,
             contentLength: stream.contentLength,
-            useFullChunkSize: isPriming && stream.preloadLayout == .audioOriginal
+            useFullChunkSize: isPriming && stream.preloadLayout == .audioOriginal,
+            limitsChapterHeader: PlaybackReadScope.owner?.purpose == .chapterPreview
         ))
         guard isPriming || shouldUseRemoteStreamBuffer(
             range: requestedRange,
@@ -3428,7 +3465,8 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         from range: String?,
         configuration: RemoteStreamBufferConfiguration = .default,
         contentLength: Int64? = nil,
-        useFullChunkSize: Bool = false
+        useFullChunkSize: Bool = false,
+        limitsChapterHeader: Bool = false
     ) -> String {
         if let range,
            range.lowercased().hasPrefix("bytes=-") {
@@ -3442,7 +3480,10 @@ final class ProxyHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         let chunkSize = useFullChunkSize || (parsed.end == nil && parsed.start > 0)
             ? configuration.chunkSize
             : configuration.initialChunkSize
-        let windowEnd = parsed.start + chunkSize - 1
+        let chapterHeaderEnd = RemoteStreamBuffer.chapterMetadataWindow - 1
+        let windowEnd = limitsChapterHeader && parsed.end == nil && parsed.start <= chapterHeaderEnd
+            ? min(parsed.start + chunkSize - 1, chapterHeaderEnd)
+            : parsed.start + chunkSize - 1
         var end = min(parsed.end ?? windowEnd, windowEnd)
         if let contentLength, contentLength > 0 {
             end = min(end, contentLength - 1)

@@ -6,22 +6,42 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 
-test('torrent bridge serves the selected episode, with Range and attachment exclusion', async () => {
+const bridgeResources = new URL('../NetVplayer/Resources/TorrentBridge/', import.meta.url)
+const tracker = 'https://tracker.example.invalid/announce'
+
+async function withBridge(useMetadataCache, verify) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'netvplayer-torrent-test-'))
   let child
   try {
-    const original = await fs.readFile(new URL('../NetVplayer/Resources/TorrentBridge/torrent-bridge.mjs', import.meta.url), 'utf8')
+    const original = await fs.readFile(new URL('torrent-bridge.mjs', bridgeResources), 'utf8')
     assert.ok(original.includes("from 'webtorrent'"))
     await fs.writeFile(path.join(directory, 'bridge.mjs'), original.replace("from 'webtorrent'", "from './fixture.mjs'"))
+    await fs.copyFile(new URL('torrent-contract.mjs', bridgeResources), path.join(directory, 'torrent-contract.mjs'))
     await fs.writeFile(path.join(directory, 'fixture.mjs'), `
+      import assert from 'node:assert/strict'
       import { EventEmitter } from 'node:events'
       import { Readable } from 'node:stream'
-      globalThis.fetch = async () => { throw new Error('No external metadata lookup in this test') }
+      const useMetadataCache = ${useMetadataCache}
+      const infoHash = '0123456789abcdef0123456789abcdef01234567'
+      const tracker = ${JSON.stringify(tracker)}
+      globalThis.fetch = async () => useMetadataCache ? new Response('de') : new Response(null, { status: 404 })
       export default class FixtureClient extends EventEmitter {
-        add(uri, options) {
-          if (!options.deselect) throw new Error('Metadata discovery must not download every file')
+        add(input, options) {
           const torrent = new EventEmitter()
-          torrent.infoHash = new URL(uri).searchParams.get('xt').split(':').pop()
+          // Emit assertion failures asynchronously so the bridge's fallback cannot mask them.
+          queueMicrotask(() => {
+            assert.equal(options.deselect, true)
+            if (useMetadataCache) {
+              assert.deepEqual(input, Buffer.from('de'))
+              assert.deepEqual(options.announce, [tracker])
+            } else {
+              const magnet = new URL(input)
+              assert.equal(magnet.searchParams.get('xt'), 'urn:btih:' + infoHash)
+              assert.equal(magnet.searchParams.get('tr'), tracker)
+            }
+            torrent.emit('ready')
+          })
+          torrent.infoHash = infoHash
           torrent.files = [['03.mkv', 'largest-third-episode'], ['02.mkv', 'second'],
                            ['poster.txt', 'attachment'], ['01.mkv', 'first']].map(([name, text]) => ({
             name, length: Buffer.byteLength(text),
@@ -29,15 +49,15 @@ test('torrent bridge serves the selected episode, with Range and attachment excl
               return Readable.from([Buffer.from(text).subarray(start, end + 1)])
             }
           }))
-          queueMicrotask(() => torrent.emit('ready'))
           return torrent
         }
         destroy(callback) { callback() }
       }
     `)
     const readyPath = path.join(directory, 'ready.json')
+    const magnet = 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&tr=' + encodeURIComponent(tracker)
     child = spawn(process.execPath, [path.join(directory, 'bridge.mjs'),
-      'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567', readyPath, directory, String(process.pid)],
+      magnet, readyPath, directory, String(process.pid)],
       { stdio: ['ignore', 'ignore', 'pipe'] })
     let diagnostics = ''
     child.stderr.on('data', data => { diagnostics += data })
@@ -49,6 +69,20 @@ test('torrent bridge serves the selected episode, with Range and attachment excl
     }
     assert.ok(ready, diagnostics || 'Bridge did not become ready')
     assert.equal(ready.error, undefined)
+    await verify(ready)
+  } finally {
+    if (child && child.exitCode === null) {
+      const exited = once(child, 'exit')
+      child.kill('SIGTERM')
+      await exited
+    }
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+}
+
+test('torrent bridge serves the selected episode, with Range and attachment exclusion', async () => {
+  await withBridge(false, async ready => {
+    assert.equal(ready.metadataSource, 'dht')
     assert.deepEqual(ready.files.map(file => file.name), ['01.mkv', '02.mkv', '03.mkv'])
     assert.deepEqual(ready.files.map(file => file.index), [3, 1, 0])
     assert.equal(await (await fetch(ready.url)).text(), 'first')
@@ -64,12 +98,11 @@ test('torrent bridge serves the selected episode, with Range and attachment excl
     assert.equal((await fetch(origin + '/stream/2/poster.txt')).status, 404)
     assert.equal((await fetch(origin + '/stream/1/03.mkv')).status, 404)
     assert.equal((await fetch(ready.url, { headers: { Range: 'bytes=100-' } })).status, 416)
-  } finally {
-    if (child && child.exitCode === null) {
-      const exited = once(child, 'exit')
-      child.kill('SIGTERM')
-      await exited
-    }
-    await fs.rm(directory, { recursive: true, force: true })
-  }
+  })
+})
+
+test('torrent bridge keeps the magnet tracker when cached metadata has none', async () => {
+  await withBridge(true, ready => {
+    assert.equal(ready.metadataSource, 'itorrents')
+  })
 })

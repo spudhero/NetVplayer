@@ -1,0 +1,237 @@
+{
+  "version": "2.0.7 正式版",
+  "build": 58,
+  "style": "Guizang Swiss International / IKB",
+  "cards": [
+    {
+      "path": "cards/01-cover.png",
+      "sha256": "cd2a512b9e7f248eedb73bc86b723b9e4c7bce09188e62571b2972b6e3808b02",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 539986
+    },
+    {
+      "path": "cards/02-major-changes.png",
+      "sha256": "75f5cf02dfeff6d261b16a85615a0ef8b60b0d27c64a00f973eeb949df5802e1",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 138552
+    },
+    {
+      "path": "cards/03-tvbox-fongmi.png",
+      "sha256": "246e246bf4a2d49dfb04e3cf05a16ef060e5801cb3dd099474d5b7d454bd495e",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 160872
+    },
+    {
+      "path": "cards/04-nas-detail.png",
+      "sha256": "63c70d930f29a22b4951fad687a292cf120a3499ae942a43f211aad5f224083d",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 385482
+    },
+    {
+      "path": "cards/05-player.png",
+      "sha256": "bb264daa3cd6382e4b1e6ae0469a3d1abc360c497ee222221b97e8cfbc4515fc",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 276410
+    },
+    {
+      "path": "cards/06-dolby.png",
+      "sha256": "655fa19c4acd0500f75f79003f9a38b7f79711d300d01e67b66b2200c5e969b5",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 202357
+    },
+    {
+      "path": "cards/07-subtitles.png",
+      "sha256": "3a4ff7fbaf4f6966fe36dc2262913e0e0eb07b2bdf20e6ae3cb3c0c3f5b9bb8a",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 188072
+    },
+    {
+      "path": "cards/08-install.png",
+      "sha256": "528929387327f05ec9db663b9dfcfbd300df284c507d4acff76ad8231f14f6ff",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 167315
+    },
+    {
+      "path": "cards/09-first-play.png",
+      "sha256": "6a507a41f30526da6cfcb1ba71f2240d53119fa9f2a68f9d9d8f5e0cc47a6991",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 196113
+    },
+    {
+      "path": "cards/10-tvbox-setup.png",
+      "sha256": "9b50222f4c403c77dbca11e513d16d65e39213e2d41ff6350b21a105aa353730",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 168647
+    },
+    {
+      "path": "cards/11-nas-setup.png",
+      "sha256": "93e97ae0d6b0a5d642cfa1b98df17939fe65a289818faf3a3ebf7712d59d7fa7",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 158277
+    }
+  ],
+  "assets": [
+    {
+      "path": "assets/audio.png",
+      "sha256": "a6c05e890161c075cda0afd10c9b56392eadf38dd22592f6ebff62ab93bab311",
+      "size": [
+        1380,
+        580
+      ],
+      "bytes": 183511
+    },
+    {
+      "path": "assets/cloud-folders.png",
+      "sha256": "948873cd3f1f7b285c33efc0b726ea7cd49f22972999bba56db2d11d8776b78c",
+      "size": [
+        1150,
+        530
+      ],
+      "bytes": 213225
+    },
+    {
+      "path": "assets/file-services.png",
+      "sha256": "5298a7be7f1c083ec9b2004ab786b5c8a158b2671a796bedf6e5df2609735bfe",
+      "size": [
+        1262,
+        411
+      ],
+      "bytes": 161661
+    },
+    {
+      "path": "assets/home.png",
+      "sha256": "dcb2c09496f13ba707d0994cda59788750f92ad5effedc87a13f5a84c34d78b0",
+      "size": [
+        3726,
+        2040
+      ],
+      "bytes": 3874132
+    },
+    {
+      "path": "assets/media-servers.png",
+      "sha256": "484fd47e435915dd576aa3f28a2397e130bb12f273ddf2dfb6112e423053cf4f",
+      "size": [
+        1842,
+        570
+      ],
+      "bytes": 159688
+    },
+    {
+      "path": "assets/nas-detail.png",
+      "sha256": "e32b364d5890cfe7567ce00332edf16dd01b3a470b95a46ac56890b0dc6ace83",
+      "size": [
+        3175,
+        1795
+      ],
+      "bytes": 1532158
+    },
+    {
+      "path": "assets/player-controls.png",
+      "sha256": "fdc7722c5ca744fcc8490dd9a2a88f5bee00109dc6696ff485b05a060846b213",
+      "size": [
+        2880,
+        410
+      ],
+      "bytes": 276407
+    },
+    {
+      "path": "assets/player.png",
+      "sha256": "b27c9f7d0bf161ca9adfb4de64867e0fa59019b517595d06496cf5800dff7c28",
+      "size": [
+        3840,
+        2160
+      ],
+      "bytes": 1119271
+    },
+    {
+      "path": "assets/subtitles.png",
+      "sha256": "6e3a60e24bba1c02c11c43e68c96d2a2f629876d778d472250b54c10be065d6c",
+      "size": [
+        1842,
+        1150
+      ],
+      "bytes": 345310
+    },
+    {
+      "path": "assets/themes.png",
+      "sha256": "5bc2024c38342dd4a0f08dbb22b46bfbfbcda2216044cf18803c5a14ae4c7be4",
+      "size": [
+        1802,
+        1540
+      ],
+      "bytes": 1167647
+    },
+    {
+      "path": "assets/video-output.png",
+      "sha256": "7a1069c45b7eff32e595f5d08ef80c8edb0da16d50af3934c72719e2913d4b2f",
+      "size": [
+        1380,
+        660
+      ],
+      "bytes": 217042
+    }
+  ],
+  "preview_sha256": "e8a0ea4ef1b0f367747b26c0aa3ccfb7082c7d1494ea5d8aa7643bddd71a1e2f",
+  "validation": {
+    "manual_layout_review": true,
+    "metadata_empty": true,
+    "guizang_auto_validator": {
+      "validator": "guizang-social-card-skill/validate-social-deck.mjs",
+      "style": "swiss",
+      "sections": 11,
+      "failures": 0,
+      "warnings": 11,
+      "warning_rules": {
+        "R5": 11
+      },
+      "density_percent": {
+        "01-cover": 74,
+        "02-major-changes": 60,
+        "03-tvbox-fongmi": 67,
+        "04-nas-detail": 60,
+        "05-player": 65,
+        "06-dolby": 62,
+        "07-subtitles": 62,
+        "08-install": 59,
+        "09-first-play": 59,
+        "10-tvbox-setup": 56,
+        "11-nas-setup": 57
+      },
+      "review": "Reviewed the sparse Swiss layout; retained R5 whitespace advisories. Corrected initial R9 title gap. Final validation reports no R1/R2/R3/R4/R6/R7/R8/R9 issue."
+    }
+  },
+  "revised_on": "2026-11-21"
+}

@@ -76,6 +76,8 @@
 
 播放器底部集中提供选集、前后跳转、片头片尾、字幕、音轨、比例、倍速、音量、设置、小窗和全屏。章节信息取决于媒体；历史记录保存续播位置。
 
+点击底栏音量，拖动淡紫色的竖向滑块，也可用滚轮或方向键调节。双击底栏音量可切换静音，静音时喇叭图标会显示斜线。播放带章节的媒体时，悬停时间轴的章节节点可查看缩略图，点击节点可跳到该章。网盘片源会先保证当前播放缓冲，再在后台读取预览。
+
 ![实际播放器；画面为自制本地演示视频](../website/assets/overview/player.webp)
 
 | 调整项 | 操作位置与说明 |
@@ -197,6 +199,8 @@ Use the Home source menu to choose a configured entry. Search across configured 
 The live player provides channel groups, channel search, programme guides, route selection and a floating window. Channel previews are cached rather than live; EPG availability depends on the source or service.
 
 The native player exposes subtitles, main/secondary tracks, audio tracks, speed, aspect ratio, chapter navigation, intro/outro skipping, floating mode and fullscreen. Playback Preferences contains subtitle appearance, video output, audio devices and dialogue enhancement.
+
+Open Volume in the playback controls to adjust the lavender vertical slider by dragging, scrolling, or using the arrow keys. Double-click Volume to toggle mute. A slash appears over the speaker while muted. Hover a chapter marker to preview its thumbnail, or click to jump to that chapter. For remote media, preview reads wait for playback buffering to recover.
 
 For text translation, open Player → Subtitles → Text Subtitle Translation, choose an SRT/ASS/SSA/VTT file, languages, and follow-playback or whole-document translation. Export the original at any time, or the completed translation, optionally bilingual. Apple local translation requires **macOS 15+** and available language resources. The subtitle menu also provides image-subtitle/audio recognition and online search, each subject to its own requirements. Danmaku is disabled by default and uses manual search when enabled.
 

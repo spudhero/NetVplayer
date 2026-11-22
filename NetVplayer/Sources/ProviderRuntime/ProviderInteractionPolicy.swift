@@ -18,15 +18,20 @@ public struct ProviderInteractionPolicy: Sendable {
     public let directory: URL
     public let maximumWait: Duration
     let pollInterval: Duration
+    let onDialogActive: (@Sendable (Int32) async -> Void)?
 
-    public init(directory: URL, maximumWait: Duration = .seconds(180)) {
-        self.init(directory: directory, maximumWait: maximumWait, pollInterval: .milliseconds(100))
+    public init(directory: URL, maximumWait: Duration = .seconds(180),
+                onDialogActive: (@Sendable (Int32) async -> Void)? = nil) {
+        self.init(directory: directory, maximumWait: maximumWait, pollInterval: .milliseconds(100),
+                  onDialogActive: onDialogActive)
     }
 
-    init(directory: URL, maximumWait: Duration, pollInterval: Duration) {
+    init(directory: URL, maximumWait: Duration, pollInterval: Duration,
+         onDialogActive: (@Sendable (Int32) async -> Void)? = nil) {
         self.directory = directory
         self.maximumWait = maximumWait
         self.pollInterval = pollInterval
+        self.onDialogActive = onDialogActive
     }
 
     func begin(requestID: String) throws -> Wait {
@@ -51,7 +56,7 @@ public struct ProviderInteractionPolicy: Sendable {
             return value
         }
 
-        func waitForTimeout(networkTimeout: Duration) async throws -> Never {
+        func waitForTimeout(networkTimeout: Duration, processID: Int32?) async throws -> Never {
             let clock = ContinuousClock()
             var last = clock.now
             var networkElapsed = Duration.zero
@@ -73,7 +78,11 @@ public struct ProviderInteractionPolicy: Sendable {
                     if interacted { throw ProviderInteractionError.timedOut }
                     throw ProviderProcessError.timedOut(requestID)
                 }
+                let opened = active && !previousActive
                 previousActive = active
+                if opened, let processID, let onDialogActive = policy.onDialogActive {
+                    await onDialogActive(processID)
+                }
                 let remaining = active ? policy.maximumWait - interactionElapsed : networkTimeout - networkElapsed
                 try await Task.sleep(for: min(policy.pollInterval, remaining))
             }

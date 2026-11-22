@@ -1,10 +1,43 @@
 #if DEBUG
+import Darwin
 import Foundation
 import Models
 import ProviderSDK
 import ProviderRuntime
 import Testing
 @testable import SpiderEngine
+
+@Test func androidHelperReleasesIdleCatalogAndStopsAfterPlayback() async throws {
+    let fixture = try DevelopmentAndroidBridgeFixture()
+    defer { fixture.remove() }
+    let helper = fixture.runtime.appendingPathComponent("jdk/bin/java")
+    try AndroidRetirementFixture.helper.write(to: helper, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+    try FileManager.default.createDirectory(at: fixture.state, withIntermediateDirectories: true)
+    try "lifecycle".write(to: fixture.state.appendingPathComponent("blocked-phase"), atomically: true, encoding: .utf8)
+    let pidFile = fixture.state.appendingPathComponent("helper.pid")
+    let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
+    let provider = DevelopmentAndroidSiteProvider(runtime: runtime, binding: try #require(runtime.manifest.bindings.first),
+        stateDirectory: fixture.state, idleShutdownDelay: .milliseconds(100))
+    do {
+        _ = try await provider.homeContent(site: fixture.site)
+        let catalogPID = try #require(Int32(String(contentsOf: pidFile, encoding: .utf8)))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while kill(catalogPID, 0) == 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(kill(catalogPID, 0) == -1)
+
+        _ = try await provider.playerContent(site: fixture.site, flag: "fixture", id: "play")
+        let playerPID = try #require(Int32(String(contentsOf: pidFile, encoding: .utf8)))
+        #expect(playerPID != catalogPID)
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(kill(playerPID, 0) == 0)
+        await provider.cancelPlayback()
+        #expect(kill(playerPID, 0) == -1)
+    } catch {
+        await provider.shutdown()
+        throw error
+    }
+}
 
 @Test(arguments: ["handshake", "init", "home"])
 func androidHelperCancellationWaitsForStateLockReleaseBeforeRestart(phase: String) async throws {
@@ -122,6 +155,9 @@ def stop(signum=None, frame=None):
 signal.signal(signal.SIGTERM, stop)
 if first: acquire()
 phase = (cwd / 'blocked-phase').read_text()
+if phase == 'lifecycle':
+    first = False
+    (cwd / 'helper.pid').write_text(str(os.getpid()))
 for raw in sys.stdin:
     request = json.loads(raw)
     operation = request['operation']
@@ -135,6 +171,8 @@ for raw in sys.stdin:
         response.update(ok=False, error={'code': 'provider_error', 'message': 'Android state is already owned by another helper', 'retryable': False})
     elif operation == 'home':
         response['result'] = {'list': [{'vod_id': 'after-retirement', 'vod_name': 'Fixture'}]}
+    elif operation == 'player' and phase == 'lifecycle':
+        response['result'] = {'url': 'https://example.invalid/movie.mp4', 'parse': 0}
     print(json.dumps(response), flush=True)
     if operation == 'shutdown': stop()
 stop()

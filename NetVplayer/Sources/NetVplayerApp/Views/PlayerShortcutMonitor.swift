@@ -49,7 +49,8 @@ enum PlayerKeyboardShortcutPolicy {
     static func shouldDispatch(
         _ command: PlayerShortcutCommand,
         isRepeat: Bool,
-        isFullScreen: Bool = false
+        isFullScreen: Bool = false,
+        canDismissPlayerUI: Bool = false
     ) -> Bool {
         if isRepeat {
             switch command {
@@ -64,7 +65,7 @@ enum PlayerKeyboardShortcutPolicy {
         case .enterFullScreen:
             return !isFullScreen
         case .exitFullScreen:
-            return isFullScreen
+            return isFullScreen || canDismissPlayerUI
         default:
             return true
         }
@@ -349,15 +350,18 @@ final class PlayerWindowContext: ObservableObject {
 struct PlayerShortcutMonitor: NSViewRepresentable {
     let isPlaybackControlEnabled: Bool
     let isScrollVolumeEnabled: Bool
+    let canDismissPlayerUI: Bool
     let onCommand: (PlayerShortcutCommand, NSWindow) -> Void
 
     init(
         isPlaybackControlEnabled: Bool,
         isScrollVolumeEnabled: Bool,
+        canDismissPlayerUI: Bool = false,
         onCommand: @escaping (PlayerShortcutCommand, NSWindow) -> Void
     ) {
         self.isPlaybackControlEnabled = isPlaybackControlEnabled
         self.isScrollVolumeEnabled = isScrollVolumeEnabled
+        self.canDismissPlayerUI = canDismissPlayerUI
         self.onCommand = onCommand
     }
 
@@ -374,6 +378,7 @@ struct PlayerShortcutMonitor: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         var isPlaybackControlEnabled: Bool
+        var canDismissPlayerUI: Bool
         var isScrollVolumeEnabled: Bool {
             didSet {
                 if !isScrollVolumeEnabled {
@@ -390,10 +395,12 @@ struct PlayerShortcutMonitor: NSViewRepresentable {
         init(
             isPlaybackControlEnabled: Bool,
             isScrollVolumeEnabled: Bool,
+            canDismissPlayerUI: Bool,
             onCommand: @escaping (PlayerShortcutCommand, NSWindow) -> Void
         ) {
             self.isPlaybackControlEnabled = isPlaybackControlEnabled
             self.isScrollVolumeEnabled = isScrollVolumeEnabled
+            self.canDismissPlayerUI = canDismissPlayerUI
             self.onCommand = onCommand
         }
 
@@ -438,7 +445,8 @@ struct PlayerShortcutMonitor: NSViewRepresentable {
             guard PlayerKeyboardShortcutPolicy.shouldDispatch(
                 command,
                 isRepeat: event.isARepeat,
-                isFullScreen: isFullScreen
+                isFullScreen: isFullScreen,
+                canDismissPlayerUI: canDismissPlayerUI
             ) else {
                 if event.isARepeat || command == .enterFullScreen {
                     return nil
@@ -498,6 +506,7 @@ struct PlayerShortcutMonitor: NSViewRepresentable {
         Coordinator(
             isPlaybackControlEnabled: isPlaybackControlEnabled,
             isScrollVolumeEnabled: isScrollVolumeEnabled,
+            canDismissPlayerUI: canDismissPlayerUI,
             onCommand: onCommand
         )
     }
@@ -517,6 +526,7 @@ struct PlayerShortcutMonitor: NSViewRepresentable {
     func updateNSView(_ nsView: MonitoringView, context: Context) {
         context.coordinator.isPlaybackControlEnabled = isPlaybackControlEnabled
         context.coordinator.isScrollVolumeEnabled = isScrollVolumeEnabled
+        context.coordinator.canDismissPlayerUI = canDismissPlayerUI
         context.coordinator.onCommand = onCommand
         if let window = nsView.window {
             context.coordinator.monitorInput(in: window)

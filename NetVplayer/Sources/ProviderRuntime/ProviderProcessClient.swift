@@ -197,11 +197,12 @@ public actor ProviderProcessClient {
         do {
             try start()
             let interactionWait = try (request.operation == .player ? interaction : nil)?.begin(requestID: request.requestID)
+            let processID = process?.processIdentifier
             defer { interactionWait?.finish() }
             let response = try await withThrowingTaskGroup(of: ProviderResponse.self) { group in
                 group.addTask { try await self.enqueue(request) }
                 group.addTask {
-                    if let interactionWait { try await interactionWait.waitForTimeout(networkTimeout: timeout) }
+                    if let interactionWait { try await interactionWait.waitForTimeout(networkTimeout: timeout, processID: processID) }
                     try await Task.sleep(for: timeout)
                     throw ProviderProcessError.timedOut(request.requestID)
                 }

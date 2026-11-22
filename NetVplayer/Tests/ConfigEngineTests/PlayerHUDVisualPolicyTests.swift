@@ -397,7 +397,6 @@ struct PlayerHUDVisualPolicyTests {
 
     @Test
     func testTrackPopoverKeepsRowsVisibleAndCapsLongLists() {
-        #expect(PlayerHUDVisualPolicy.trackPopoverArrowEdge == .top)
         #expect(PlayerHUDVisualPolicy.trackPopoverListHeight(optionCount: 0) == 36)
         #expect(PlayerHUDVisualPolicy.trackPopoverListHeight(optionCount: 1) == 36)
         #expect(PlayerHUDVisualPolicy.trackPopoverListHeight(optionCount: 2) == 76)
@@ -578,6 +577,8 @@ struct PlayerHUDVisualPolicyTests {
         #expect(!PlayerKeyboardShortcutPolicy.shouldDispatch(.enterFullScreen, isRepeat: false, isFullScreen: true))
         #expect(!PlayerKeyboardShortcutPolicy.shouldDispatch(.exitFullScreen, isRepeat: false))
         #expect(PlayerKeyboardShortcutPolicy.shouldDispatch(.exitFullScreen, isRepeat: false, isFullScreen: true))
+        #expect(PlayerKeyboardShortcutPolicy.shouldDispatch(.exitFullScreen, isRepeat: false, canDismissPlayerUI: true))
+        #expect(!PlayerKeyboardShortcutPolicy.shouldDispatch(.exitFullScreen, isRepeat: true, canDismissPlayerUI: true))
     }
 
     @Test

@@ -27,6 +27,22 @@ final class HLSRecoveryTests: XCTestCase {
         XCTAssertNil(HLSRecovery.reducedMaster(Data(repeating: 65, count: HLSRecovery.maximumBytes), baseURL: base))
     }
 
+    func testSmallVODMasterCanRetryAtVerifiedRedirectTarget() {
+        let data = Data("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000\n720p.m3u8\n".utf8)
+        let target = URL(string: "https://cdn.example/final/master.m3u8")!
+        var spec = PlaySpec(url: "https://origin.example/start.m3u8")
+        spec.headers["User-Agent"] = "NetVplayer"
+        XCTAssertEqual(HLSRecovery.destination(data, finalURL: target, spec: spec), .redirectedPlaylist(target))
+        XCTAssertNil(HLSRecovery.destination(data, finalURL: URL(string: spec.url)!, spec: spec))
+        XCTAssertNil(HLSRecovery.destination(Data("<html>error</html>".utf8), finalURL: target, spec: spec))
+        XCTAssertNil(HLSRecovery.destination(data, finalURL: URL(string: "https://127.0.0.1/test.m3u8")!, spec: spec))
+        spec.headers["Cookie"] = "session=fixture"
+        XCTAssertNil(HLSRecovery.destination(data, finalURL: target, spec: spec))
+        spec.headers.removeValue(forKey: "Cookie")
+        spec.metadata["playback.kind"] = "live"
+        XCTAssertNil(HLSRecovery.destination(data, finalURL: target, spec: spec))
+    }
+
     func testRecoveryIsOnlyOneAttemptAndDoesNotAffectOrdinaryPlayback() {
         var spec = PlaySpec(url: "https://fixture.example/master.m3u8")
         XCTAssertTrue(HLSRecovery.eligible(spec))

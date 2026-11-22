@@ -1,0 +1,1154 @@
+{
+  "brand": "NetVplayer",
+  "version": "2.0.7",
+  "build": 58,
+  "capture_date": "2026-11-20",
+  "style": "Guizang Swiss International",
+  "theme": "ikb",
+  "size": [
+    1080,
+    1440
+  ],
+  "template": "assets/template-swiss-card.html",
+  "skill": "guizang-social-card-skill",
+  "captures": [
+    {
+      "source": "home-loaded-full.png",
+      "file": "home.png",
+      "captured_on": "2026-11-21",
+      "source_sha256": "873de67af13b807dd7615c553cead0f672f53555ecc3cd437c414488b917644e",
+      "crop": [
+        0,
+        60,
+        3726,
+        2100
+      ],
+      "redactions": [
+        {
+          "mode": "solid",
+          "box": [
+            600,
+            72,
+            1020,
+            140
+          ],
+          "color": "#33274E"
+        },
+        {
+          "mode": "blur",
+          "box": [
+            510,
+            286,
+            827,
+            760
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            510,
+            780,
+            830,
+            820
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            862,
+            286,
+            1179,
+            760
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            862,
+            780,
+            1182,
+            820
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1213,
+            286,
+            1530,
+            760
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1213,
+            780,
+            1533,
+            820
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1564,
+            286,
+            1881,
+            760
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1564,
+            780,
+            1884,
+            820
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1916,
+            286,
+            2233,
+            760
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1916,
+            780,
+            2236,
+            820
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2268,
+            286,
+            2585,
+            760
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2268,
+            780,
+            2588,
+            820
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2619,
+            286,
+            2936,
+            760
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2619,
+            780,
+            2939,
+            820
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2970,
+            286,
+            3287,
+            760
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2970,
+            780,
+            3290,
+            820
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3322,
+            286,
+            3639,
+            760
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3322,
+            780,
+            3642,
+            820
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            510,
+            903,
+            827,
+            1377
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            510,
+            1398,
+            830,
+            1438
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            862,
+            903,
+            1179,
+            1377
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            862,
+            1398,
+            1182,
+            1438
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1213,
+            903,
+            1530,
+            1377
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1213,
+            1398,
+            1533,
+            1438
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1564,
+            903,
+            1881,
+            1377
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1564,
+            1398,
+            1884,
+            1438
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1916,
+            903,
+            2233,
+            1377
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1916,
+            1398,
+            2236,
+            1438
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2268,
+            903,
+            2585,
+            1377
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2268,
+            1398,
+            2588,
+            1438
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2619,
+            903,
+            2936,
+            1377
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2619,
+            1398,
+            2939,
+            1438
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2970,
+            903,
+            3287,
+            1377
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2970,
+            1398,
+            3290,
+            1438
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3322,
+            903,
+            3639,
+            1377
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3322,
+            1398,
+            3642,
+            1438
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            510,
+            1523,
+            827,
+            1997
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            510,
+            2018,
+            830,
+            2058
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            862,
+            1523,
+            1179,
+            1997
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            862,
+            2018,
+            1182,
+            2058
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1213,
+            1523,
+            1530,
+            1997
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1213,
+            2018,
+            1533,
+            2058
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1564,
+            1523,
+            1881,
+            1997
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1564,
+            2018,
+            1884,
+            2058
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1916,
+            1523,
+            2233,
+            1997
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1916,
+            2018,
+            2236,
+            2058
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2268,
+            1523,
+            2585,
+            1997
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2268,
+            2018,
+            2588,
+            2058
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2619,
+            1523,
+            2936,
+            1997
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2619,
+            2018,
+            2939,
+            2058
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2970,
+            1523,
+            3287,
+            1997
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2970,
+            2018,
+            3290,
+            2058
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3322,
+            1523,
+            3639,
+            1997
+          ],
+          "radius": 10
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3322,
+            2018,
+            3642,
+            2058
+          ],
+          "radius": 7
+        }
+      ],
+      "loaded_images_confirmed": true,
+      "blur_reference": "website/assets/overview; home 5px at 1863px, scaled to 10px at raw 3726px; NAS poster 8px at its actual 337px width to preserve comparable subject detail"
+    },
+    {
+      "source": "03-cloud-folders.png",
+      "file": "cloud-folders.png",
+      "source_sha256": "34760b6b4ecd19b8bff05a7a893b7392ebd745fa9696b7978da7af5eb3705df2",
+      "crop": [
+        25,
+        25,
+        1175,
+        555
+      ],
+      "redactions": [],
+      "captured_on": "2026-11-20"
+    },
+    {
+      "source": "03-file-services.png",
+      "file": "file-services.png",
+      "source_sha256": "1f97489b8839fe1e31caed7db952189bf14eedb54d71baaa6376c09c21edd99c",
+      "crop": [
+        28,
+        24,
+        1290,
+        435
+      ],
+      "redactions": [],
+      "captured_on": "2026-11-20"
+    },
+    {
+      "source": "02-media-servers.png",
+      "file": "media-servers.png",
+      "source_sha256": "2a241db4b95e3b364f0f011b5cd06bfc6539203652e466214fcbaf9e8493854c",
+      "crop": [
+        948,
+        480,
+        2790,
+        1050
+      ],
+      "redactions": [],
+      "captured_on": "2026-11-20"
+    },
+    {
+      "source": "04-video-output.png",
+      "file": "video-output.png",
+      "source_sha256": "27784ed2adca05debb772349d347f3e7525111e0e69e3b20739a6f2c1b90b4b5",
+      "crop": [
+        920,
+        270,
+        2300,
+        930
+      ],
+      "redactions": [],
+      "captured_on": "2026-11-20"
+    },
+    {
+      "source": "05-audio.png",
+      "file": "audio.png",
+      "source_sha256": "578fd948f84c4d2b7169ccb51e1b67b57e985b61be9970fa126552fcd0bfae47",
+      "crop": [
+        920,
+        270,
+        2300,
+        850
+      ],
+      "redactions": [],
+      "captured_on": "2026-11-20"
+    },
+    {
+      "source": "06-subtitles.png",
+      "file": "subtitles.png",
+      "source_sha256": "aa0de73599c0af054b08b5490831f8aa301569d2b2001a2b69d31bcb0ee4e1f3",
+      "crop": [
+        948,
+        790,
+        2790,
+        1940
+      ],
+      "redactions": [],
+      "captured_on": "2026-11-20"
+    },
+    {
+      "source": "07-themes.png",
+      "file": "themes.png",
+      "source_sha256": "f49dc8f1afa3f399c2320cf183204ccda69aa88d5793a52c39d27d956ae67f99",
+      "crop": [
+        948,
+        280,
+        2750,
+        1820
+      ],
+      "redactions": [],
+      "captured_on": "2026-11-20"
+    },
+    {
+      "source": "nas-detail-loaded.png",
+      "file": "nas-detail.png",
+      "captured_on": "2026-11-21",
+      "source_sha256": "c40a5ddc7534f27ca85eb3d35a10ce7273ec36400575f40c65fdf48f610432b7",
+      "crop": [
+        265,
+        185,
+        3440,
+        1980
+      ],
+      "redactions": [
+        {
+          "mode": "solid",
+          "box": [
+            330,
+            215,
+            850,
+            285
+          ],
+          "color": "#1D152F"
+        },
+        {
+          "mode": "blur",
+          "box": [
+            347,
+            322,
+            684,
+            827
+          ],
+          "radius": 8
+        },
+        {
+          "mode": "blur",
+          "box": [
+            742,
+            320,
+            1140,
+            395
+          ],
+          "radius": 8
+        },
+        {
+          "mode": "blur",
+          "box": [
+            745,
+            430,
+            1010,
+            470
+          ],
+          "radius": 8
+        },
+        {
+          "mode": "blur",
+          "box": [
+            795,
+            538,
+            1100,
+            579
+          ],
+          "radius": 8
+        },
+        {
+          "mode": "blur",
+          "box": [
+            748,
+            670,
+            1330,
+            710
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            345,
+            985,
+            2470,
+            1115
+          ],
+          "radius": 4
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2684,
+            930,
+            2940,
+            972
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2684,
+            982,
+            3030,
+            1026
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "solid",
+          "box": [
+            370,
+            1897,
+            1000,
+            1953
+          ],
+          "color": "#33274E"
+        },
+        {
+          "mode": "blur",
+          "box": [
+            373,
+            1360,
+            514,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            345,
+            1580,
+            545,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            601,
+            1360,
+            742,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            573,
+            1580,
+            773,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            830,
+            1360,
+            971,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            802,
+            1580,
+            1002,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1058,
+            1360,
+            1199,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1030,
+            1580,
+            1230,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1286,
+            1360,
+            1427,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1258,
+            1580,
+            1458,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1515,
+            1360,
+            1656,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1487,
+            1580,
+            1687,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1743,
+            1360,
+            1884,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1715,
+            1580,
+            1915,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1971,
+            1360,
+            2112,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1943,
+            1580,
+            2143,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2199,
+            1360,
+            2340,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2171,
+            1580,
+            2371,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2428,
+            1360,
+            2569,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2400,
+            1580,
+            2600,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2656,
+            1360,
+            2797,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2628,
+            1580,
+            2828,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2884,
+            1360,
+            3025,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            2856,
+            1580,
+            3056,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3113,
+            1360,
+            3254,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3085,
+            1580,
+            3285,
+            1680
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3341,
+            1360,
+            3440,
+            1569
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            3313,
+            1580,
+            3440,
+            1680
+          ],
+          "radius": 5
+        }
+      ],
+      "loaded_images_confirmed": true,
+      "blur_reference": "website/assets/overview; home 5px at 1863px, scaled to 10px at raw 3726px; NAS poster 8px at its actual 337px width to preserve comparable subject detail"
+    },
+    {
+      "source": "player.png",
+      "file": "player.png",
+      "source_sha256": "a9596bb767aa9701bfad9807396352a2a7955720e226c9175f38c0593da2a24d",
+      "crop": [
+        0,
+        0,
+        3840,
+        2160
+      ],
+      "redactions": [],
+      "captured_on": "2026-11-20"
+    },
+    {
+      "source": "player.png",
+      "file": "player-controls.png",
+      "source_sha256": "a9596bb767aa9701bfad9807396352a2a7955720e226c9175f38c0593da2a24d",
+      "crop": [
+        485,
+        1715,
+        3365,
+        2125
+      ],
+      "redactions": [],
+      "captured_on": "2026-11-20"
+    }
+  ],
+  "cards": [
+    {
+      "id": "01-cover",
+      "recipe": "S01",
+      "title": "NetVplayer / 更新了"
+    },
+    {
+      "id": "02-major-changes",
+      "recipe": "S12",
+      "title": "从 1.1.4 / 走到 2.0.7"
+    },
+    {
+      "id": "03-tvbox-fongmi",
+      "recipe": "S02",
+      "title": "配置兼容性 / 更强了"
+    },
+    {
+      "id": "04-nas-detail",
+      "recipe": "S04",
+      "title": "NAS 完整详情"
+    },
+    {
+      "id": "05-player",
+      "recipe": "S04",
+      "title": "原生 Mac 播放器"
+    },
+    {
+      "id": "06-dolby",
+      "recipe": "S02",
+      "title": "杜比视界与 / 杜比全景声"
+    },
+    {
+      "id": "07-subtitles",
+      "recipe": "S04",
+      "title": "字幕，也更好用"
+    },
+    {
+      "id": "08-install",
+      "recipe": "S06",
+      "title": "安装，只要四步"
+    },
+    {
+      "id": "09-first-play",
+      "recipe": "S06",
+      "title": "先用自己的视频 / 试播第一段"
+    },
+    {
+      "id": "10-tvbox-setup",
+      "recipe": "S06",
+      "title": "TVBox / FongMi / 怎么开始用"
+    },
+    {
+      "id": "11-nas-setup",
+      "recipe": "S06",
+      "title": "接入自己的 NAS"
+    }
+  ],
+  "revised_on": "2026-11-21",
+  "color_processing": "New 2026-11-21 captures converted from embedded display ICC to sRGB pixels, then metadata removed; historical assets unchanged."
+}

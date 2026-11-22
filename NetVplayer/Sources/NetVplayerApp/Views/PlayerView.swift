@@ -20,6 +20,18 @@ private enum PlayerOverlayPanel: Equatable {
     case episodes
 }
 
+private enum PlayerControlPopoverKind {
+    case subtitles, audio, aspectRatio, speed, volume
+}
+
+private struct PlayerControlPopoverAnchor: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        if let anchor = nextValue() { value = anchor }
+    }
+}
+
 enum PlayerCursorVisibilityPolicy {
     static let inactivityInterval: TimeInterval = 5
 
@@ -251,7 +263,6 @@ enum PlayerHUDVisualPolicy {
     static let trackPopoverRowHeight: CGFloat = 36
     static let trackPopoverRowSpacing: CGFloat = 4
     static let trackPopoverMaxListHeight: CGFloat = 280
-    static let trackPopoverArrowEdge: Edge = .top
     static let iconGlyphStrokeWidth: CGFloat = 1.7
     static let menuGlyphStrokeWidth: CGFloat = 1.65
     static let primaryGlyphStrokeWidth: CGFloat = 2
@@ -684,6 +695,7 @@ enum PlayerHUDGlyphKind: CaseIterable, Equatable {
     case settings
     case fullscreen
     case volume
+    case volumeMuted
 }
 
 enum DanmakuOverlayPolicy {
@@ -781,18 +793,14 @@ struct PlayerView: View {
     @State private var skipDraftSeconds: Int = 0
     @State private var skipEditorHint: String = ""
     @State private var skipEditorError: String?
-    @State private var isVolumePopoverPresented: Bool = false
+    @State private var controlPopover: PlayerControlPopoverKind?
     @State private var isOnlineSubtitlePresented = false
     @State private var isSubtitleTranslationPresented = false
     @State private var isSubtitleRecognitionPresented = false
     @State private var openTranslationAfterRecognition = false
     @StateObject private var subtitleRecognition = SubtitleRecognitionModel()
     @StateObject private var subtitleTranslation = SubtitleTranslationModel()
-    @State private var isSubtitlePopoverPresented: Bool = false
-    @State private var isAudioPopoverPresented: Bool = false
     @State private var formatPopoverSelection: PlaybackFormatStatus.Kind?
-    @State private var isSpeedPopoverPresented = false
-    @State private var isAspectPopoverPresented = false
     @State private var isChapterPanelPresented = false
     @State private var hoveredChapterID: Int?
     @State private var hasDraggedTimeline = false
@@ -884,6 +892,7 @@ struct PlayerView: View {
         }
         .onChange(of: timelineMediaID) { _, _ in
             formatPopoverSelection = nil
+            controlPopover = nil
             isChapterPanelPresented = false
             hoveredChapterID = nil
             chapterPreviewStore.reset(mediaID: timelineMediaID)
@@ -894,8 +903,8 @@ struct PlayerView: View {
         .task(id: chapterPreviewWarmupIdentity) {
             guard visualRegressionConfiguration == nil, chapterPreviewWarmupReady else { return }
             await chapterPreviewStore.prefetch(spec: playerState.currentSpec, mediaID: timelineMediaID,
-                targets: PlayerChapterPreviewPolicy.targets(chapters: playerState.chapters, duration: playerState.duration),
-                position: playerState.position)
+                targets: PlayerChapterPreviewPolicy.warmupTargets(chapters: playerState.chapters,
+                    duration: playerState.duration, position: playerState.position))
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -951,16 +960,14 @@ struct PlayerView: View {
         .preferredColorScheme(.dark)
         .background {
             PlayerShortcutMonitor(
-                isPlaybackControlEnabled: !isSkipEditorPresented && !isOnlineSubtitlePresented && !isSubtitleTranslationPresented && !isSubtitleRecognitionPresented,
+                isPlaybackControlEnabled: controlPopover == nil && !isSkipEditorPresented && !isOnlineSubtitlePresented
+                    && !isSubtitleTranslationPresented && !isSubtitleRecognitionPresented,
                 isScrollVolumeEnabled: overlayPanel == .none
                     && !isSkipEditorPresented
-                    && !isVolumePopoverPresented
-                    && !isSubtitlePopoverPresented
-                    && !isAudioPopoverPresented
+                    && (controlPopover == nil || (controlPopover == .volume && playerState.volumeControl == .player))
                     && formatPopoverSelection == nil
-                    && !isSpeedPopoverPresented
-                    && !isAspectPopoverPresented
-                    && !isChapterPanelPresented
+                    && !isChapterPanelPresented,
+                canDismissPlayerUI: controlPopover != nil || isChapterPanelPresented || formatPopoverSelection != nil
             ) { command, _ in
                 handleKeyboardShortcut(command)
             }
@@ -1012,9 +1019,12 @@ struct PlayerView: View {
             PictureInPicturePlaceholder(presentation: pictureInPicture, compact: usesCompactControls)
                 .zIndex(1.2)
 
-            if isChapterPanelPresented, !usesCompactControls {
+            if (isChapterPanelPresented || controlPopover != nil), !usesCompactControls {
                 Color.black.opacity(0.001).contentShape(Rectangle())
-                    .onTapGesture { isChapterPanelPresented = false }
+                    .onTapGesture {
+                        isChapterPanelPresented = false
+                        controlPopover = nil
+                    }
                     .zIndex(2.9)
             }
 
@@ -1170,11 +1180,7 @@ struct PlayerView: View {
         .onChange(of: overlayPanel) { _, panel in
             formatPopoverSelection = nil
             showHUD = true
-            isVolumePopoverPresented = false
-            isSubtitlePopoverPresented = false
-            isAudioPopoverPresented = false
-            isSpeedPopoverPresented = false
-            isAspectPopoverPresented = false
+            controlPopover = nil
             isChapterPanelPresented = false
             if panel == .none {
                 resetHUDTimer()
@@ -1198,38 +1204,25 @@ struct PlayerView: View {
         .onChange(of: formatPopoverSelection) { _, selection in
             updateTrackPopoverTimer(isPresented: selection != nil)
             if selection != nil {
-                isVolumePopoverPresented = false
-                isSubtitlePopoverPresented = false
-                isAudioPopoverPresented = false
-                isSpeedPopoverPresented = false
-                isAspectPopoverPresented = false
+                controlPopover = nil
                 isChapterPanelPresented = false
             }
         }
         .onChange(of: playerState.selectedAudioTrackID) { _, _ in
             formatPopoverSelection = nil
         }
-        .onChange(of: isSubtitlePopoverPresented) { _, isPresented in
-            updateTrackPopoverTimer(isPresented: isPresented)
-        }
-        .onChange(of: isAspectPopoverPresented) { _, isPresented in
-            updateTrackPopoverTimer(isPresented: isPresented)
-        }
-        .onChange(of: isSpeedPopoverPresented) { _, isPresented in
-            updateTrackPopoverTimer(isPresented: isPresented)
-        }
-        .onChange(of: isAudioPopoverPresented) { _, isPresented in
-            updateTrackPopoverTimer(isPresented: isPresented)
+        .onChange(of: controlPopover) { _, popover in
+            updateTrackPopoverTimer(isPresented: popover != nil)
+            if popover != nil {
+                isChapterPanelPresented = false
+                formatPopoverSelection = nil
+            }
         }
         .onChange(of: isChapterPanelPresented) { _, isPresented in
             updateTrackPopoverTimer(isPresented: isPresented)
             if isPresented {
                 formatPopoverSelection = nil
-                isVolumePopoverPresented = false
-                isSubtitlePopoverPresented = false
-                isAudioPopoverPresented = false
-                isSpeedPopoverPresented = false
-                isAspectPopoverPresented = false
+                controlPopover = nil
             }
         }
     }
@@ -1249,11 +1242,7 @@ struct PlayerView: View {
             hideHUDTimer?.invalidate()
             overlayPanel = .none
             isSkipEditorPresented = false
-            isVolumePopoverPresented = false
-            isSubtitlePopoverPresented = false
-            isAudioPopoverPresented = false
-            isSpeedPopoverPresented = false
-            isAspectPopoverPresented = false
+            controlPopover = nil
             isChapterPanelPresented = false
             restorePlayerCursor()
         } else {
@@ -1417,6 +1406,23 @@ struct PlayerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.container, edges: .top)
+        .overlayPreferenceValue(PlayerControlPopoverAnchor.self) { anchor in
+            GeometryReader { proxy in
+                if let controlPopover, let anchor {
+                    let rect = proxy[anchor]
+                    let width = controlPopoverWidth(controlPopover)
+                    let center = PlayerTimelineCoordinatePolicy.previewCenter(x: rect.midX,
+                        width: proxy.size.width, bubbleWidth: width)
+                    let leading = center - width / 2
+                    let cornerRadius: CGFloat = controlPopover == .volume && playerState.volumeControl == .player ? 14 : 16
+                    PlayerControlPopover(arrowX: rect.midX - leading, cornerRadius: cornerRadius) {
+                        controlPopoverContent(controlPopover)
+                    }
+                    .frame(width: width, height: max(0, rect.minY - 16), alignment: .bottom)
+                    .offset(x: leading, y: 12)
+                }
+            }
+        }
         .overlayPreferenceValue(ChapterButtonAnchorPreferenceKey.self) { anchor in
             GeometryReader { proxy in
                 if isChapterPanelPresented, let anchor {
@@ -1513,7 +1519,8 @@ struct PlayerView: View {
         .padding(.top, PlayerHUDVisualPolicy.bottomTopPadding)
         .padding(.bottom, PlayerHUDVisualPolicy.bottomBottomPadding)
         .frame(minHeight: PlayerHUDVisualPolicy.bottomMinHeight)
-        .background(bottomHUDGlassPanel(cornerRadius: PlayerHUDVisualPolicy.bottomCornerRadius))
+        .background(PlayerTransportGlass(shape: RoundedRectangle(
+            cornerRadius: PlayerHUDVisualPolicy.bottomCornerRadius, style: .continuous)))
     }
 
     private var progressRow: some View {
@@ -1608,14 +1615,7 @@ struct PlayerView: View {
                     timelineSkipMarker(kind: .ending, seconds: endingMarker, width: timelineProxy.size.width)
                 }
 
-                Circle()
-                    .fill(Color.white.opacity(canSeek ? 0.98 : 0.45))
-                    .frame(width: PlayerHUDVisualPolicy.timelineThumbSize, height: PlayerHUDVisualPolicy.timelineThumbSize)
-                    .overlay {
-                        Circle()
-                            .stroke(seaBlue.opacity(canSeek ? PlayerHUDVisualPolicy.timelineThumbBorderOpacity : PlayerHUDVisualPolicy.activeLavenderShadowOpacity), lineWidth: 2)
-                    }
-                    .shadow(color: seaBlue.opacity(canSeek ? PlayerHUDVisualPolicy.timelineThumbShadowOpacity : 0), radius: PlayerHUDVisualPolicy.timelineThumbShadowRadius)
+                PlayerProgressThumb(isEnabled: canSeek)
                     .position(x: thumbX, y: PlayerHUDVisualPolicy.timelineHeight / 2)
             }
             .frame(width: width, height: PlayerHUDVisualPolicy.timelineHeight)
@@ -1814,31 +1814,23 @@ struct PlayerView: View {
 
     private var aspectRatioControl: some View {
         featurePopoverControl(
+            .aspectRatio,
             title: L10n.text("比例"), glyph: .aspectRatio, detail: playerState.videoAspectMode.displayName,
-            isActive: playerState.videoAspectMode != .fit, isPresented: $isAspectPopoverPresented
-        ) {
-            trackSelectionPopover(title: L10n.text("画面比例"), optionCount: PlayerVideoAspectMode.allCases.count) {
-                ForEach(PlayerVideoAspectMode.allCases, id: \.self) { mode in
-                    trackOptionButton(title: mode.displayName, isSelected: playerState.videoAspectMode == mode) {
-                        setVideoAspectMode(mode)
-                        isAspectPopoverPresented = false
-                    }
-                }
-            }
-        }
+            isActive: playerState.videoAspectMode != .fit
+        )
     }
 
     private var volumeControl: some View {
         let control = playerState.volumeControl
+        let isSilent = control == .player && (playerState.isMuted || playerState.volume <= 0)
         return Button(action: presentVolumeControl) {
             featureControlLabel(
                 title: control == .receiver ? L10n.text("音箱调音")
-                    : ((control == .player && (playerState.isMuted || playerState.volume <= 0))
-                        ? L10n.text("静音") : L10n.text("音量")),
-                glyph: .volume,
+                    : L10n.text(isSilent ? "静音" : "音量"),
+                glyph: isSilent ? .volumeMuted : .volume,
                 detail: control == .receiver ? L10n.text("原码直通")
                     : (control == .checking ? L10n.text("确认中") : volumePercentText),
-                isActive: isVolumePopoverPresented || (control == .player && (playerState.isMuted || playerState.volume <= 0))
+                isActive: controlPopover == .volume || isSilent
             )
         }
         .buttonStyle(.plain)
@@ -1851,19 +1843,54 @@ struct PlayerView: View {
             case .second: presentVolumeControl()
             }
         })
-        .popover(isPresented: $isVolumePopoverPresented, arrowEdge: .bottom) {
-            PlaybackVolumePopover(playerState: playerState, setVolume: setVolume,
-                toggleMute: { toggleMute(dismissPopover: false) },
-                usePlayerVolume: { MPVPlayerEngine.vod.requestPlayerVolumeControl() })
-                .environment(\.appThemePalette, AppThemeCatalog.palette(for: .legacyDeepSpace))
+        .anchorPreference(key: PlayerControlPopoverAnchor.self, value: .bounds) {
+            controlPopover == .volume ? $0 : nil
         }
     }
 
     private func presentVolumeControl() {
-        isChapterPanelPresented = false
-        formatPopoverSelection = nil
-        isVolumePopoverPresented.toggle()
+        controlPopover = controlPopover == .volume ? nil : .volume
         showHUDTemporarily()
+    }
+
+    private func controlPopoverWidth(_ kind: PlayerControlPopoverKind) -> CGFloat {
+        switch kind {
+        case .subtitles: 330
+        case .audio, .aspectRatio, .speed: 280
+        case .volume: playerState.volumeControl == .player ? PlaybackVolumePopover.sliderPanelWidth : 320
+        }
+    }
+
+    @ViewBuilder
+    private func controlPopoverContent(_ kind: PlayerControlPopoverKind) -> some View {
+        switch kind {
+        case .subtitles:
+            subtitleTrackPopover
+        case .audio:
+            audioTrackPopover
+        case .aspectRatio:
+            trackSelectionPopover(title: L10n.text("画面比例"), optionCount: PlayerVideoAspectMode.allCases.count) {
+                ForEach(PlayerVideoAspectMode.allCases, id: \.self) { mode in
+                    trackOptionButton(title: mode.displayName, isSelected: playerState.videoAspectMode == mode) {
+                        setVideoAspectMode(mode)
+                        controlPopover = nil
+                    }
+                }
+            }
+        case .speed:
+            trackSelectionPopover(title: L10n.text("播放速度"), optionCount: PlayerHUDInteractionPolicy.playbackSpeeds.count) {
+                ForEach(PlayerHUDInteractionPolicy.playbackSpeeds, id: \.self) { speed in
+                    trackOptionButton(title: speedLabel(speed), isSelected: abs(playerState.speed - speed) < 0.01) {
+                        setPlaybackSpeed(speed)
+                        controlPopover = nil
+                    }
+                }
+            }
+        case .volume:
+            PlaybackVolumePopover(playerState: playerState, setVolume: setVolume,
+                usePlayerVolume: { MPVPlayerEngine.vod.requestPlayerVolumeControl() })
+                .environment(\.appThemePalette, AppThemeCatalog.palette(for: .legacyDeepSpace))
+        }
     }
 
     private var hudDivider: some View {
@@ -1890,27 +1917,23 @@ struct PlayerView: View {
 
     private var subtitleControl: some View {
         featurePopoverControl(
+            .subtitles,
             title: L10n.text("字幕"),
             glyph: .subtitles,
             isActive: playerState.selectedSubtitleTrackID != nil,
-            isUnavailable: playerState.currentSpec == nil,
-            isPresented: $isSubtitlePopoverPresented
-        ) {
-            subtitleTrackPopover
-        }
+            isUnavailable: playerState.currentSpec == nil
+        )
     }
 
     private var audioControl: some View {
         featurePopoverControl(
+            .audio,
             title: L10n.text("音轨"),
             glyph: .audio,
             detail: playerState.selectedAudioTrackID == nil ? nil : L10n.text("已选"),
             isActive: playerState.selectedAudioTrackID != nil,
-            isUnavailable: playerState.audioTracks.isEmpty,
-            isPresented: $isAudioPopoverPresented
-        ) {
-            audioTrackPopover
-        }
+            isUnavailable: playerState.audioTracks.isEmpty
+        )
     }
 
     private var subtitleTrackPopover: some View {
@@ -1936,33 +1959,30 @@ struct PlayerView: View {
             }
             Divider()
             Button {
-                isSubtitlePopoverPresented = false
+                controlPopover = nil
                 isSubtitleTranslationPresented = true
             } label: { Label(L10n.text("文本字幕翻译"), systemImage: "translate") }
             .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(lavender)
             Button {
-                isSubtitlePopoverPresented = false
+                controlPopover = nil
                 isSubtitleRecognitionPresented = true
             } label: { Label(L10n.text("图片字幕／音频识别"), systemImage: "text.viewfinder") }
             .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(lavender)
             HStack(spacing: 12) {
                 Button {
-                    isSubtitlePopoverPresented = false
+                    controlPopover = nil
                     isOnlineSubtitlePresented = true
                 } label: { Label(L10n.text("在线搜索"), systemImage: "magnifyingglass") }
                 Spacer()
                 Button {
-                    isSubtitlePopoverPresented = false
+                    controlPopover = nil
                     settingsCategory = .subtitles
                     overlayPanel = .settings
                 } label: { Label(L10n.text("字幕设置"), systemImage: "slider.horizontal.3") }
             }
             .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(lavender)
         }
-        .padding(16).frame(width: 330)
-        .foregroundStyle(PlayerHUDPalette.foreground)
-        .preferredColorScheme(.dark)
-        .presentationBackground(PlayerHUDPalette.background.opacity(0.96))
+        .padding(16)
     }
 
     private var audioTrackPopover: some View {
@@ -1974,9 +1994,7 @@ struct PlayerView: View {
                     trackOptionButton(title: track.displayName, isSelected: playerState.selectedAudioTrackID == track.id) {
                         MPVPlayerEngine.vod.selectAudioTrack(id: track.id)
                         appState.saveTrackPreference(type: .audio, id: track.id, name: track.displayName, format: track.format)
-                        isAudioPopoverPresented = false
-                        isSpeedPopoverPresented = false
-                        isAspectPopoverPresented = false
+                        controlPopover = nil
                     }
                 }
             }
@@ -1985,19 +2003,10 @@ struct PlayerView: View {
 
     private var speedControl: some View {
         featurePopoverControl(
+            .speed,
             title: L10n.text("倍速"), glyph: .speed, detail: speedLabel(playerState.speed),
-            isActive: abs(playerState.speed - 1.0) > 0.01, isPresented: $isSpeedPopoverPresented
-        ) {
-            trackSelectionPopover(title: L10n.text("播放速度"), optionCount: PlayerHUDInteractionPolicy.playbackSpeeds.count) {
-                ForEach(PlayerHUDInteractionPolicy.playbackSpeeds, id: \.self) { speed in
-                    trackOptionButton(title: speedLabel(speed), isSelected: abs(playerState.speed - speed) < 0.01) {
-                        setPlaybackSpeed(speed)
-                        isSpeedPopoverPresented = false
-                        isAspectPopoverPresented = false
-                    }
-                }
-            }
-        }
+            isActive: abs(playerState.speed - 1.0) > 0.01
+        )
     }
 
     private func settingsDrawer(size _: CGSize) -> some View {
@@ -2825,28 +2834,27 @@ struct PlayerView: View {
         .help(title)
     }
 
-    private func featurePopoverControl<Content: View>(
+    private func featurePopoverControl(
+        _ kind: PlayerControlPopoverKind,
         title: String,
         glyph: PlayerHUDGlyphKind,
         detail: String? = nil,
         isActive: Bool = false,
-        isUnavailable: Bool = false,
-        isPresented: Binding<Bool>,
-        @ViewBuilder popoverContent: @escaping () -> Content
+        isUnavailable: Bool = false
     ) -> some View {
         Button {
-            isChapterPanelPresented = false
-            isPresented.wrappedValue.toggle()
+            controlPopover = controlPopover == kind ? nil : kind
             showHUDTemporarily()
         } label: {
-            featureControlLabel(title: title, glyph: glyph, detail: detail, isActive: isActive, disabled: isUnavailable)
+            featureControlLabel(title: title, glyph: glyph, detail: detail,
+                isActive: isActive || controlPopover == kind, disabled: isUnavailable)
                 .opacity(isUnavailable ? PlayerHUDVisualPolicy.disabledControlOpacity : 1)
         }
         .buttonStyle(.plain)
         .frame(width: PlayerHUDVisualPolicy.menuControlWidth, height: PlayerHUDVisualPolicy.menuControlHeight, alignment: .top)
         .contentShape(Rectangle())
-        .popover(isPresented: isPresented, arrowEdge: PlayerHUDVisualPolicy.trackPopoverArrowEdge) {
-            popoverContent()
+        .anchorPreference(key: PlayerControlPopoverAnchor.self, value: .bounds) {
+            controlPopover == kind ? $0 : nil
         }
         .help(title)
     }
@@ -2859,6 +2867,8 @@ struct PlayerView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.headline)
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
             Divider()
             ThemedScrollView(theme: .player) {
                 VStack(alignment: .leading, spacing: PlayerHUDVisualPolicy.trackPopoverRowSpacing) {
@@ -2867,11 +2877,7 @@ struct PlayerView: View {
             }
             .frame(height: PlayerHUDVisualPolicy.trackPopoverListHeight(optionCount: optionCount))
         }
-        .padding(12)
-        .frame(width: 280)
-        .foregroundStyle(PlayerHUDPalette.foreground)
-        .preferredColorScheme(.dark)
-        .presentationBackground(PlayerHUDPalette.background.opacity(0.96))
+        .padding(8)
     }
 
     private func trackOptionButton(
@@ -2886,8 +2892,11 @@ struct PlayerView: View {
                 Spacer(minLength: 8)
                 if isSelected {
                     Image(systemName: "checkmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(lavender)
                 }
             }
+            .padding(.horizontal, 8)
             .frame(
                 maxWidth: .infinity,
                 minHeight: PlayerHUDVisualPolicy.trackPopoverRowHeight,
@@ -2895,7 +2904,8 @@ struct PlayerView: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PlayerControlPopoverRowStyle(isSelected: isSelected))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func trackPopoverEmptyState(_ text: String) -> some View {
@@ -3299,50 +3309,6 @@ struct PlayerView: View {
         PlayerGlassPanel(cornerRadius: cornerRadius, strokeOpacity: strokeOpacity)
     }
 
-    private func bottomHUDGlassPanel(cornerRadius: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(.ultraThinMaterial)
-            .opacity(PlayerHUDVisualPolicy.bottomGlassMaterialOpacity)
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(PlayerHUDPalette.surface.opacity(PlayerHUDVisualPolicy.bottomGlassSurfaceOpacity))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                lavender.opacity(0.25),
-                                seaBlue.opacity(0.12),
-                                Color.white.opacity(0.06),
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(PlayerHUDVisualPolicy.bottomGlassTopHighlightOpacity),
-                                lavender.opacity(0.03),
-                                Color.clear,
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-            }
-            .overlay(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.black.opacity(PlayerHUDVisualPolicy.bottomGlassBottomInsetOpacity), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(PlayerHUDVisualPolicy.bottomGlassShadowOpacity), radius: PlayerHUDVisualPolicy.bottomGlassShadowRadius, x: 0, y: 18)
-    }
-
     private func clampedSeekPosition(_ position: Double) -> Double {
         min(max(0, position), appState.playerState.duration)
     }
@@ -3408,6 +3374,10 @@ struct PlayerView: View {
     }
 
     private func handleKeyboardShortcut(_ command: PlayerShortcutCommand) {
+        if command == .exitFullScreen, controlPopover != nil {
+            controlPopover = nil
+            return
+        }
         if command == .exitFullScreen, formatPopoverSelection != nil {
             formatPopoverSelection = nil
             return
@@ -3455,7 +3425,7 @@ struct PlayerView: View {
     private func setVolume(_ volume: Float) {
         let clamped = min(1, max(0, volume))
         guard MPVPlayerEngine.vod.setVolume(clamped) else {
-            isVolumePopoverPresented = true
+            controlPopover = .volume
             showHUDTemporarily()
             return
         }
@@ -3463,13 +3433,13 @@ struct PlayerView: View {
         appState.playerState.volume = clamped
     }
 
-    private func toggleMute(dismissPopover: Bool = true) {
+    private func toggleMute() {
         guard MPVPlayerEngine.vod.toggleMute() else {
-            isVolumePopoverPresented = true
+            controlPopover = .volume
             showHUDTemporarily()
             return
         }
-        if dismissPopover { isVolumePopoverPresented = false }
+        if controlPopover == .volume { controlPopover = nil }
         showHUDTemporarily()
     }
 
@@ -3494,7 +3464,7 @@ struct PlayerView: View {
         skipEditorHint = ""
         withPlayerAnimation {
             isSkipEditorPresented = true
-            isVolumePopoverPresented = false
+            controlPopover = nil
         }
         hideHUDTimer?.invalidate()
     }
@@ -3577,7 +3547,7 @@ struct PlayerView: View {
         withPlayerAnimation {
             overlayPanel = panel
             showHUD = true
-            isVolumePopoverPresented = false
+            controlPopover = nil
         }
     }
 
@@ -3612,7 +3582,7 @@ struct PlayerView: View {
         if isPresented {
             hideHUDTimer?.invalidate()
             restorePlayerCursor()
-        } else if !isSubtitlePopoverPresented && !isAudioPopoverPresented && !isSpeedPopoverPresented && !isAspectPopoverPresented && !isChapterPanelPresented && formatPopoverSelection == nil {
+        } else if controlPopover == nil && !isChapterPanelPresented && formatPopoverSelection == nil {
             resetHUDTimer()
         }
     }
@@ -3639,13 +3609,9 @@ struct PlayerView: View {
     private var hasBlockingPlayerUI: Bool {
         overlayPanel != .none
             || isSkipEditorPresented
-            || isVolumePopoverPresented
-            || isSubtitlePopoverPresented
+            || controlPopover != nil
             || isOnlineSubtitlePresented
-            || isAudioPopoverPresented
             || formatPopoverSelection != nil
-            || isSpeedPopoverPresented
-            || isAspectPopoverPresented
             || isChapterPanelPresented
     }
 
@@ -3726,7 +3692,7 @@ struct PlayerView: View {
     private func hidePlayerChrome() {
         withPlayerAnimation {
             showHUD = false
-            isVolumePopoverPresented = false
+            controlPopover = nil
         }
         if isPointerInsidePlayer {
             PlayerCursorController.hideUntilMouseMoves()
@@ -3916,6 +3882,10 @@ private struct PlayerHUDGlyph: View {
                 fullscreenGlyph
             case .volume:
                 volumeGlyph
+            case .volumeMuted:
+                Image(systemName: "speaker.slash")
+                    .font(.system(size: size * 0.8, weight: .medium))
+                    .accessibilityHidden(true)
             }
         }
         .frame(width: size, height: size)

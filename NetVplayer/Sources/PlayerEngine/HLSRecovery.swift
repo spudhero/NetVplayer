@@ -21,10 +21,15 @@ public struct HLSRecoverySlots: Sendable {
     public mutating func invalidate(live: Bool) { active.removeValue(forKey: live) }
 }
 
-/// A recovery-only reduction of a master playlist. Unknown HLS semantics stay with libmpv.
+/// Bounded startup recovery for upstream HLS playlists.
 public enum HLSRecovery {
     public static let maximumBytes = 256 * 1024
     public static let attemptedKey = "hls.recoveryAttempted"
+
+    public enum Destination: Equatable, Sendable {
+        case reducedMaster(String)
+        case redirectedPlaylist(URL)
+    }
 
     public static func eligible(_ spec: PlaySpec) -> Bool {
         guard spec.metadata[attemptedKey] != "true", spec.drm == nil,
@@ -131,10 +136,26 @@ public enum HLSRecovery {
         }.joined(separator: ",")
     }
 
-    public static func prepare(_ spec: PlaySpec, client: HTTPClient = .shared, budget: Duration = .seconds(8)) async throws -> String? {
+    static func destination(_ data: Data, finalURL: URL, spec: PlaySpec) -> Destination? {
+        if let playlist = reducedMaster(data, baseURL: finalURL) {
+            return .reducedMaster(playlist)
+        }
+        let replayableHeaders: Set<String> = ["user-agent", "accept", "accept-language"]
+        guard spec.metadata["playback.kind"] != "live",
+              let original = URL(string: spec.url), original != finalURL,
+              finalURL.scheme?.lowercased() == "https", finalURL.host != nil,
+              finalURL.user == nil, finalURL.password == nil, !HTTPRedirectPolicy.isLoopback(finalURL),
+              spec.headers.keys.allSatisfy({ replayableHeaders.contains($0.lowercased()) }),
+              spec.mpvOptions["http-header-fields"] == nil,
+              data.count < maximumBytes, let source = String(data: data, encoding: .utf8),
+              !source.contains("\0"), source.split(whereSeparator: \.isNewline).first == "#EXTM3U" else { return nil }
+        return .redirectedPlaylist(finalURL)
+    }
+
+    public static func prepare(_ spec: PlaySpec, client: HTTPClient = .shared, budget: Duration = .seconds(8)) async throws -> Destination? {
         guard eligible(spec) else { return nil }
         let client = PlaybackProbeTransport.client(for: spec, using: client)
-        return try await withThrowingTaskGroup(of: String?.self) { group in
+        return try await withThrowingTaskGroup(of: Destination?.self) { group in
             group.addTask {
                 let buffer = HLSRecoveryBuffer()
                 let response = try await client.stream(url: spec.url, headers: spec.headers, timeout: 8,
@@ -145,7 +166,7 @@ public enum HLSRecovery {
                     }, receive: { try await buffer.append($0) })
                 try Task.checkCancellation()
                 guard let base = response.finalURL ?? URL(string: spec.url) else { return nil }
-                return await reducedMaster(buffer.data, baseURL: base)
+                return await destination(buffer.data, finalURL: base, spec: spec)
             }
             group.addTask { try await Task.sleep(for: budget); throw URLError(.timedOut) }
             defer { group.cancelAll() }

@@ -62,6 +62,55 @@ private func sdkRecoveryEvents(_ fixture: DevelopmentAndroidBridgeFixture) throw
     await provider.shutdown()
 }
 
+@Test(arguments: [false, true])
+func developmentAndroidSDKServerRecoveryHandlesHTTP500WithOneForegroundRetry(persistentFailure: Bool) async throws {
+    let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
+    let runtime = try sdkRecoveryRuntime(fixture), site = sdkRecoverySite()
+    let provider = DevelopmentAndroidSiteProvider(runtime: runtime, binding: runtime.manifest.bindings[0], stateDirectory: fixture.state)
+    let id = persistentFailure ? "sdk-http-500-always-1" : "sdk-http-500-once-1"
+    do {
+        do {
+            _ = try await provider.playerContent(site: site, flag: "AI", id: id)
+            Issue.record("The background request must fail before handing a 500 address to the player")
+        } catch let error as ProviderErrorPayload {
+            #expect(error.code == "android_sdk_media_http_500" && !error.retryable)
+        }
+        let backgroundPID = try #require(try sdkRecoveryEvents(fixture).first?["pid"].flatMap(Int32.init))
+        #expect(kill(backgroundPID, 0) == 0)
+
+        do {
+            _ = try await DevelopmentAndroidSiteProvider.$allowsSDKMediaHTTPRecovery.withValue(true) {
+                try await provider.playerContent(site: site, flag: "AI", id: id)
+            }
+            Issue.record("The first foreground 500 must retire its SDK helper before the retry")
+        } catch let error as ProviderErrorPayload {
+            #expect(error.code == "android_sdk_media_http_500" && error.retryable)
+        }
+        #expect(kill(backgroundPID, 0) == -1 && errno == ESRCH)
+
+        // AppState spends its preparation retry on the same episode and stops after that.
+        do {
+            let result = try await provider.playerContent(site: site, flag: "AI", id: id)
+            #expect(!persistentFailure)
+            let (body, response) = try await URLSession.shared.data(from: #require(URL(string: result.url)))
+            #expect((response as? HTTPURLResponse)?.statusCode == 200)
+            #expect(body == Data("SDK media fixture".utf8))
+        } catch let error as ProviderErrorPayload {
+            #expect(persistentFailure)
+            #expect(error.code == "android_sdk_media_http_500" && !error.retryable)
+        }
+
+        let players = try sdkRecoveryEvents(fixture).filter { $0["operation"] == "player" }
+        try #require(players.count == 3)
+        #expect(players[0]["pid"] == players[1]["pid"])
+        let retryPID = try #require(players[2]["pid"].flatMap(Int32.init))
+        #expect(retryPID != backgroundPID && kill(retryPID, 0) == 0)
+        #expect(Set(players.compactMap { $0["id"] }) == [id])
+        #expect(Set(players.compactMap { $0["state_sha256"] }).count == 1)
+    } catch { await provider.shutdown(); throw error }
+    await provider.shutdown()
+}
+
 @Test func developmentAndroidSDKServerRecoveryDoesNotRetireForTimeoutOrCancellation() async throws {
     for code in [URLError.timedOut, .cancelled, .networkConnectionLost] {
         let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
@@ -98,12 +147,16 @@ private actor SDKProbeGate {
     do {
         for _ in 0..<300 { if await gate.entered { break }; try await Task.sleep(for: .milliseconds(10)) }
         try #require(await gate.entered)
+        let oldPID = try #require(try sdkRecoveryEvents(fixture).first?["pid"].flatMap(Int32.init))
         await provider.cancelPlayback()
         await gate.refuseConnection()
         do { _ = try await pending.value; Issue.record("A canceled source must reject its late failure") }
         catch let error as ProviderErrorPayload { #expect(error.code == "android_content_stale") }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(4))
+        while kill(oldPID, 0) == 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(kill(oldPID, 0) == -1)
         _ = try await provider.homeContent(site: site)
-        #expect(Set(try sdkRecoveryEvents(fixture).compactMap { $0["pid"] }).count == 1)
+        #expect(Set(try sdkRecoveryEvents(fixture).compactMap { $0["pid"] }).count == 2)
     } catch { await gate.refuseConnection(); pending.cancel(); await provider.shutdown(); throw error }
     await provider.shutdown()
 }

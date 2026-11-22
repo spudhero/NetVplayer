@@ -74,8 +74,7 @@ struct ChapterNavigationPanel: View {
         }
         .padding(16).frame(width: PlayerChapterVisualPolicy.panelWidth)
         .foregroundStyle(PlayerHUDPalette.foreground)
-        .background(PlayerHUDPalette.background.opacity(0.88), in: RoundedRectangle(cornerRadius: 18))
-        .background(PlayerGlassPanel(cornerRadius: 18, strokeOpacity: 0.30))
+        .background(PlayerTransportGlass(shape: RoundedRectangle(cornerRadius: 18, style: .continuous)))
         .preferredColorScheme(.dark)
         .onExitCommand(perform: onClose)
     }
@@ -105,7 +104,9 @@ private struct ChapterNavigationRow: View {
         Button(action: onSelect) {
             HStack(spacing: 13) {
                 PlayerChapterThumbnail(chapter: chapter, spec: spec, mediaID: mediaID,
-                    store: previewStore, fixtureURL: fixtureURL).frame(width: 88, height: 50)
+                    store: previewStore, fixtureURL: fixtureURL,
+                    previewSeconds: PlayerChapterPreviewPolicy.chapterImageSeconds(for: chapter,
+                        chapters: chapters, duration: duration)).frame(width: 88, height: 50)
                     .overlay(alignment: .bottomLeading) {
                         Text(String(format: "%02d", PlayerChapterPresentationPolicy.number(of: chapter, in: chapters)))
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -208,7 +209,7 @@ struct PlayerChapterPreviewCard: View {
     var fixtureURL: URL? = nil
     var compact = false
     private var frameSeconds: Double {
-        isNode ? chapter.seconds
+        isNode ? PlayerChapterPreviewPolicy.chapterImageSeconds(for: chapter, chapters: chapters, duration: duration)
             : PlayerChapterPreviewPolicy.timelineSeconds(seconds, chapters: chapters, duration: duration)
     }
     var body: some View {
@@ -217,7 +218,7 @@ struct PlayerChapterPreviewCard: View {
                 fixtureURL: fixtureURL, previewSeconds: frameSeconds)
                 .frame(height: compact ? 72 : 106)
                 .overlay(alignment: .bottomTrailing) {
-                    Text(PlayerTimelineCoordinatePolicy.label(seconds: frameSeconds))
+                    Text(PlayerTimelineCoordinatePolicy.label(seconds: isNode ? chapter.seconds : frameSeconds))
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .padding(.horizontal, 6).padding(.vertical, 3)
                         .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 5)).padding(5)
@@ -232,7 +233,6 @@ struct PlayerChapterPreviewCard: View {
             }
         }.padding(9).frame(width: PlayerChapterVisualPolicy.previewWidth)
         .foregroundStyle(PlayerHUDPalette.foreground)
-        .background(PlayerHUDPalette.background.opacity(0.88), in: RoundedRectangle(cornerRadius: 13))
-        .background(PlayerGlassPanel(cornerRadius: 13))
+        .background(PlayerTransportGlass(shape: RoundedRectangle(cornerRadius: 13, style: .continuous)))
     }
 }

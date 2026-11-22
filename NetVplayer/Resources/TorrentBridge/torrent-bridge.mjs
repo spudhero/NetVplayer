@@ -91,12 +91,20 @@ fs.mkdirSync(storagePath, { recursive: true })
 const client = new WebTorrent({ destroyStoreOnDestroy: false })
 client.on('error', fail)
 
+const torrentOptions = { path: storagePath, deselect: true }
 let torrent
 try {
-  torrent = client.add(await resolveTorrentInput(), { path: storagePath, deselect: true })
+  const input = await resolveTorrentInput()
+  if (Buffer.isBuffer(input)) {
+    // Cached .torrent files may omit the trackers supplied by the original magnet.
+    const announce = new URL(torrentURI).searchParams.getAll('tr').filter(Boolean)
+    torrent = client.add(input, { ...torrentOptions, announce })
+  } else {
+    torrent = client.add(input, torrentOptions)
+  }
 } catch {
   metadataSource = 'dht'
-  torrent = client.add(torrentURI, { path: storagePath, deselect: true })
+  torrent = client.add(torrentURI, torrentOptions)
 }
 torrent.on('error', fail)
 torrent.once('ready', () => {

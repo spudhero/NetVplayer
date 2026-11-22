@@ -295,6 +295,45 @@ private actor TransferDataGate {
     #expect(snapshot.cachedBytes == 64)
 }
 
+struct ChapterPreviewMetadataTests {
+    @Test func chapterPreviewReusesContainerMetadataAfterPlaybackMovesPastIt() async throws {
+        let configuration = RemoteStreamBufferConfiguration(chunkSize: 4_096, prefetchWindowSize: 0,
+            maxBytes: 4_096, maxConcurrentPrefetches: 0)
+        let buffer = RemoteStreamBuffer(id: "chapter-metadata", configuration: configuration)
+        let length: Int64 = 10 * 1024 * 1024
+        let stream = RemoteStream(id: "chapter-metadata", url: "https://fixture.example/movie.mkv",
+            headers: [:], upstreamHTTPClient: .shared, upstreamRequestTimeout: 5, contentType: "video/x-matroska",
+            buffer: buffer, bufferConfiguration: configuration, relayMode: .buffered, sourceByteOffset: 0,
+            continuousOpenEndedResponses: false, parallelSegmentedOpenEndedUpstream: false,
+            parallelUpstreamUsesCurl: false, parallelUpstreamUsesHTTP2Multiplexing: false,
+            parallelUpstreamSegmentSize: 4_096, parallelUpstreamConcurrency: 1,
+            parallelConcurrencyController: .init(maximum: 1), preloadLayout: .standard,
+            contentLength: length, createdAt: .now, lastAccessAt: .now, recentError: nil)
+        let prefix = RemoteStreamRange(start: 0, end: 4_095)
+        let tail = RemoteStreamRange(start: length - 4_096, end: length - 1)
+        let chapter = RemoteStreamRange(start: length / 2, end: length / 2 + 4_095)
+        let counter = TransferReadCounter()
+        let fetch: @Sendable (RemoteStreamRange, RemoteStreamLoadKind) async throws -> RemoteStreamChunk = { range, _ in
+            await counter.record()
+            return RemoteStreamChunk(range: range, data: Data(repeating: 1, count: Int(range.count)),
+                headers: [:], contentType: stream.contentType, totalLength: length)
+        }
+        for range in [prefix, tail] {
+            _ = try await buffer.response(for: range, stream: stream, method: .GET,
+                isPriming: true, readerPhase: .preview, fetch: fetch)
+        }
+        _ = try await buffer.response(for: chapter, stream: stream, method: .GET, fetch: fetch)
+        for range in [RemoteStreamRange(start: 100, end: 4_095), tail] {
+            let response = try await buffer.response(for: range, stream: stream, method: .GET,
+                isPriming: true, readerPhase: .preview, fetch: fetch)
+            #expect(response.data.count == Int(range.count))
+        }
+        #expect(await counter.count == 3)
+        await buffer.cancelAll()
+        #expect(await buffer.snapshot().cachedBytes == 0)
+    }
+}
+
 @Test func playbackTransferCredentialExpiryRejectsUnknownExpiredAndInvalidClocks() {
     #expect(ThunderCredentialVault.parseLiteralKey("APP_ID=fixture\nAPI_key=fixture-key-123456789\n") == ["app_id": "fixture", "api_key": "fixture-key-123456789"])
     #expect(ThunderCredentialVault.parseLiteralKey("APP_ID=fixture\nAPI_key=$(printenv)\n") == nil)

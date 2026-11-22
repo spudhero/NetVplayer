@@ -133,6 +133,56 @@ struct PlayerChapterPreviewTests {
         #expect(deduplicated.last == 999)
     }
 
+    @Test func warmupPutsChapterStartsAheadOfNearbyTimelineFrames() {
+        let targets = PlayerChapterPreviewPolicy.warmupTargets(chapters: chapters, duration: 100, position: 24)
+        #expect(Array(targets.prefix(3)) == [22, 2, 62])
+        #expect(targets.count == 7)
+        #expect(Set(targets).count == targets.count)
+    }
+
+    @Test func chapterPreviewSamplesInsideShortChapterWithoutMovingTheSeekNode() {
+        let brief = [PlayerChapter(id: 1, title: "", seconds: 8),
+                     PlayerChapter(id: 2, title: "", seconds: 8.75)]
+        #expect(PlayerChapterPreviewPolicy.chapterImageSeconds(for: brief[0], chapters: brief, duration: 9) == 8.25)
+        #expect(PlayerChapterPresentationPolicy.hit(at: 80, width: 90, chapters: brief, duration: 9)?.seconds == 8)
+    }
+
+    @MainActor
+    @Test func visiblePreviewTakesTheReaderFromSpeculation() async throws {
+        let probe = ChapterPreviewDecodeProbe()
+        let store = PlayerChapterPreviewStore { spec, seconds in
+            let data = await probe.decode(spec: spec, seconds: seconds)
+            if Task.isCancelled { probe.cancelled.insert(seconds) }
+            return data
+        }
+        let spec = PlaySpec(url: "file:///preview-fixture.mp4")
+        let warmup = Task { await store.prefetch(spec: spec, mediaID: "A", targets: [4, 8]) }
+        defer { warmup.cancel(); store.reset(); probe.finishAll() }
+        try #require(await previewWait(for: .seconds(4)) { probe.calls == [4] })
+        let hover = Task { ChapterPreviewImageResult(await store.image(spec: spec, mediaID: "A", seconds: 12)) }
+        try #require(await previewWait { probe.calls.contains(12) })
+        probe.finish(seconds: 4)
+        try #require(await previewWait { probe.cancelled.contains(4) })
+        #expect(probe.calls == [4, 12])
+        #expect(store.cachedImage(mediaID: "A", seconds: 4) == nil)
+        probe.finish(seconds: 12)
+        #expect(await hover.value.image != nil)
+    }
+
+    @MainActor
+    @Test func speculativeFailureDoesNotBlockAnImmediateVisibleRetry() async throws {
+        let spec = PlaySpec(url: "file:///preview-fixture.mp4")
+        let data = try #require(chapterPreviewPNG())
+        var attempts = 0
+        let store = PlayerChapterPreviewStore { _, _ in
+            attempts += 1
+            return attempts == 1 ? nil : data
+        }
+        await store.prefetch(spec: spec, mediaID: "A", targets: [4])
+        #expect(await store.image(spec: spec, mediaID: "A", seconds: 4) != nil)
+        #expect(attempts == 2)
+    }
+
     @MainActor
     @Test(.enabled(if: ProcessInfo.processInfo.environment["NETVPLAYER_CHAPTER_PREVIEW_URL"] != nil))
     func backgroundWarmupCachesRealRangeFramesBeforeOpeningPreview() async throws {
@@ -147,7 +197,7 @@ struct PlayerChapterPreviewTests {
             calls.append(seconds)
             return await PlayerChapterThumbnailDecoder.shared.imageData(spec: spec, seconds: seconds)
         }
-        let warmup = Task { await store.prefetch(spec: spec, mediaID: "range", targets: [0, 4], position: 4) }
+        let warmup = Task { await store.prefetch(spec: spec, mediaID: "range", targets: [4, 0]) }
         try await Task.sleep(for: .milliseconds(2200))
         #expect(store.cachedImage(mediaID: "range", seconds: 4) == nil)
         PlaybackBackgroundBudget.shared.update(session: reservation, bufferedAhead: 60,
@@ -203,12 +253,18 @@ private final class ChapterPreviewImageResult {
 @MainActor
 private final class ChapterPreviewDecodeProbe {
     var calls: [Double] = []
+    var cancelled: Set<Double> = []
     private var waiting: [Double: CheckedContinuation<Data?, Never>] = [:]
     func decode(spec _: PlaySpec, seconds: Double) async -> Data? {
         calls.append(seconds)
         return await withCheckedContinuation { waiting[seconds] = $0 }
     }
     func finish(seconds: Double) { waiting.removeValue(forKey: seconds)?.resume(returning: chapterPreviewPNG()) }
+    func finishAll() {
+        let tasks = waiting.values
+        waiting.removeAll()
+        for task in tasks { task.resume(returning: nil) }
+    }
 }
 
 @MainActor
@@ -221,8 +277,8 @@ private func chapterPreviewPNG() -> Data? {
 }
 
 @MainActor
-private func previewWait(_ condition: () -> Bool) async -> Bool {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+private func previewWait(for timeout: Duration = .seconds(2), _ condition: () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now.advanced(by: timeout)
     while !condition(), ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
     return condition()
 }

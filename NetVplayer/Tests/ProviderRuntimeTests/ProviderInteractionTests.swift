@@ -5,6 +5,24 @@ import Testing
 
 @Suite(.serialized)
 struct ProviderInteractionTests {
+    @Test func dialogActivationTargetsTheCurrentWorkerOnce() async throws {
+        let observer = DialogActivationObserver()
+        let fixture = try InteractionFixture(onDialogActive: { await observer.record($0) })
+        defer { fixture.remove() }
+        let saved = ProviderRequest(providerID: "fixture", operation: .player)
+        _ = try await fixture.client.request(saved, interaction: fixture.policy)
+        #expect(await observer.processIDs.isEmpty)
+        let dialog = ProviderRequest(providerID: "fixture", operation: .player, arguments: ["mode": .string("activation")])
+        let response = try await fixture.client.request(dialog, interaction: fixture.policy)
+        guard case .number(let processID) = response.result else {
+            Issue.record("Expected the responding helper's PID")
+            try await fixture.client.stopAndConfirmExit()
+            return
+        }
+        #expect(await observer.processIDs == [Int32(processID)])
+        try await fixture.client.stopAndConfirmExit()
+    }
+
     @Test(arguments: ["uc", "ali", "quark", "baidu", "unknown"])
     func dialogWaitDoesNotConsumeNetworkBudgetOrDelaySavedSessions(drive: String) async throws {
         let fixture = try InteractionFixture()
@@ -62,13 +80,18 @@ struct ProviderInteractionTests {
     }
 }
 
+private actor DialogActivationObserver {
+    private(set) var processIDs: [Int32] = []
+    func record(_ pid: Int32) { processIDs.append(pid) }
+}
+
 private struct InteractionFixture {
     let root: URL
     let directory: URL
     let client: ProviderProcessClient
     let policy: ProviderInteractionPolicy
 
-    init(maximumWait: Duration = .seconds(3)) throws {
+    init(maximumWait: Duration = .seconds(3), onDialogActive: (@Sendable (Int32) async -> Void)? = nil) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("netvplayer-interaction-\(UUID().uuidString)")
         directory = root.appendingPathComponent(".runtime")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -77,17 +100,23 @@ private struct InteractionFixture {
         client = ProviderProcessClient(command: ProviderCommand(executableURL: URL(fileURLWithPath: "/usr/bin/python3"),
             arguments: [script.path, directory.path], currentDirectoryURL: root, stateDirectoryURL: root,
             environment: ["NETVPLAYER_PROVIDER_ID": "fixture", "NETVPLAYER_PROVIDER_STATE": root.path]))
-        policy = ProviderInteractionPolicy(directory: directory, maximumWait: maximumWait, pollInterval: .milliseconds(10))
+        policy = ProviderInteractionPolicy(directory: directory, maximumWait: maximumWait,
+            pollInterval: .milliseconds(10), onDialogActive: onDialogActive)
     }
     func remove() { try? FileManager.default.removeItem(at: root) }
     static let helper = #"""
-    import json, pathlib, sys, time, uuid
+    import json, os, pathlib, sys, time, uuid
     root = pathlib.Path(sys.argv[1])
     for line in sys.stdin:
         request = json.loads(line)
         mode = request.get('arguments', {}).get('mode', '')
         state = root / ('interaction-' + request['request_id'] + '.state')
-        if mode == 'authorize':
+        if mode == 'activation':
+            state.write_text('active')
+            time.sleep(0.2)
+            state.write_text('active')
+            time.sleep(0.2)
+        elif mode == 'authorize':
             state.write_text('active')
             time.sleep(1.25)
             state.write_text('idle')
@@ -104,7 +133,7 @@ private struct InteractionFixture {
             if mode == 'dismissed': state.write_text('idle')
             time.sleep(3)
         print(json.dumps({'request_id': request['request_id'], 'ok': True,
-            'result': request.get('arguments', {}).get('drive', 'saved')}), flush=True)
+            'result': os.getpid() if mode == 'activation' else request.get('arguments', {}).get('drive', 'saved')}), flush=True)
         if request.get('operation') == 'shutdown': break
     """#
 }

@@ -1356,6 +1356,8 @@ uc_login = Path(state_path) / 'uc-login.fixture'
 loaded_uc_login = uc_login.exists()
 sdk_recovery = Path(state_path) / 'sdk-server-recovery.fixture'
 loaded_sdk_recovery = sdk_recovery.exists()
+sdk_http_recovery = Path(state_path) / 'sdk-http-recovery.fixture'
+loaded_sdk_http_recovery = sdk_http_recovery.exists()
 sdk_server = None
 for raw in sys.stdin:
     request = json.loads(raw)
@@ -1417,11 +1419,15 @@ for raw in sys.stdin:
                                 'url': 'http://127.0.0.1:9978/proxy?do=ssa&csp=FixtureGuard&track=1&token=secret-fixture-lyrics'},
                                {'name': 'Remote', 'format': 'srt', 'url': 'https://subtitle.example.test/remote.srt'},
                                {'name': 'Inline', 'format': 'ass', 'url': 'data:text/x-ssa;base64,Zml4dHVyZQ=='}]}
-        elif args.get('id', '').startswith(('sdk-recover-', 'sdk-owned-')):
-            owns_server = args['id'].startswith('sdk-owned-') or loaded_sdk_recovery
+        elif args.get('id', '').startswith(('sdk-recover-', 'sdk-owned-', 'sdk-http-500-')):
+            fails_http = args['id'].startswith('sdk-http-500-')
+            owns_server = fails_http or args['id'].startswith('sdk-owned-') or loaded_sdk_recovery
             if not owns_server:
                 sdk_recovery.write_text('saved SDK session')
             elif sdk_server is None:
+                returns_http_500 = fails_http and (not loaded_sdk_http_recovery or args['id'].startswith('sdk-http-500-always-'))
+                if returns_http_500:
+                    sdk_http_recovery.write_text('saved SDK session')
                 class SDKHandler(http.server.BaseHTTPRequestHandler):
                     def do_GET(self):
                         body = Path('sdk-media-body.fixture')
@@ -1429,8 +1435,10 @@ for raw in sys.stdin:
                         with open('sdk-http.jsonl', 'a') as log:
                             log.write(json.dumps({'path': self.path, 'range': self.headers.get('Range', ''),
                                                   'user_agent': self.headers.get('User-Agent', '')}) + '\n')
-                        self.send_response(200)
-                        self.send_header('Content-Type', 'video/mp4')
+                        if returns_http_500:
+                            data = b'Synthetic SDK error'
+                        self.send_response(500 if returns_http_500 else 200)
+                        self.send_header('Content-Type', 'text/plain' if returns_http_500 else 'video/mp4')
                         self.send_header('Content-Length', str(len(data)))
                         self.end_headers()
                         self.wfile.write(data)

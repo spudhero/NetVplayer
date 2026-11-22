@@ -1,3 +1,4 @@
+import AppKit
 import CoreFoundation
 import CryptoKit
 import DriveEngine
@@ -9,6 +10,9 @@ import ProxyServer
 
 /// Original Android execution using a verified, independently installed runtime component.
 public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCacheClearing {
+    // Foreground playback can spend its existing preparation retry on a new SDK session.
+    @TaskLocal public static var allowsSDKMediaHTTPRecovery = false
+
     public nonisolated let providerID: String
     private let runtime: DevelopmentAndroidRuntimeLayout
     private let binding: DevelopmentAndroidRuntimeManifest.Binding
@@ -22,6 +26,11 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
     private var requests: [UUID: (ProviderOperation, Task<ProviderResponse, Error>)] = [:]
     private var streams: [UUID: Task<Void, Error>] = [:]
     private var shutdownJob: Task<Void, Never>?
+    private var idleShutdown: Task<Void, Never>?
+    private let idleShutdownDelay: Duration
+    private var preparingPlaybackCount = 0
+    private var hasPlayback = false
+    private var releaseWhenIdle = false
     private var contentCacheEpoch: UInt64 = 0
     private let diagnosticSession = UUID().uuidString
     private var helperGeneration: UInt64 = 0
@@ -53,6 +62,7 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         sessionStateRoot: URL? = nil,
         baiduCookieProvider: (@Sendable () async -> String?)? = nil,
         cloudCredentialProvider: (@Sendable (DriveProvider) async -> String?)? = nil,
+        idleShutdownDelay: Duration = .seconds(15),
         probeSDKMedia: @escaping @Sendable (String, [String: String]) async throws -> [Int64] = {
             try await DevelopmentAndroidMP4CodecRepair.probe($0, headers: $1)
         }
@@ -62,6 +72,7 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         self.stateDirectory = stateDirectory
         self.sessionStateRoot = sessionStateRoot ?? stateDirectory.appendingPathComponent("source-sessions-v1", isDirectory: true)
         self.probeSDKMedia = probeSDKMedia
+        self.idleShutdownDelay = idleShutdownDelay
         // Native account callbacks remain accepted for source compatibility.
         // Original Android sources own their login and never read these stores.
         providerID = runtime.manifest.providerID
@@ -216,6 +227,7 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
     }
 
     public func detailContent(site: Site, id: String) async throws -> Result {
+        await shutdownJob?.value
         let epoch = try beginContentAccess(site)
         let detail = try await result(operation: .detail, site: site, arguments: ["id": .string(id)])
         try validateContentAccess(site, epoch: epoch)
@@ -269,8 +281,15 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
     }
 
     public func playerContent(site: Site, flag: String, id: String) async throws -> Result {
+        await shutdownJob?.value
         webMediaGeneration &+= 1
         let epoch = try beginContentAccess(site)
+        releaseWhenIdle = false
+        preparingPlaybackCount += 1
+        defer {
+            preparingPlaybackCount -= 1
+            scheduleIdleShutdown()
+        }
         let arguments: [String: ProviderJSONValue] = ["flag": .string(flag), "id": .string(id), "vip_flags": .array([])]
         let playerInput = DevelopmentAndroidLifecycleDiagnostics.sha256(try JSONEncoder.providerCanonical.encode(arguments))
         let decoded = try await result(operation: .player, site: site, arguments: arguments)
@@ -309,10 +328,12 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             localized.format = first.format
             localized.parse = 0
             localized.jx = 0
+            hasPlayback = true
             return localized
         }
         let result = try await localizePlaybackURL(decoded, site: site, epoch: epoch, playerInput: playerInput)
         try validateContentAccess(site, epoch: epoch)
+        hasPlayback = true
         return result
     }
 
@@ -397,7 +418,7 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             if sdkPorts.isEmpty {
                 // A different source may still be serving the cached port. Do
                 // not send this source's media parameters to that other helper.
-                try await retireDisconnectedSDKServer(site: site, lease: lease)
+                try await retireSDKMediaServer(site: site, lease: lease)
                 throw Self.unverifiedSDKMediaServer()
             }
             if !sdkPorts.contains(address.port ?? 0) {
@@ -418,13 +439,20 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             let patches: [Int64]
             do {
                 patches = try await probeSDKMedia(decoded.url, decoded.header)
+            } catch DevelopmentAndroidMP4CodecRepair.ProbeFailure.sdkHTTP500 {
+                try Task.checkCancellation()
+                try validateWebMediaLease(lease, site: site)
+                if Self.allowsSDKMediaHTTPRecovery {
+                    try await retireSDKMediaServer(site: site, lease: lease, failure: .http500)
+                }
+                throw SDKMediaServerFailure.http500.payload(retryable: false)
             } catch {
                 let failure = error as NSError
                 guard failure.domain == NSURLErrorDomain,
                       failure.code == URLError.cannotConnectToHost.rawValue else { throw error }
                 // Another SDK instance can shut down this helper's HTTP server
                 // without exiting its JVM. AppState owns the single retry budget.
-                try await retireDisconnectedSDKServer(site: site, lease: lease)
+                try await retireSDKMediaServer(site: site, lease: lease)
                 throw error
             }
             try validateContentAccess(site, epoch: epoch)
@@ -471,7 +499,24 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         ProviderErrorPayload(code: "android_sdk_media_unverified", message: L10n.text("无法连接到服务地址。"))
     }
 
-    private func retireDisconnectedSDKServer(site: Site, lease: WebMediaLease) async throws {
+    private enum SDKMediaServerFailure: String {
+        case connectionRefused = "sdk_media_connection_refused"
+        case http500 = "sdk_media_http_500"
+
+        func payload(retryable: Bool) -> ProviderErrorPayload {
+            switch self {
+            case .connectionRefused:
+                ProviderErrorPayload(code: "android_sdk_media_disconnected",
+                    message: L10n.text("无法连接到服务地址。"), retryable: retryable)
+            case .http500:
+                ProviderErrorPayload(code: "android_sdk_media_http_500",
+                    message: "Android SDK HTTP 500", retryable: retryable)
+            }
+        }
+    }
+
+    private func retireSDKMediaServer(site: Site, lease: WebMediaLease,
+                                      failure: SDKMediaServerFailure = .connectionRefused) async throws {
         let previous = operationTail
         let task = Task<ProviderResponse, Error> { [self] in
             await previous?.value
@@ -481,9 +526,8 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             try Task.checkCancellation()
             try validateContentAccess(site, epoch: lease.epoch)
             guard webMediaGeneration == lease.playback else { throw Self.staleContent() }
-            DiagnosticLog.write("[ANDROID_PLAYER_RECOVERY] reason=sdk_media_connection_refused action=retire_helper")
-            throw ProviderErrorPayload(code: "android_sdk_media_disconnected",
-                message: L10n.text("无法连接到服务地址。"), retryable: true)
+            DiagnosticLog.write("[ANDROID_PLAYER_RECOVERY] reason=\(failure.rawValue) action=retire_helper")
+            throw failure.payload(retryable: true)
         }
         let requestID = UUID()
         requests[requestID] = (.player, task)
@@ -668,7 +712,10 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         }
         let token = UUID()
         streams[token] = work
-        defer { streams.removeValue(forKey: token) }
+        defer {
+            streams.removeValue(forKey: token)
+            scheduleIdleShutdown()
+        }
         try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
 
@@ -679,11 +726,35 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             sendHead: sendHead, sendBody: sendBody)
     }
 
-    func cancelPlayback() {
+    func cancelPlayback() async {
         invalidateContentAccess()
         proxyRoutes.removeAll()
+        hasPlayback = false
+        releaseWhenIdle = true
         for (operation, request) in requests.values where [.player, .proxy, .manualVideoCheck, .isVideoFormat].contains(operation) { request.cancel() }
         for stream in streams.values { stream.cancel() }
+        if canStopIdleHelper { await shutdown() }
+    }
+
+    private var canStopIdleHelper: Bool {
+        client != nil && !closed && !hasPlayback && preparingPlaybackCount == 0 && requests.isEmpty && streams.isEmpty
+    }
+
+    private func scheduleIdleShutdown() {
+        idleShutdown?.cancel()
+        idleShutdown = nil
+        guard canStopIdleHelper else { return }
+        let delay = releaseWhenIdle ? Duration.zero : idleShutdownDelay
+        idleShutdown = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            await self?.stopIdleHelper()
+        }
+    }
+
+    private func stopIdleHelper() async {
+        guard !Task.isCancelled, canStopIdleHelper else { return }
+        idleShutdown = nil
+        await shutdown()
     }
 
     public static func cancelPlaybackIfEnabled(site: Site) async {
@@ -691,6 +762,10 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
     }
 
     func shutdown() async {
+        idleShutdown?.cancel()
+        idleShutdown = nil
+        hasPlayback = false
+        releaseWhenIdle = false
         invalidateContentAccess()
         if let shutdownJob { await shutdownJob.value; return }
         closed = true
@@ -710,7 +785,7 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             initializedConfiguration = nil
             initializedDrive = nil
             proxyRoutes.removeAll()
-                shutdownJob = nil
+            shutdownJob = nil
             closed = false
         }
         shutdownJob = job
@@ -915,6 +990,8 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
     }
 
     private func response(operation: ProviderOperation, site: Site, arguments: [String: ProviderJSONValue] = [:], webLease: WebMediaLease? = nil) async throws -> ProviderResponse {
+        await shutdownJob?.value
+        try Task.checkCancellation()
         try validate(site)
         let enqueued = ProcessInfo.processInfo.systemUptime
         let previous = operationTail
@@ -926,7 +1003,10 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         }
         let requestID = UUID()
         requests[requestID] = (operation, task)
-        defer { requests.removeValue(forKey: requestID) }
+        defer {
+            requests.removeValue(forKey: requestID)
+            scheduleIdleShutdown()
+        }
         operationTail = Task { _ = try? await task.value }
         return try await withTaskCancellationHandler {
             try await task.value
@@ -1028,7 +1108,8 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             let value = try await client.request(ProviderRequest(
                 providerID: providerID, operation: operation, site: site, arguments: arguments
             ), timeout: timeout, interaction: runtime.desktopUIEnabled && operation == .player
-                ? ProviderInteractionPolicy(directory: persistentData.appendingPathComponent(".runtime")) : nil)
+                ? ProviderInteractionPolicy(directory: persistentData.appendingPathComponent(".runtime"),
+                    onDialogActive: Self.activateInteractionHelper) : nil)
             observation.operationMS = max(0, (ProcessInfo.processInfo.systemUptime - operationStart) * 1_000)
             try Self.requireSuccess(value)
             observation.outcome = "received"
@@ -1081,6 +1162,22 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         initializedConfiguration = nil
         initializedDrive = nil
         proxyRoutes.removeAll()
+    }
+
+    @MainActor
+    private static func activateInteractionHelper(processID: Int32) async {
+        let host = NSRunningApplication.current
+        for _ in 0..<6 {
+            guard !Task.isCancelled,
+                  let helper = NSRunningApplication(processIdentifier: processID),
+                  !helper.isTerminated else { return }
+            if helper.isActive { return }
+            // The user may have switched apps while the provider was loading.
+            guard host.isActive, let app = NSApp else { return }
+            app.yieldActivation(to: helper)
+            _ = helper.activate(from: host, options: [.activateAllWindows])
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+        }
     }
 
     private func session(persistentData: URL, authorizationDrive: DriveProvider?) async throws -> ProviderProcessClient {

@@ -18,47 +18,67 @@ public final class PlayerChapterThumbnailDecoder: @unchecked Sendable {
         guard PlaybackBackgroundBudget.shared.permitsOptionalWork else { return nil }
         do {
             return try await PlaybackBackgroundBudget.shared.withRead(purpose: .chapterPreview, bytes: 8 * 1_024 * 1_024) {
-                await self.ownedImageData(spec: spec, seconds: nil)
+                await self.ownedImageData(spec: spec, seconds: nil, usesReadLease: false)
             }
         } catch { return nil }
     }
 
     public func imageData(spec: PlaySpec, seconds: Double) async -> Data? {
+        guard !Task.isCancelled, !spec.url.isEmpty, spec.drm == nil,
+              seconds.isFinite, seconds >= 0, seconds < Double(Int64.max) / 1_000 else { return nil }
         let session = spec.readSession ?? PlaybackReadSession()
+        let generation = session.generation
+        let isNetwork = PlaybackTransferPolicy.profile(for: spec).context.connection != .local
+        if isNetwork {
+            // Seeking or buffering can defer admission. The media reader's
+            // lifetime starts after that wait, while the generation stays fixed.
+            let admissionDeadline = ContinuousClock.now.advanced(by: .seconds(4))
+            while !PlaybackBackgroundBudget.shared.permitsBackgroundWork {
+                guard session.isCurrent(generation), ContinuousClock.now < admissionDeadline else { return nil }
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return nil }
+            }
+        }
         let identity = PlaybackMediaIdentity.resolved(for: spec)
             ?? .init(source: "runtime", account: "session", item: session.id.uuidString)
+        let lifetime: TimeInterval = isNetwork ? 12 : 8
         let owner = session.makeOwner(mediaIdentity: identity, purpose: .chapterPreview,
-            expiry: ProcessInfo.processInfo.systemUptime + 8)
+            expiry: ProcessInfo.processInfo.systemUptime + lifetime)
+        guard !Task.isCancelled, owner.generation == generation, !owner.isCancelled else { return nil }
         let lease = ProxyServer.shared.readLease(for: spec, session: session,
-            mediaIdentity: identity, purpose: .chapterPreview, lifetime: 8)
+            mediaIdentity: identity, purpose: .chapterPreview, lifetime: lifetime)
         defer { owner.cancel(); lease?.cancel() }
         var prepared = spec
         if let lease { prepared.url = lease.url }
         let input = prepared
         do {
             return try await owner.perform {
-                if lease != nil || PlaybackTransferPolicy.profile(for: input).context.connection == .local {
-                    return await self.ownedImageData(spec: input, seconds: seconds)
+                if let lease {
+                    return await withTaskCancellationHandler {
+                        await self.ownedImageData(spec: input, seconds: seconds, usesReadLease: true)
+                    } onCancel: { lease.cancel() }
+                }
+                if !isNetwork {
+                    return await self.ownedImageData(spec: input, seconds: seconds, usesReadLease: false)
                 }
                 return try await PlaybackBackgroundBudget.shared.withRead(owner: owner, bytes: 8 * 1024 * 1024) {
-                    await self.ownedImageData(spec: input, seconds: seconds)
+                    await self.ownedImageData(spec: input, seconds: seconds, usesReadLease: false)
                 }
             }
         } catch { return nil }
     }
 
-    private func ownedImageData(spec: PlaySpec, seconds: Double?) async -> Data? {
-        guard !Task.isCancelled, !spec.url.isEmpty, spec.drm == nil,
-              seconds.map({ $0.isFinite && $0 >= 0 && $0 < Double(Int64.max) / 1_000 }) ?? true else { return nil }
-        if PlaybackTransferPolicy.profile(for: spec).context.connection != .local {
-            do { try await PlaybackBackgroundBudget.shared.waitForBackgroundPermission() }
-            catch { return nil }
-        }
+    private func ownedImageData(spec: PlaySpec, seconds: Double?, usesReadLease: Bool) async -> Data? {
+        guard !Task.isCancelled, !spec.url.isEmpty, spec.drm == nil else { return nil }
+        let isNetwork = PlaybackTransferPolicy.profile(for: spec).context.connection != .local
+        // Leased proxy sources admit each range separately. A foreground
+        // request may stall a range without invalidating the entire preview.
+        let checksBackgroundPermission = isNetwork && !usesReadLease
         let cancellation = PreviewCancellation()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 queue.async {
-                    let data = Self.decode(spec: spec, seconds: seconds, cancellation: cancellation)
+                    let data = Self.decode(spec: spec, seconds: seconds, cancellation: cancellation,
+                        checksBackgroundPermission: checksBackgroundPermission)
                     continuation.resume(returning: cancellation.isCancelled ? nil : data)
                 }
             }
@@ -67,9 +87,9 @@ public final class PlayerChapterThumbnailDecoder: @unchecked Sendable {
         }
     }
 
-    private static func decode(spec: PlaySpec, seconds: Double?, cancellation: PreviewCancellation) -> Data? {
-        let network = PlaybackTransferPolicy.profile(for: spec).context.connection != .local
-        guard !cancellation.isCancelled, !network || PlaybackBackgroundBudget.shared.permitsBackgroundWork,
+    private static func decode(spec: PlaySpec, seconds: Double?, cancellation: PreviewCancellation,
+                               checksBackgroundPermission: Bool) -> Data? {
+        guard !cancellation.isCancelled, !checksBackgroundPermission || PlaybackBackgroundBudget.shared.permitsBackgroundWork,
               seconds != nil || PlaybackBackgroundBudget.shared.permitsOptionalWork,
               let context = nv_mpv_create() else { return nil }
           let nativeRenderer = nv_mpv_runtime_capabilities(context) & 3 == 3
@@ -130,11 +150,11 @@ public final class PlayerChapterThumbnailDecoder: @unchecked Sendable {
         guard !cancellation.isCancelled,
               nv_mpv_command3(context, "loadfile", spec.url, "replace") >= 0 else { return nil }
 
-        let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+          let deadline = ContinuousClock.now.advanced(by: .seconds(8))
           var restarted = false
         while !cancellation.isCancelled, ContinuousClock.now < deadline {
               if seconds == nil, !PlaybackBackgroundBudget.shared.permitsOptionalWork { return nil }
-            if network, !PlaybackBackgroundBudget.shared.permitsBackgroundWork { return nil }
+              if checksBackgroundPermission, !PlaybackBackgroundBudget.shared.permitsBackgroundWork { return nil }
               if let surface {
                   surface.makeCurrent()
                   guard nv_mpv_render(context, surface.framebuffer, 320, 180, 0) >= 0 else { return nil }

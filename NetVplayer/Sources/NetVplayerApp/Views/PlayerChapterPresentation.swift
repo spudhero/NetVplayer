@@ -58,7 +58,7 @@ enum PlayerChapterPreviewPolicy {
     /// one pixel must not open another remote media reader.
     static func targets(chapters: [PlayerChapter], duration: Double) -> [Double] {
         guard duration.isFinite, duration > 0, duration < Double(Int64.max) / 1_000 else { return [] }
-        let chapterPoints = Set(chapters.map(\.seconds).filter { $0.isFinite && $0 >= 0 && $0 < duration }).sorted()
+        let chapterPoints = chapterStarts(chapters, duration: duration).sorted()
         // Reserve timeline coverage even when chapter starts cluster near the
         // beginning. Sampling by chapter index also retains the last chapter.
         let chapterSlots = capacity - 16
@@ -79,6 +79,32 @@ enum PlayerChapterPreviewPolicy {
         return points.sorted()
     }
 
+    static func warmupTargets(chapters: [PlayerChapter], duration: Double, position: Double) -> [Double] {
+        let starts = chapterStarts(chapters, duration: duration)
+        let nearest = targets(chapters: chapters, duration: duration)
+            .sorted { abs($0 - position) < abs($1 - position) }
+        let byStart = Dictionary(chapters.map { ($0.seconds, $0) }, uniquingKeysWith: { first, _ in first })
+        let chapterFrames = nearest.compactMap { seconds in
+            byStart[seconds].map { chapterImageSeconds(for: $0, chapters: chapters, duration: duration) }
+        }
+        // Warm chapter markers first. Ordinary timeline positions beyond the
+        // nearby samples are decoded when hovered.
+        let chapterFrameSet = Set(chapterFrames)
+        let timelineFrames = nearest.filter { !starts.contains($0) && !chapterFrameSet.contains($0) }.prefix(4)
+        return chapterFrames + timelineFrames
+    }
+
+    static func chapterImageSeconds(for chapter: PlayerChapter, chapters: [PlayerChapter], duration: Double) -> Double {
+        guard let end = PlayerChapterPresentationPolicy.end(of: chapter, in: chapters, duration: duration),
+              end.isFinite, end > chapter.seconds else { return chapter.seconds }
+        // Skip the transition frame while staying inside even a short chapter.
+        return chapter.seconds + min(2, (end - chapter.seconds) / 3)
+    }
+
+    private static func chapterStarts(_ chapters: [PlayerChapter], duration: Double) -> Set<Double> {
+        Set(chapters.map(\.seconds).filter { $0.isFinite && $0 >= 0 && $0 < duration })
+    }
+
     static func timelineSeconds(_ seconds: Double, chapters: [PlayerChapter], duration: Double) -> Double {
         targets(chapters: chapters, duration: duration).min(by: { abs($0 - seconds) < abs($1 - seconds) }) ?? seconds
     }
@@ -93,10 +119,15 @@ final class PlayerChapterPreviewStore: ObservableObject {
         let image: NSImage
         init(image: NSImage) { self.image = image }
     }
+    private struct Pending {
+        let id: UUID
+        let task: Task<Frame?, Never>
+        var isSpeculative: Bool
+    }
     private var mediaID = ""
     private var images: [Double: NSImage] = [:]
     private var access: [Double: ContinuousClock.Instant] = [:]
-    private var pending: [Double: Task<Frame?, Never>] = [:]
+    private var pending: [Double: Pending] = [:]
     private var unavailable: [Double: ContinuousClock.Instant] = [:]
     private var generation = 0
     private let decode: Decode
@@ -116,33 +147,50 @@ final class PlayerChapterPreviewStore: ObservableObject {
     }
 
     func image(spec: PlaySpec?, mediaID: String, seconds: Double) async -> NSImage? {
+        await image(spec: spec, mediaID: mediaID, seconds: seconds, isSpeculative: false)
+    }
+
+    private func image(spec: PlaySpec?, mediaID: String, seconds: Double, isSpeculative: Bool) async -> NSImage? {
         guard !Task.isCancelled, seconds.isFinite, seconds >= 0 else { return nil }
         if self.mediaID != mediaID { reset(mediaID: mediaID) }
         if let image = cachedImage(mediaID: mediaID, seconds: seconds) { return image }
         guard let spec else { return nil }
         if let retryAfter = unavailable[seconds], ContinuousClock.now < retryAfter { return nil }
         let generation = generation
-        // Visible rows wait for a slot rather than being dropped permanently.
-        // A cancelled hover leaves before opening another media reader.
-        while pending.count >= 2, pending[seconds] == nil {
+        if !isSpeculative {
+            for (target, request) in pending where target != seconds && request.isSpeculative {
+                request.task.cancel()
+            }
+        }
+        while (pending[seconds]?.task.isCancelled == true)
+            || (pending[seconds] == nil && (pending.count >= 2 || (isSpeculative && !pending.isEmpty))) {
             do { try await Task.sleep(for: .milliseconds(50)) } catch { return nil }
             guard generation == self.generation, mediaID == self.mediaID else { return nil }
             if let image = cachedImage(mediaID: mediaID, seconds: seconds) { return image }
         }
-        if let task = pending[seconds] {
-            let frame = await task.value
+        if let request = pending[seconds] {
+            if !isSpeculative { pending[seconds]?.isSpeculative = false }
+            let frame = await request.task.value
             return Task.isCancelled ? nil : frame?.image
         }
+        let id = UUID()
         let task = Task { @MainActor [weak self, decode] () -> Frame? in
+            guard !Task.isCancelled else {
+                if self?.pending[seconds]?.id == id { self?.pending[seconds] = nil }
+                return nil
+            }
             let data = await decode(spec, seconds)
-            guard let self, !Task.isCancelled, generation == self.generation, mediaID == self.mediaID else { return nil }
+            guard let self, generation == self.generation, let request = self.pending[seconds], request.id == id
+            else { return nil }
             self.pending[seconds] = nil
+            guard !Task.isCancelled else { return nil }
             guard let data, let image = NSImage(data: data) else {
-                if PlaybackBackgroundBudget.shared.permitsBackgroundWork {
-                    self.unavailable[seconds] = ContinuousClock.now.advanced(by: .seconds(30))
+                if !request.isSpeculative, PlaybackBackgroundBudget.shared.permitsBackgroundWork {
+                    self.unavailable[seconds] = ContinuousClock.now.advanced(by: .seconds(2))
                 }
                 return nil
             }
+            self.unavailable[seconds] = nil
             if self.images.count >= PlayerChapterPreviewPolicy.capacity,
                let oldest = self.access.min(by: { $0.value < $1.value })?.key {
                 self.images.removeValue(forKey: oldest); self.access.removeValue(forKey: oldest)
@@ -152,32 +200,36 @@ final class PlayerChapterPreviewStore: ObservableObject {
             self.revision += 1
             return Frame(image: image)
         }
-        pending[seconds] = task
-        let result = await task.value
+        pending[seconds] = Pending(id: id, task: task, isSpeculative: isSpeculative)
+        let result = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: { [weak self] in
+            guard isSpeculative else { return }
+            Task { @MainActor in
+                guard let request = self?.pending[seconds], request.id == id, request.isSpeculative else { return }
+                request.task.cancel()
+            }
+        }
         return Task.isCancelled ? nil : result?.image
     }
 
-    func prefetch(spec: PlaySpec?, mediaID: String, targets: [Double], position: Double) async {
-        guard let spec, !targets.isEmpty else { return }
+    func prefetch(spec: PlaySpec?, mediaID: String, targets: [Double]) async {
+        guard !Task.isCancelled, let spec, !targets.isEmpty else { return }
         if self.mediaID != mediaID { reset(mediaID: mediaID) }
         let generation = generation
         // Allow the primary demuxer to establish its buffer before seeking
         // remote frames. Decoder also observes the global playback budget.
         do { try await Task.sleep(for: .seconds(2)) } catch { return }
-        for seconds in targets.sorted(by: { abs($0 - position) < abs($1 - position) }) {
+        for seconds in targets {
             guard !Task.isCancelled, generation == self.generation else { return }
-            while pending.count >= 2 {
-                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-                guard generation == self.generation else { return }
-            }
-            _ = await image(spec: spec, mediaID: mediaID, seconds: seconds)
+            _ = await image(spec: spec, mediaID: mediaID, seconds: seconds, isSpeculative: true)
         }
     }
 
     func reset(mediaID: String = "") {
         self.mediaID = mediaID
         generation += 1
-        for task in pending.values { task.cancel() }
+        for request in pending.values { request.task.cancel() }
         pending.removeAll()
         images.removeAll()
         access.removeAll()

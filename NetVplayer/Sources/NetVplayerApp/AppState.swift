@@ -341,7 +341,15 @@ final class AppState: ObservableObject {
         }
     }
     @Published var activeSite: Site? {
-        didSet { onlineDetailMetadata.receive(onlineDetailInput) }
+        didSet {
+            onlineDetailMetadata.receive(onlineDetailInput)
+            if let previous = oldValue, activeSite?.key != previous.key || activeSite?.api != previous.api {
+                Task { @MainActor [weak self] in
+                    guard self?.activeSite?.key != previous.key || self?.activeSite?.api != previous.api else { return }
+                    await DevelopmentAndroidSiteProvider.cancelPlaybackIfEnabled(site: previous)
+                }
+            }
+        }
     }
     @Published private(set) var contentCatalogState = ContentCatalogState()
     @Published private(set) var isCatalogRefreshing = false
@@ -4424,8 +4432,12 @@ final class AppState: ObservableObject {
                 )
             }
             // 调用 SiteApi 抓取该剧集对应的播放流地址
-            var result = try await vodDataSource.playback(site: site, flag: self.selectedPlayFlag, id: episode.url,
-                                                             sites: self.sites, scope: sourceScope)
+            var result = try await DevelopmentAndroidSiteProvider.$allowsSDKMediaHTTPRecovery.withValue(
+                preparationRetryAttempt == 0 && allowsAutomaticVodPlaybackActions
+            ) {
+                try await vodDataSource.playback(site: site, flag: selectedPlayFlag, id: episode.url,
+                                                  sites: sites, scope: sourceScope)
+            }
             var transferredFileLease = false
             defer {
                 if !transferredFileLease, let server = result.mediaServer {
@@ -6723,7 +6735,7 @@ final class AppState: ObservableObject {
             guard let requestID = hlsRecoverySlots.claim(live: live) else { return }
             hlsRecoveryTasks[live] = Task { @MainActor [weak self] in
                 guard let self else { return }
-                let playlist = try? await HLSRecovery.prepare(spec)
+                let destination = try? await HLSRecovery.prepare(spec)
                 guard !Task.isCancelled, self.hlsRecoverySlots.isCurrent(requestID, live: live) else { return }
                 guard self.hlsRecoverySlots.complete(requestID, live: live) else { return }
                 self.hlsRecoveryTasks[live] = nil
@@ -6735,7 +6747,13 @@ final class AppState: ObservableObject {
                       isLive ? self.isLivePlayerPresented : self.isPlayerPresented else { return }
                 var retry = spec
                 retry.metadata[HLSRecovery.attemptedKey] = "true"
-                if let playlist,
+                if case .redirectedPlaylist(let url)? = destination {
+                    retry.url = url.absoluteString
+                    retry.format = "hls"
+                    retry.mpvOptions["demuxer-lavf-format"] = "hls"
+                    self.log("[HLS_RECOVERY] verified redirected playlist; retrying once")
+                    await self.play(spec: retry)
+                } else if case .reducedMaster(let playlist)? = destination,
                    let relayed = ProxyPlaybackHandler.recoveryPlaylist(playlist, baseURL: spec.url, headers: spec.headers),
                    let resource = ProxyServer.shared.registerRecoveryPlaylist(relayed) {
                     retry.url = resource.url
@@ -8147,6 +8165,15 @@ final class AppState: ObservableObject {
             Task { await MediaServerRuntime.shared.release(server.leaseID, snapshot: snapshot) }
         }
         requestAutoAdvance(for: spec, trigger: "natural-eof")
+        if pendingAutoAdvanceID == nil, !isPreparingVodPlayback, ownsPlaybackContext(spec), let site = activeSite {
+            invalidateNextEpisodePreload(reason: "playback-ended")
+            // A replay waits for this retirement before opening a new helper.
+            let previousCleanup = playerDismissalCleanupTask
+            playerDismissalCleanupTask = Task {
+                await previousCleanup?.value
+                await DevelopmentAndroidSiteProvider.cancelPlaybackIfEnabled(site: site)
+            }
+        }
     }
 
     private func requestAutoAdvance(for spec: PlaySpec, trigger: String) {

@@ -6,6 +6,10 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [2.0.8](https://github.com/spudhero/NetVplayer/releases/tag/2.0.8)（2026-11-22）
+
+构建 **59**。统一点播控制面板的半透明样式，恢复章节预览和竖向音量控制。改进部分 HLS 跳转、磁力 Tracker 保留和 Android 原版起播恢复。配套 Mac 原生 Java 扩展 **1.1.6**。见[发布说明](docs/releases/2.0.8.md)。
+
 ### [2.0.7](https://github.com/spudhero/NetVplayer/releases/tag/2.0.7)（2026-11-20）
 
 正式构建 **58**。修复网盘切线后的加载提示、Android helper 媒体端口归属、HDR Vivid 暗部反相和来源目录浏览。配套原生 Python 1.1.19／Java 1.1.4，恢复部分原生适配并新增三种实现；上游不可用与个别转码偏色限制继续保留。见[发布说明](docs/releases/2.0.7.md)。
@@ -290,6 +294,10 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [2.0.8](https://github.com/spudhero/NetVplayer/releases/tag/2.0.8) (2026-11-22)
+
+Build **59** updates the translucent playback popovers and restores chapter previews and vertical volume controls. It improves some HLS redirects, preserves magnet trackers, and improves playback recovery for original Android sources. The companion native Java extension is **1.1.6**. See the [release notes](docs/releases/2.0.8.md).
 
 ### [2.0.7](https://github.com/spudhero/NetVplayer/releases/tag/2.0.7) (2026-11-20)
 
