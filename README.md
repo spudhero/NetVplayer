@@ -23,13 +23,7 @@
 
 <p align="center">macOS 14+ · Apple Silicon · 简体中文 / English</p>
 
-当前正式版本 / Current release: **NetVplayer 2.0.8 (build 59)** · [下载 / Download](https://github.com/spudhero/NetVplayer/releases/latest) · [发布说明 / Release notes](docs/releases/2.0.8.md)
-
-**NetVplayer 2.0.9 (build 60)**
-
-| 阶段 / Stage | 版本 / Version | 变更 / Changes |
-| --- | --- | --- |
-| Release candidate | 2.0.9 (build 60) | [发布说明 / Release notes](docs/releases/2.0.9.md) |
+当前正式版本 / Current release: **NetVplayer 2.0.9 (build 60)** · [下载 / Download](https://github.com/spudhero/NetVplayer/releases/latest) · [发布说明 / Release notes](docs/releases/2.0.9.md)
 
 ## 中文
 
