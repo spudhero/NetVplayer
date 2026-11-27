@@ -93,6 +93,13 @@ intermediate alone is still rejected by the application packager. Cached DASH
 intermediates must also match the builder, original binary and remaining base
 dependencies before reuse.
 
+The same libavformat build handles ByteVC2 MP4 video. The MOV demuxer recognizes
+the `bvc2` sample entry and normalizes the version 1 header of its `bv2C`
+configuration for the VVC decoder. Packet bytes, timestamps, and CENC samples
+follow the existing MOV paths. The runtime gate checks the MOV codec mapping
+and the bundled VVC decoder before the App advertises support to Providers.
+The receipt lists both source patches and records the observed capability.
+
 An already qualified Dolby base can also use the empty default output path
 `NetVplayer/.build/dolby-runtime/runtime.app` for this rebuild. The resulting Dolby
 and DASH receipts are retained there; the normal application build then needs no

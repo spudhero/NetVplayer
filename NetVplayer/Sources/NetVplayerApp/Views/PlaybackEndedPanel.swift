@@ -10,6 +10,7 @@ struct PlaybackEndedPanel: View {
     let interrupted: Bool
     let listState: EpisodeListLoadState
     let hasNext: Bool
+    let onResume: (() -> Void)?
     let onReplay: () -> Void
     let onNext: () -> Void
     let onRetryList: () -> Void
@@ -39,12 +40,17 @@ struct PlaybackEndedPanel: View {
                         .foregroundStyle(PlayerHUDPalette.muted)
                 }
             }
-            HStack(spacing: 10) {
-                actionButton(L10n.text("从头重播"), symbol: "arrow.counterclockwise", prominent: true, action: onReplay)
-                if listState == .incomplete {
-                    actionButton(L10n.text("重试剧集列表"), symbol: "arrow.clockwise", action: onRetryList)
-                } else if listState == .ready, hasNext {
-                    actionButton(L10n.text("下一集"), symbol: "forward.end", action: onNext)
+            VStack(spacing: 8) {
+                if let onResume {
+                    actionButton(L10n.text("从断点继续"), symbol: "play.fill", prominent: true, action: onResume)
+                }
+                HStack(spacing: 10) {
+                    actionButton(L10n.text("从头重播"), symbol: "arrow.counterclockwise", prominent: onResume == nil, action: onReplay)
+                    if listState == .incomplete {
+                        actionButton(L10n.text("重试剧集列表"), symbol: "arrow.clockwise", action: onRetryList)
+                    } else if listState == .ready, hasNext {
+                        actionButton(L10n.text("下一集"), symbol: "forward.end", action: onNext)
+                    }
                 }
             }
             .padding(.top, 4)

@@ -1125,6 +1125,7 @@ struct PlayerView: View {
                 interrupted: playerState.endDisposition == .premature,
                 listState: appState.episodeListState,
                 hasNext: appState.playbackEpisodeContext().hasNext,
+                onResume: appState.canResumeInterruptedPlayback ? { Task { await appState.resumeInterruptedPlayback() } } : nil,
                 onReplay: { Task { await appState.replayCurrentEpisode() } },
                 onNext: { Task { await appState.playRelativeEpisode(offset: 1) } },
                 onRetryList: { Task { await appState.retryEpisodeList() } }

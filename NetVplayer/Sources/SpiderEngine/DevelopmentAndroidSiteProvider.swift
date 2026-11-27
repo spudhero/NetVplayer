@@ -12,6 +12,7 @@ import ProxyServer
 public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCacheClearing {
     // Foreground playback can spend its existing preparation retry on a new SDK session.
     @TaskLocal public static var allowsSDKMediaHTTPRecovery = false
+    @TaskLocal package static var restartsSDKMediaAfterInterruption = false
 
     public nonisolated let providerID: String
     private let runtime: DevelopmentAndroidRuntimeLayout
@@ -300,6 +301,7 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         guard !Self.hasUnresolvedPlayerPayload(decoded, id: id) else {
             throw Self.unresolvedPlayerError(retryable: false)
         }
+        let episode = Self.playbackEpisode(in: id)
         var localized = decoded
         for index in localized.playbackCandidates.indices where localized.playbackCandidates[index].isPlayable {
             localized.playbackCandidates[index].providerName = site.name
@@ -311,8 +313,9 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             input.format = localized.playbackCandidates[index].format
             input.subs = localized.playbackCandidates[index].subtitles.isEmpty
                 ? decoded.subs : localized.playbackCandidates[index].subtitles
-            let candidate = try await localizePlaybackURL(input, site: site, epoch: epoch, playerInput: playerInput)
+            let candidate = try await localizePlaybackURL(input, site: site, epoch: epoch, playerInput: playerInput, episode: episode)
             try validateContentAccess(site, epoch: epoch)
+            localized.verifiedAndroidSDKMediaURLs.formUnion(candidate.verifiedAndroidSDKMediaURLs)
             localized.playbackCandidates[index].url = candidate.url
             localized.playbackCandidates[index].headers = candidate.header
             localized.playbackCandidates[index].format = candidate.format
@@ -331,7 +334,7 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             hasPlayback = true
             return localized
         }
-        let result = try await localizePlaybackURL(decoded, site: site, epoch: epoch, playerInput: playerInput)
+        let result = try await localizePlaybackURL(decoded, site: site, epoch: epoch, playerInput: playerInput, episode: episode)
         try validateContentAccess(site, epoch: epoch)
         hasPlayback = true
         return result
@@ -354,8 +357,43 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
             message: L10n.text("视频源未返回播放地址，请重试或切换线路。"), retryable: retryable)
     }
 
-    private func localizePlaybackURL(_ decoded: Result, site: Site, epoch: UInt64, playerInput: String) async throws -> Result {
+    private struct NumberedEpisode {
+        let series: String
+        let season: Int
+        let episode: Int
+
+        init?(filename: String) {
+            // Only a single, delimited SxxExx marker establishes the episode.
+            let markers = filename.matches(of: /(?i)(?:^|[^\p{L}\p{N}])s([0-9]{1,2})e([0-9]{1,4})(?![\p{L}\p{N}]|[-+&_]\s*e?[0-9])/)
+            guard markers.count == 1, let marker = markers.first,
+                  let season = Int(marker.output.1), let episode = Int(marker.output.2) else { return nil }
+            self.series = filename[..<marker.range.lowerBound]
+                .trimmingCharacters(in: .alphanumerics.inverted)
+                .lowercased()
+            self.season = season
+            self.episode = episode
+        }
+
+        func excludesSubtitle(named name: String) -> Bool {
+            guard let subtitle = Self(filename: name), subtitle.series == series else { return false }
+            return subtitle.season != season || subtitle.episode != episode
+        }
+    }
+
+    private static func playbackEpisode(in id: String) -> NumberedEpisode? {
+        guard let descriptor = (try? JSONSerialization.jsonObject(with: Data(id.utf8))) as? [String: Any],
+              let path = descriptor["path"] as? String,
+              let filename = (path.removingPercentEncoding ?? path).split(separator: "/").last else { return nil }
+        return NumberedEpisode(filename: String(filename))
+    }
+
+    private func localizePlaybackURL(
+        _ decoded: Result, site: Site, epoch: UInt64, playerInput: String, episode: NumberedEpisode?
+    ) async throws -> Result {
         var localized = try await localizeMediaURL(decoded, site: site, epoch: epoch, playerInput: playerInput)
+        if let episode {
+            localized.subs.removeAll { episode.excludesSubtitle(named: $0.name) }
+        }
         for index in localized.subs.indices {
             // CatVod also serves generated subtitles (for example MusicGuard's
             // SSA lyrics) through its Android loopback proxy. Preserve the
@@ -406,15 +444,14 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         let routeID = UUID().uuidString
         let repairsCodec = DevelopmentAndroidMP4CodecRepair.accepts(
             decoded.url, site: site, binding: binding, policy: runtime.compatibilityPolicy)
-        if repairsCodec || Self.isSDKMediaAddress(decoded.url) {
+        if repairsCodec || Self.sdkMediaPort(for: decoded.url) != nil {
             let lease = WebMediaLease(epoch: epoch, helper: helperGeneration, playback: webMediaGeneration,
                 configuration: try JSONEncoder.providerCanonical.encode(site))
-            let listeners = await client?.listeningTCPPorts()
-            try validateWebMediaLease(lease, site: site)
-            guard let listeners, var address = URLComponents(string: decoded.url) else {
+            guard var address = URLComponents(string: decoded.url) else {
                 throw Self.unverifiedSDKMediaServer()
             }
-            let sdkPorts = listeners.filter { (6677..<7000).contains($0) }
+            let snapshot = try await sdkMediaListeners(site: site, lease: lease)
+            let sdkPorts = snapshot.ports
             if sdkPorts.isEmpty {
                 // A different source may still be serving the cached port. Do
                 // not send this source's media parameters to that other helper.
@@ -431,6 +468,12 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
                 guard let corrected = address.string else { throw DevelopmentAndroidProxyManifest.unsupported() }
                 decoded.url = corrected
                 DiagnosticLog.write("[ANDROID_SDK_MEDIA_PORT] ownership=current_helper corrected=true")
+            }
+            DiagnosticLog.write(
+                "[ANDROID_SDK_MEDIA_BOUND] pid=\(snapshot.processID) port=\(address.port ?? 0) helperGeneration=\(lease.helper)"
+            )
+            if Self.sdkMediaPort(for: decoded.url) != nil {
+                decoded.verifiedAndroidSDKMediaURLs.insert(decoded.url)
             }
         }
         if repairsCodec {
@@ -487,12 +530,48 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         return try RemoteProviderPlayerResultAdapter.localize(decoded, site: site, providerID: providerID)
     }
 
-    private static func isSDKMediaAddress(_ raw: String) -> Bool {
+    private func sdkMediaListeners(site: Site, lease: WebMediaLease) async throws -> (processID: Int32, ports: Set<Int>) {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(1)
+        var waited = false
+        // An SDK can return its media URL before its server enters TCP LISTEN.
+        while true {
+            try Task.checkCancellation()
+            try validateWebMediaLease(lease, site: site)
+            let snapshot = await client?.listeningTCPSnapshot()
+            try Task.checkCancellation()
+            try validateWebMediaLease(lease, site: site)
+            guard let snapshot else { throw Self.unverifiedSDKMediaServer() }
+            let sdkPorts = snapshot.ports.filter { (6677..<7000).contains($0) }
+            if !sdkPorts.isEmpty {
+                if waited { DiagnosticLog.write("[ANDROID_SDK_MEDIA_PORT] ownership=current_helper ready_after_wait=true") }
+                return (snapshot.processID, sdkPorts)
+            }
+            let now = clock.now
+            guard now < deadline else { return (snapshot.processID, []) }
+            waited = true
+            try await clock.sleep(until: min(now + .milliseconds(100), deadline))
+        }
+    }
+
+    public nonisolated static func sdkMediaPort(for raw: String) -> Int? {
         guard raw.utf8.count <= 128 * 1024, let url = URLComponents(string: raw), url.scheme == "http",
               ["127.0.0.1", "localhost", "::1", "[::1]"].contains(url.host ?? ""),
               let port = url.port, (6677..<7000).contains(port),
-              url.user == nil, url.password == nil, url.fragment == nil else { return false }
-        return true
+              url.user == nil, url.password == nil, url.fragment == nil else { return nil }
+        return port
+    }
+
+    /// Sample the selected source's current helper without opening a new media request.
+    public func recordSDKMediaInterruption(port: Int, playbackGeneration: UInt64) async {
+        let helper = helperGeneration
+        let snapshot = await client?.listeningTCPSnapshot()
+        guard helper == helperGeneration else { return }
+        let listener = snapshot.map { $0.ports.contains(port) ? "owned" : "missing" } ?? "unverified"
+        DiagnosticLog.write(
+            "[ANDROID_SDK_MEDIA_INTERRUPTION] generation=\(playbackGeneration) pid=\(snapshot?.processID ?? 0) "
+            + "port=\(port) helperGeneration=\(helper) listener=\(listener)"
+        )
     }
 
     private static func unverifiedSDKMediaServer() -> ProviderErrorPayload {
@@ -995,10 +1074,23 @@ public actor DevelopmentAndroidSiteProvider: SiteContentProvider, SiteContentCac
         try validate(site)
         let enqueued = ProcessInfo.processInfo.systemUptime
         let previous = operationTail
+        let interruptedPlayback = operation == .player && Self.restartsSDKMediaAfterInterruption
+        let playback = webMediaGeneration
+        let epoch = contentCacheEpoch
         let task = Task { [self] in
             await previous?.value
             try Task.checkCancellation()
             if let webLease { try validateWebMediaLease(webLease, site: site) }
+            if interruptedPlayback {
+                try validateContentAccess(site, epoch: epoch)
+                guard webMediaGeneration == playback else { throw Self.staleContent() }
+                if client != nil {
+                    try await discardSession()
+                    try validateContentAccess(site, epoch: epoch)
+                    guard webMediaGeneration == playback else { throw Self.staleContent() }
+                    DiagnosticLog.write("[ANDROID_PLAYER_RECOVERY] reason=premature_eof action=retire_helper")
+                }
+            }
             return try await requestUnlocked(operation: operation, site: site, arguments: arguments, enqueued: enqueued, webLease: webLease)
         }
         let requestID = UUID()

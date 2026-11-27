@@ -12,12 +12,23 @@ import sys
 # selected bundle. Enumeration creates no player, socket, or audio device.
 ENUMERATE = r'''
 import ctypes, json, sys
+from pathlib import Path
 lib = ctypes.CDLL(sys.argv[1])
 lib.avformat_version.restype = ctypes.c_uint
 lib.av_demuxer_iterate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
 lib.av_demuxer_iterate.restype = ctypes.c_void_p
 lib.avio_enum_protocols.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int]
 lib.avio_enum_protocols.restype = ctypes.c_char_p
+lib.avformat_get_mov_video_tags.restype = ctypes.c_void_p
+lib.av_codec_get_id.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint]
+lib.av_codec_get_id.restype = ctypes.c_int
+tags = (ctypes.c_void_p * 2)(lib.avformat_get_mov_video_tags(), None)
+mov_codec = lambda tag: lib.av_codec_get_id(tags, int.from_bytes(tag, 'little'))
+codec = ctypes.CDLL(str(Path(sys.argv[1]).with_name('libavcodec.63.dylib')))
+codec.avcodec_find_decoder_by_name.argtypes = [ctypes.c_char_p]
+codec.avcodec_find_decoder_by_name.restype = ctypes.c_void_p
+bytevc2 = bool(mov_codec(b'vvc1') and mov_codec(b'bvc2') == mov_codec(b'vvc1')
+               and codec.avcodec_find_decoder_by_name(b'vvc'))
 opaque = ctypes.c_void_p()
 demuxers = []
 while p := lib.av_demuxer_iterate(ctypes.byref(opaque)):
@@ -27,7 +38,8 @@ protocols = []
 while p := lib.avio_enum_protocols(ctypes.byref(opaque), 0):
     protocols.append(p.decode())
 print(json.dumps({'avformat_major': lib.avformat_version() >> 16,
-                  'demuxers': sorted(demuxers), 'protocols': sorted(protocols)}))
+                  'demuxers': sorted(demuxers), 'protocols': sorted(protocols),
+                  'bytevc2': bytevc2}))
 '''
 
 
@@ -66,13 +78,15 @@ def _ffmpeg_component(bundle):
                 if c['formula'] == 'ffmpeg')
 
 
-def _verify_dash_receipt(bundle, binary, actual, component):
+def _verify_dash_receipt(bundle, binary, actual, component, capabilities):
     receipt = bundle / 'Contents/Resources/dash-runtime-build.json'
     if not receipt.is_file():
         raise RuntimeError('DASH build receipt is missing')
     dash = json.loads(receipt.read_text())
     if dash.get('packaged_libavformat_sha256') != actual:
         raise RuntimeError('Playback runtime binary differs from DASH build receipt')
+    if dash.get('bytevc2', False) != capabilities.get('bytevc2', False):
+        raise RuntimeError('ByteVC2 support differs from the runtime receipt')
     for patch in dash.get('patches', []):
         relative = Path(patch.get('path', ''))
         root = bundle/'Contents/Resources/ThirdPartyLicenses/libmpv/ffmpeg'
@@ -98,7 +112,7 @@ def verify_dash_bundle(bundle):
     info = capabilities(binary)
     require_capabilities(info)
     actual = digest(binary)
-    _verify_dash_receipt(bundle, binary, actual, _ffmpeg_component(bundle))
+    _verify_dash_receipt(bundle, binary, actual, _ffmpeg_component(bundle), info)
     return {'libavformat_sha256': actual, **info}
 
 
@@ -118,7 +132,7 @@ def verify_bundle(bundle):
             raise RuntimeError('DASH build receipt is missing')
         if recipe.get('dashRuntimeBuildSHA256') != digest(receipt):
             raise RuntimeError('DASH receipt differs from Dolby build provenance')
-        _verify_dash_receipt(bundle, binary, actual, component)
+        _verify_dash_receipt(bundle, binary, actual, component, info)
     return {'libavformat_sha256': actual, **info}
 
 
@@ -131,7 +145,7 @@ def main():
         print(json.dumps({'libavformat_sha256': info['libavformat_sha256'],
                           'avformat_major': info['avformat_major'],
                           'demuxers': len(info['demuxers']), 'input_protocols': len(info['protocols']),
-                          'DASH_HLS_MP4_verified': True}, sort_keys=True))
+                          'DASH_HLS_MP4_verified': True, 'bytevc2': info['bytevc2']}, sort_keys=True))
     except (OSError, ValueError, RuntimeError, KeyError, StopIteration, subprocess.SubprocessError) as error:
         parser.exit(1, 'Playback runtime rejected: ' + str(error) +
                     '\nRebuild with script/build_dash_runtime.py or script/build_dolby_runtime.py.\n')

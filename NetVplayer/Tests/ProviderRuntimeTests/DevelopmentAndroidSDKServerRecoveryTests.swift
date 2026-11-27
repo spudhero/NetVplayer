@@ -22,6 +22,29 @@ private func sdkRecoveryEvents(_ fixture: DevelopmentAndroidBridgeFixture) throw
         .split(separator: "\n").map { try JSONDecoder().decode([String: String].self, from: Data($0.utf8)) }
 }
 
+@Test func developmentAndroidSDKServerRecoveryWaitsForTheSameHelperToListen() async throws {
+    let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
+    let runtime = try sdkRecoveryRuntime(fixture), site = sdkRecoverySite()
+    let provider = DevelopmentAndroidSiteProvider(runtime: runtime, binding: runtime.manifest.bindings[0], stateDirectory: fixture.state)
+    do {
+        let result = try await provider.playerContent(site: site, flag: "AI", id: "sdk-delayed-6677")
+        let address = try #require(URLComponents(string: result.url))
+        let port = try #require(address.port)
+        #expect((6677..<7000).contains(port))
+        #expect(address.path == "/proxy" && address.percentEncodedQuery == "do=hg&vid=fixture")
+        #expect(result.header == ["User-Agent": "SDK fixture"])
+        #expect(result.verifiedAndroidSDKMediaURLs == [result.url])
+        let decoded = try JSONDecoder().decode(Result.self, from: JSONEncoder().encode(result))
+        #expect(decoded.verifiedAndroidSDKMediaURLs.isEmpty)
+        let (body, _) = try await URLSession.shared.data(from: #require(address.url))
+        #expect(body == Data("SDK media fixture".utf8))
+        let players = try sdkRecoveryEvents(fixture).filter { $0["operation"] == "player" }
+        let pid = try #require(players.first?["pid"].flatMap(Int32.init))
+        #expect(players.count == 1 && kill(pid, 0) == 0)
+    } catch { await provider.shutdown(); throw error }
+    await provider.shutdown()
+}
+
 @Test func developmentAndroidSDKServerRecoveryConfirmsExitAndKeepsSavedState() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
     let runtime = try sdkRecoveryRuntime(fixture), site = sdkRecoverySite()
@@ -58,6 +81,34 @@ private func sdkRecoveryEvents(_ fixture: DevelopmentAndroidBridgeFixture) throw
         let persistent = try runtime.persistentDataDirectory(base: fixture.state.appendingPathComponent("source-sessions-v1"),
             binding: runtime.manifest.bindings[0], site: site)
         #expect(try String(contentsOf: persistent.appendingPathComponent("sdk-server-recovery.fixture"), encoding: .utf8) == "saved SDK session")
+    } catch { await provider.shutdown(); throw error }
+    await provider.shutdown()
+}
+
+@Test func developmentAndroidSDKServerRecoveryReopensListeningHelperAfterPrematureEOF() async throws {
+    let fixture = try DevelopmentAndroidBridgeFixture(); defer { fixture.remove() }
+    let runtime = try sdkRecoveryRuntime(fixture), site = sdkRecoverySite()
+    let provider = DevelopmentAndroidSiteProvider(runtime: runtime, binding: runtime.manifest.bindings[0], stateDirectory: fixture.state)
+    let episode = "sdk-delayed-6677"
+    do {
+        let first = try await provider.playerContent(site: site, flag: "AI", id: episode)
+        #expect(first.verifiedAndroidSDKMediaURLs == [first.url])
+        let started = try sdkRecoveryEvents(fixture).filter { $0["operation"] == "player" }
+        let oldPID = try #require(started.first?["pid"].flatMap(Int32.init))
+        #expect(kill(oldPID, 0) == 0)
+
+        let resumed = try await DevelopmentAndroidSiteProvider.$restartsSDKMediaAfterInterruption.withValue(true) {
+            try await provider.playerContent(site: site, flag: "AI", id: episode)
+        }
+        let players = try sdkRecoveryEvents(fixture).filter { $0["operation"] == "player" }
+        let newPID = try #require(players.last?["pid"].flatMap(Int32.init))
+        #expect(players.count == 2 && oldPID != newPID)
+        #expect(kill(oldPID, 0) == -1 && errno == ESRCH)
+        #expect(Set(players.compactMap { $0["id"] }) == [episode])
+        #expect(Set(players.compactMap { $0["state_sha256"] }).count == 1)
+        #expect(resumed.verifiedAndroidSDKMediaURLs == [resumed.url])
+        let (body, _) = try await URLSession.shared.data(from: #require(URL(string: resumed.url)))
+        #expect(body == Data("SDK media fixture".utf8))
     } catch { await provider.shutdown(); throw error }
     await provider.shutdown()
 }

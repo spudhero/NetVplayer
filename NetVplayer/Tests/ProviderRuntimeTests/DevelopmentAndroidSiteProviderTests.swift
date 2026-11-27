@@ -892,6 +892,43 @@ import Testing
     }
 }
 
+@Test(arguments: ["numbered-subtitles-direct", "numbered-subtitles-qualities"])
+func developmentAndroidBridgeOmitsOtherEpisodesFromSubtitleTracks(mode: String) async throws {
+    let fixture = try DevelopmentAndroidBridgeFixture()
+    defer { fixture.remove() }
+    let runtime = try DevelopmentAndroidRuntimeLayout.load(root: fixture.runtime)
+    let provider = DevelopmentAndroidSiteProvider(runtime: runtime, binding: try #require(runtime.manifest.bindings.first), stateDirectory: fixture.state)
+    var site = fixture.site
+    site.ext = mode
+    do {
+        let result = try await provider.playerContent(
+            site: site, flag: "fixture", id: #"{"path":"%2FExample.S03E49%2FSeries.S01E200.mkv"}"#
+        )
+        let expected = ["series.S1E0200.zh.srt", "中文", "Series.S01E199-E200", "Series.S01E199.S01E200", "Other.S01E79"]
+        #expect(result.subs.map(\.name) == expected)
+        #expect(result.playbackCandidates.count == (mode == "numbered-subtitles-qualities" ? 2 : 0))
+        for candidate in result.playbackCandidates {
+            #expect(candidate.subtitles.map(\.name) == expected)
+        }
+        let current = try #require(result.subs.first)
+        #expect(current.lang == "zh" && current.format == "application/x-subrip")
+        let components = try #require(URLComponents(string: current.url))
+        let parameters = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        let response = try await provider.proxyRoute(site: site, parameters: parameters)
+        let forwarded = try JSONDecoder().decode([String: String].self, from: response.data)
+        #expect(forwarded["track"] == "0")
+
+        let unnumbered = try await provider.playerContent(
+            site: site, flag: "fixture", id: #"{"path":"%2FSeries.S01E200%2Fmovie.mkv"}"#
+        )
+        #expect(unnumbered.subs.contains { $0.name == "Series.S01E79" })
+        await provider.shutdown()
+    } catch {
+        await provider.shutdown()
+        throw error
+    }
+}
+
 @Test func developmentAndroidOriginalForwardsOpaqueDriveAndStateIDsToGuard() async throws {
     let fixture = try DevelopmentAndroidBridgeFixture()
     defer { fixture.remove() }
@@ -1405,6 +1442,15 @@ for raw in sys.stdin:
             if args['id'] == 'quality-subtitles':
                 result['subs'] = [{'name': '歌词', 'format': 'text/x-ssa',
                                    'url': 'http://127.0.0.1:-1/proxy?do=ssa&csp=FixtureGuard'}]
+        elif requested_extension.startswith('numbered-subtitles-'):
+            media = 'https://media.example.test/episode.mkv'
+            names = ['series.S1E0200.zh.srt', 'Series.S01E79', 'Series.S02E200', '中文',
+                     'Series.S01E199-E200', 'Series.S01E199.S01E200', 'Other.S01E79']
+            result = {
+                'url': ['HD', media, 'SD', media + '?quality=sd'] if requested_extension.endswith('qualities') else media,
+                'subs': [{'name': name, 'lang': 'zh', 'format': 'application/x-subrip',
+                          'url': f'http://127.0.0.1:9978/proxy?do=subtitles&track={i}'} for i, name in enumerate(names)]
+            }
         elif args.get('id') == 'original-page':
             result = {'url': 'https://live.doubao.example.test/play/123', 'parse': 1, 'jx': 1, 'format': 'text/html',
                       'header': {'User-Agent': 'Original page', 'Referer': 'https://fixture.test/'}}
@@ -1419,9 +1465,10 @@ for raw in sys.stdin:
                                 'url': 'http://127.0.0.1:9978/proxy?do=ssa&csp=FixtureGuard&track=1&token=secret-fixture-lyrics'},
                                {'name': 'Remote', 'format': 'srt', 'url': 'https://subtitle.example.test/remote.srt'},
                                {'name': 'Inline', 'format': 'ass', 'url': 'data:text/x-ssa;base64,Zml4dHVyZQ=='}]}
-        elif args.get('id', '').startswith(('sdk-recover-', 'sdk-owned-', 'sdk-http-500-')):
+        elif args.get('id', '').startswith(('sdk-recover-', 'sdk-owned-', 'sdk-http-500-', 'sdk-delayed-')):
             fails_http = args['id'].startswith('sdk-http-500-')
-            owns_server = fails_http or args['id'].startswith('sdk-owned-') or loaded_sdk_recovery
+            delayed_listen = args['id'].startswith('sdk-delayed-')
+            owns_server = fails_http or delayed_listen or args['id'].startswith('sdk-owned-') or loaded_sdk_recovery
             if not owns_server:
                 sdk_recovery.write_text('saved SDK session')
             elif sdk_server is None:
@@ -1444,12 +1491,25 @@ for raw in sys.stdin:
                         self.wfile.write(data)
                     def log_message(self, *args): pass
                 for candidate in range(6677, 7000):
+                    server = http.server.ThreadingHTTPServer(('127.0.0.1', candidate), SDKHandler, bind_and_activate=False)
                     try:
-                        sdk_server = http.server.ThreadingHTTPServer(('127.0.0.1', candidate), SDKHandler)
-                        break
-                    except OSError: pass
+                        server.server_bind()
+                    except OSError:
+                        server.server_close()
+                        continue
+                    sdk_server = server
+                    break
                 assert sdk_server is not None
-                threading.Thread(target=sdk_server.serve_forever, daemon=True).start()
+                def serve_sdk(server):
+                    server.server_activate()
+                    server.serve_forever()
+                if delayed_listen:
+                    thread = threading.Timer(0.35, serve_sdk, args=(sdk_server,))
+                    thread.daemon = True
+                    thread.start()
+                else:
+                    sdk_server.server_activate()
+                    threading.Thread(target=sdk_server.serve_forever, daemon=True).start()
             # A new SDK instance still reports a stale port. Only its owned listener is valid.
             reported_port = int(args['id'].rsplit('-', 1)[1])
             result = {'url': f'http://127.0.0.1:{reported_port}/proxy?do=hg&vid=fixture',

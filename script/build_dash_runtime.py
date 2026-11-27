@@ -88,10 +88,13 @@ def main():
     with tarfile.open(args.source_archive) as archive:
         archive.extractall(args.work, filter='data')
     src = args.work / 'ffmpeg-9.0.1'
-    patch_path = Path(__file__).resolve().parent/'patches/ffmpeg-9.0.1-dash-eof-seek.patch'
-    with patch_path.open('rb') as patch_file:
-        subprocess.run(['patch', '-p1', '--batch', '--forward'], cwd=src,
-                       stdin=patch_file, check=True)
+    patch_root = Path(__file__).resolve().parent / 'patches'
+    patches = [patch_root / name for name in (
+        'ffmpeg-9.0.1-dash-eof-seek.patch', 'ffmpeg-9.0.1-bytevc2-mov.patch')]
+    for patch_path in patches:
+        with patch_path.open('rb') as patch_file:
+            subprocess.run(['patch', '-p1', '--batch', '--forward'], cwd=src,
+                           stdin=patch_file, check=True)
     sdk = Path(output('xcrun', '--show-sdk-path'))
     xml_header = (sdk / 'usr/include/libxml2/libxml/xmlversion.h').read_text()
     xml_version = re.search(r'#define LIBXML_DOTTED_VERSION "([0-9.]+)"', xml_header)[1]
@@ -145,10 +148,15 @@ def main():
     assert re.findall(r'\bminos ([0-9.]+)',output('otool','-l',str(target))) == ['14.0']
     after = capabilities(target)
     require_capabilities(after, baseline=before)
-    patch_relative = Path('Contents/Resources/ThirdPartyLicenses/libmpv/ffmpeg')/patch_path.name
-    shutil.copyfile(patch_path, args.output/patch_relative)
+    if not after['bytevc2']:
+        raise RuntimeError('Rebuilt runtime did not expose ByteVC2 and VVC support')
+    patch_receipts = []
+    for patch_path in patches:
+        patch_relative = Path('Contents/Resources/ThirdPartyLicenses/libmpv/ffmpeg') / patch_path.name
+        shutil.copyfile(patch_path, args.output / patch_relative)
+        patch_receipts.append({'name': patch_path.name, 'path': patch_relative.as_posix(), 'sha256': sha(patch_path)})
     receipt = {'schema':1,'source_sha256':SOURCE_SHA,
-        'patches':[{'name':patch_path.name,'path':patch_relative.as_posix(),'sha256':sha(patch_path)}],'build_libavformat_sha256':raw_sha,
+        'patches':patch_receipts, 'bytevc2':after['bytevc2'], 'build_libavformat_sha256':raw_sha,
         'original_libavformat_sha256':old_sha,'packaged_libavformat_sha256':sha(target),
         'minimum_macos':'14.0','added_dependency':'/usr/lib/libxml2.2.dylib',
         'dependencies':{'libxml2':xml_version,'openssl':openssl_version},
@@ -166,7 +174,7 @@ def main():
             binary.update(source_sha256=raw_sha,packaged_sha256=sha(target),origin='pinned-source-local-dash-build')
     license_path.write_text(json.dumps(license_data,indent=2)+'\n')
     with (resources/'ThirdPartyLicenses/libmpv-runtime.md').open('a') as f:
-        f.write('\nFFmpeg 9.0.1 libavformat rebuilt from the pinned source archive with system libxml2 for DASH; baseline codec libraries retained. Local DASH patch preserves track selection across EOF and resets exhausted representations on seek. See dash-runtime-build.json for hashes, flags and capabilities.\n')
+        f.write('\nFFmpeg 9.0.1 libavformat rebuilt from the pinned source archive with system libxml2 for DASH; baseline codec libraries retained. The DASH patch preserves track selection across EOF and resets exhausted representations on seek. The MOV patch adapts ByteVC2 configuration to the existing VVC decoder. See dash-runtime-build.json for hashes, flags and capabilities.\n')
     # A stock licensed base precedes the Dolby build. Do not invent its future
     # receipt; the final Dolby assembler writes and verifies that provenance.
     finalize_provenance(args.baseline_app, args.output)

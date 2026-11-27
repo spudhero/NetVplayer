@@ -92,3 +92,30 @@ func testMPVHTTPFailurePreservesStatusForUCLinkRefresh(status: Int) throws {
     #expect(MPVPlayerEngine.networkDiagnostic("Authorization: Bearer secret") == nil)
     #expect(MPVPlayerEngine.networkDiagnostic("User-Agent: private-agent")?.hasPrefix("header user-agent=") == true)
 }
+
+@Test func testMPVEndDiagnosticsCapturesByteOffsetsAndProgressFromLastSeek() {
+    var diagnostics = MPVTransportDiagnostics(loadedAt: 100, positionMs: 0)
+    diagnostics.seek(to: 338_600)
+    diagnostics.observe(prefix: "ffmpeg", text: "http: Stream ends prematurely at 3331, should be 4982", now: 104)
+    #expect(diagnostics.summary(positionMs: 1_025_000, now: 106) ==
+        "loadAgeMs=6000 requestedPositionMs=338600 advanceMs=686400 transportEvents=1 "
+        + "lastTransportEvent=short-response eventAgeMs=2000 offset=3331 expectedOffset=4982")
+    diagnostics.observe(prefix: "ffmpeg", text: "https: Unexpected offset: expected 4444, got 3331", now: 107)
+    #expect(diagnostics.summary(positionMs: 1_025_000, now: 108).hasSuffix(
+        "lastTransportEvent=offset-mismatch eventAgeMs=1000 offset=3331 expectedOffset=4444"))
+}
+
+@Test func testMPVEndDiagnosticsKeepsOnlyKnownFieldsFromNetworkWarnings() {
+    var diagnostics = MPVTransportDiagnostics(loadedAt: 100, positionMs: 0)
+    diagnostics.observe(prefix: "ffmpeg", text: "http: Will reconnect at 0 in 0 second(s), error=Connection timed out.", now: 104)
+    #expect(diagnostics.summary(positionMs: 1000, now: 105).hasSuffix(
+        "lastTransportEvent=timeout eventAgeMs=1000 offset=0"))
+    diagnostics.observe(prefix: "ffmpeg", text: "http: Authorization: Bearer private-token", now: 105)
+    diagnostics.observe(prefix: "ffmpeg", text: "http: HTTP error 500 https://private.example/?token=secret", now: 106)
+    diagnostics.observe(prefix: "demux", text: "http: Stream ends prematurely at 1, should be 2", now: 107)
+    #expect(diagnostics.summary(positionMs: 2000, now: 108).contains("transportEvents=1 "))
+    diagnostics.observe(prefix: "ffmpeg", text: "http: Will reconnect at 20 in 0 second(s), error=Secret cookie.", now: 109)
+    #expect(diagnostics.summary(positionMs: 2000, now: 110) ==
+        "loadAgeMs=10000 requestedPositionMs=0 advanceMs=2000 transportEvents=2 "
+        + "lastTransportEvent=reconnect eventAgeMs=1000 offset=20")
+}

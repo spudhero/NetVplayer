@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import Models
@@ -8,6 +9,149 @@ import PlayerEngine
 
 @Suite(.serialized)
 struct PlaybackEndedTests {
+    @MainActor
+    @Test(.disabled(if: ProcessInfo.processInfo.environment["NETVPLAYER_SDK_INTERRUPTION_FIXTURE"] == nil))
+    func sdkHTTPMediaRecoversAfterRealPrematureEOF() async throws {
+        let base = try #require(ProcessInfo.processInfo.environment["NETVPLAYER_SDK_INTERRUPTION_FIXTURE"])
+        let partial = base + "/interrupted.mp4"
+        try #require(DevelopmentAndroidSiteProvider.sdkMediaPort(for: partial) != nil)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (state, provider, site) = await fixture(directory, url: partial,
+            retryURL: base + "/complete.mp4", verifiedAndroidSDKMedia: true)
+        let episode = Episode(name: "Controlled VOD", url: "first")
+        state.detailVod = Vod(vodId: "film", siteKey: site.key)
+        state.episodes = [episode]
+        state.selectedPlayFlag = "line"
+        _ = NSApplication.shared
+        let engine = MPVPlayerEngine.vod
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.alphaValue = 0.02
+        window.ignoresMouseEvents = true
+        let view = try #require(MPVOpenGLVideoView(engine: engine, surface: .vod))
+        view.frame = window.contentView!.bounds
+        window.contentView = view
+        window.orderFrontRegardless()
+        engine.attach(to: view, surface: .vod)
+        defer { engine.stop(); engine.detach(from: view); window.orderOut(nil) }
+
+        await state.playEpisode(episode)
+        let initial = try #require(state.playerState.currentSpec)
+        let deadline = ContinuousClock.now + .seconds(35)
+        while state.playerState.endDisposition != .natural, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let resumed = try #require(state.playerState.currentSpec)
+        #expect(await provider.playerCalls == ["first", "first"])
+        #expect(resumed.url == base + "/complete.mp4")
+        #expect(resumed.metadata["playback.sessionGeneration"] != initial.metadata["playback.sessionGeneration"])
+        #expect((resumed.initialStartPositionSeconds ?? 0) > 3)
+        #expect(state.playerState.endDisposition == .natural)
+    }
+
+    @MainActor
+    @Test func prematureEndResolvesSameEpisodeFromItsLastPosition() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (state, provider, site) = await fixture(directory)
+        let engine = MPVPlayerEngine.vod
+        let originalPlayerState = engine.playerState
+        engine.playerState = nil
+        defer { engine.playerState = originalPlayerState }
+        let first = Episode(name: "第1集", url: "first")
+        state.detailVod = Vod(vodId: "film", siteKey: site.key)
+        state.episodes = [first, Episode(name: "第2集", url: "second")]
+        state.selectedPlayFlag = "line"
+        var submissions: [PlaySpec] = []
+        state.playSpecHandler = { spec in
+            state.playerState.currentSpec = spec
+            submissions.append(spec)
+        }
+
+        await state.playEpisode(first)
+        let before = try #require(submissions.last)
+        state.playerState.position = 583.125
+        state.playerState.duration = 1_415
+        state.playerState.endDisposition = .premature
+        #expect(state.canResumeInterruptedPlayback)
+        #expect(state.shouldShowPlaybackEndedPanel)
+        await state.toggleVodPlayback()
+
+        let resumed = try #require(submissions.last)
+        #expect(submissions.count == 2)
+        #expect(await provider.playerCalls == ["first", "first"])
+        #expect(resumed.initialStartPositionSeconds == 583.125)
+        #expect(resumed.flag == before.flag)
+        #expect(resumed.metadata["playback.sessionGeneration"] != before.metadata["playback.sessionGeneration"])
+        #expect(!state.playerState.hasEnded)
+
+        state.playerState.position = 583.125
+        state.playerState.duration = 1_415
+        state.playerState.endDisposition = .premature
+        state.detailVod = Vod(vodId: "different-film", siteKey: site.key)
+        #expect(!state.canResumeInterruptedPlayback)
+        await state.resumeInterruptedPlayback()
+        #expect(submissions.count == 2)
+    }
+
+    @MainActor
+    @Test(arguments: [
+        "https://media.example.test/first.mp4",
+        "http://127.0.0.1:6677/verified.mp4",
+        "http://127.0.0.1:6677/unverified.mp4",
+        "http://127.0.0.1:9988/other-service.mp4"
+    ])
+    func prematureEndRetriesOnlyForEligibleMediaAndIgnoresOldEvents(url: String) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let verified = url.hasSuffix("/verified.mp4")
+        let (state, provider, site) = await fixture(directory, url: url, verifiedAndroidSDKMedia: verified)
+        // The intercepted submissions own this fixture's player state.
+        let engine = MPVPlayerEngine.vod
+        let originalPlayerState = engine.playerState
+        engine.playerState = nil
+        defer { engine.playerState = originalPlayerState }
+        let episode = Episode(name: "第167集", url: "first")
+        state.detailVod = Vod(vodId: "film", siteKey: site.key)
+        state.episodes = [episode]
+        state.selectedPlayFlag = "line"
+        var submissions: [PlaySpec] = []
+        state.playSpecHandler = { spec in
+            state.playerState.currentSpec = spec
+            submissions.append(spec)
+        }
+
+        await state.playEpisode(episode)
+        let interrupted = try #require(submissions.last)
+        state.playerState.position = 1_046
+        state.playerState.duration = 1_415
+        state.playerState.endDisposition = .premature
+        await state.handleMPVPlaybackInterrupted(spec: interrupted)
+
+        if !verified && url.hasPrefix("http://127.0.0.1") {
+            #expect(submissions.count == 1)
+            #expect(await provider.playerCalls == ["first"])
+            #expect(state.canResumeInterruptedPlayback)
+            return
+        }
+        let retried = try #require(submissions.last)
+        #expect(submissions.count == 2)
+        #expect(retried.initialStartPositionSeconds == 1_046)
+        #expect(retried.flag == interrupted.flag)
+        #expect(retried.metadata["playback.sessionGeneration"] != interrupted.metadata["playback.sessionGeneration"])
+
+        state.playerState.position = 1_085
+        state.playerState.duration = 1_415
+        state.playerState.endDisposition = .premature
+        await state.handleMPVPlaybackInterrupted(spec: interrupted)
+        await state.handleMPVPlaybackInterrupted(spec: retried)
+        #expect(await provider.playerCalls == ["first", "first"])
+        #expect(state.shouldShowPlaybackEndedPanel)
+        #expect(state.canResumeInterruptedPlayback)
+    }
+
     @MainActor
     @Test func replayResolvesAgainWithNewGenerationAndNoOpeningSkip() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -461,11 +605,13 @@ struct PlaybackEndedTests {
     }
 
     @MainActor
-    private func fixture(_ directory: URL) async -> (AppState, EndedPlaybackProvider, Site) {
+    private func fixture(
+        _ directory: URL, url: String? = nil, retryURL: String? = nil, verifiedAndroidSDKMedia: Bool = false
+    ) async -> (AppState, EndedPlaybackProvider, Site) {
         let state = AppState(loadDefaultConfig: false, startProxyServer: false,
             storageManager: StorageManager(storageDirectory: directory), providerRuntimeBootstrap: nil)
         let site = Site(key: UUID().uuidString, name: "Ended", type: 3, api: "csp_Ended_\(UUID().uuidString)")
-        let provider = EndedPlaybackProvider()
+        let provider = EndedPlaybackProvider(url: url, retryURL: retryURL, verifiedAndroidSDKMedia: verifiedAndroidSDKMedia)
         await SpiderReplacementRegistry.shared.register(originalAPI: site.api, provider: provider)
         state.sites = [site]; state.activeSite = site
         return (state, provider, site)
@@ -473,6 +619,9 @@ struct PlaybackEndedTests {
 }
 
 private actor EndedPlaybackProvider: SiteContentProvider {
+    private let url: String?
+    private let retryURL: String?
+    private let verifiedAndroidSDKMedia: Bool
     private var detailCalls = 0
     private var refreshing = false
     private var refreshWaiter: CheckedContinuation<Void, Never>?
@@ -481,6 +630,12 @@ private actor EndedPlaybackProvider: SiteContentProvider {
     private var playbackCompletion: CheckedContinuation<Void, Never>?
     private(set) var playerCalls: [String] = []
     var isPlaybackBlocked: Bool { playbackCompletion != nil }
+
+    init(url: String?, retryURL: String?, verifiedAndroidSDKMedia: Bool) {
+        self.url = url
+        self.retryURL = retryURL
+        self.verifiedAndroidSDKMedia = verifiedAndroidSDKMedia
+    }
     func blockPlayback(id: String) { blockedPlayerID = id }
     func finishBlockedPlayback() {
         blockedPlayerID = nil
@@ -510,7 +665,13 @@ private actor EndedPlaybackProvider: SiteContentProvider {
                 playbackCompletion = $0
             }
         }
-        return Result(url: "https://media.example.test/\(id).mp4", format: "mp4")
+        let defaultURL = "https://media.example.test/\(id).mp4"
+        let resolvedURL = playerCalls.count > 1 ? retryURL ?? url : url
+        var result = Result(url: resolvedURL ?? defaultURL, format: "mp4")
+        if verifiedAndroidSDKMedia {
+            result.verifiedAndroidSDKMediaURLs.insert(result.url)
+        }
+        return result
     }
     func homeContent(site: Site) async throws -> Result { .empty }
     func categoryContent(site: Site, tid: String, page: String, filter: Bool, extend: [String: String]) async throws -> Result { .empty }

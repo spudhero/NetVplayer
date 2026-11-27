@@ -25,6 +25,12 @@
 
 当前正式版本 / Current release: **NetVplayer 2.0.8 (build 59)** · [下载 / Download](https://github.com/spudhero/NetVplayer/releases/latest) · [发布说明 / Release notes](docs/releases/2.0.8.md)
 
+**NetVplayer 2.0.9 (build 60)**
+
+| 阶段 / Stage | 版本 / Version | 变更 / Changes |
+| --- | --- | --- |
+| Release candidate | 2.0.9 (build 60) | [发布说明 / Release notes](docs/releases/2.0.9.md) |
+
 ## 中文
 
 NetVplayer 是基于 **SwiftUI 与内嵌 libmpv** 的原生 macOS 媒体播放器。把在线点播、电视直播、个人网盘、NAS、本机文件和媒体服务器放进同一套浏览与播放体验：找内容、看详情、选剧集、调字幕，再从历史记录接着看。支持 **Dolby Vision 杜比视界动态映射与 P7 FEL 双层重建、Dolby Atmos 杜比全景声直通**，按显示器、功放或耳机选择音画输出。

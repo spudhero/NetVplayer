@@ -6,6 +6,10 @@ This file records user-visible release and fix history. For installation require
 
 ## 中文
 
+### [2.0.9](https://github.com/spudhero/NetVplayer/releases/tag/2.0.9)（2026-11-27）
+
+构建 **60**。增加 ByteVC2 MP4 原生解码，改善点播意外中断恢复，以及 Android 原版的媒体服务启动和字幕分集匹配。见[发布说明](docs/releases/2.0.9.md)。
+
 ### [2.0.8](https://github.com/spudhero/NetVplayer/releases/tag/2.0.8)（2026-11-22）
 
 构建 **59**。统一点播控制面板的半透明样式，恢复章节预览和竖向音量控制。改进部分 HLS 跳转、磁力 Tracker 保留和 Android 原版起播恢复。配套 Mac 原生 Java 扩展 **1.1.6**。见[发布说明](docs/releases/2.0.8.md)。
@@ -294,6 +298,10 @@ This file records user-visible release and fix history. For installation require
 更早版本及安装资产见 [GitHub Releases](https://github.com/spudhero/NetVplayer/releases)。
 
 ## English
+
+### [2.0.9](https://github.com/spudhero/NetVplayer/releases/tag/2.0.9) (2026-11-27)
+
+Build **60** adds native ByteVC2 MP4 decoding and improves interrupted on-demand playback recovery, Android media service startup, and episode matching for Android subtitles. See the [release notes](docs/releases/2.0.9.md).
 
 ### [2.0.8](https://github.com/spudhero/NetVplayer/releases/tag/2.0.8) (2026-11-22)
 

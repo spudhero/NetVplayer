@@ -237,7 +237,7 @@ def assemble(base, destination, mpv, placebo, placebo_source, recipe, truehd_pre
 def prepare_dash_runtime(base, work, openssl):
     """Reuse a qualified base, or rebuild only avformat from the cached pin."""
     info = capabilities(base / 'Contents/Frameworks/libavformat.63.dylib')
-    if 'dash' in info['demuxers']:
+    if 'dash' in info['demuxers'] and info.get('bytevc2'):
         require_capabilities(info)
         verify_bundle(base)
         return base
@@ -249,7 +249,7 @@ def prepare_dash_runtime(base, work, openssl):
         else:
             verify_dash_bundle(destination)
         receipt = json.loads((destination / 'Contents/Resources/dash-runtime-build.json').read_text())
-        if (receipt['recipe_sha256'] != digest(builder) or
+        if (not receipt.get('bytevc2') or receipt['recipe_sha256'] != digest(builder) or
                 receipt['original_libavformat_sha256'] != digest(base / 'Contents/Frameworks/libavformat.63.dylib')):
             raise RuntimeError('DASH runtime input changed; use a fresh work directory')
         # Reusing a cached rebuild must preserve every other base dependency.

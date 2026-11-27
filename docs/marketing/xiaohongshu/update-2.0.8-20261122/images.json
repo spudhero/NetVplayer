@@ -1,0 +1,198 @@
+{
+  "app_version": "2.0.8",
+  "build": 59,
+  "comparison_baseline": "1.1.4",
+  "style": "Guizang Swiss International / IKB",
+  "cards": [
+    {
+      "path": "cards/01-cover.png",
+      "sha256": "0f69b4af709d738450e95b8f6a72c8c1bfd477af0fbb0fdd875fb7645a79c298",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 493797
+    },
+    {
+      "path": "cards/02-major-changes.png",
+      "sha256": "53e943fb9bc0a3d31f2e75db31bc47f4b12393f09b5a3f999225229bdf608d7e",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 140891
+    },
+    {
+      "path": "cards/03-tvbox-fongmi.png",
+      "sha256": "d45ace3f26247246abb9143696444b2df6ede0365a6f55da3941a90943443800",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 161016
+    },
+    {
+      "path": "cards/04-nas-detail.png",
+      "sha256": "0ea45fe569b2b7a4f73c7c95b937481e4f3752df86a2531b02e7fb30970464c3",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 324417
+    },
+    {
+      "path": "cards/05-player.png",
+      "sha256": "6d0746aafadd575bc2555fb823314dd70cbd6d2381b069a4c73e7349dea85059",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 364004
+    },
+    {
+      "path": "cards/06-dolby.png",
+      "sha256": "66439d7616c040836c930c61cd084b616effb240468d966d1295ed6f69d96092",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 202516
+    },
+    {
+      "path": "cards/07-subtitles.png",
+      "sha256": "d458e8a483b90dff29965680170b9f65c9c76d277fc2ba2773ab1ec12d48eae8",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 187210
+    },
+    {
+      "path": "cards/08-install.png",
+      "sha256": "12c0de757347f96810784a7d22caed8f6b15e0d2e3641ab8d7ed8ef970da4491",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 168038
+    },
+    {
+      "path": "cards/09-first-play.png",
+      "sha256": "cf3e3b1499a0903f9caeeb256ebd91d359d58bb003a19d02433686412114d090",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 188924
+    },
+    {
+      "path": "cards/10-tvbox-setup.png",
+      "sha256": "cec96032529c2996d16d3ddcf8c6b402b251f549c9dfbc1de64f3cd12da846a3",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 168798
+    },
+    {
+      "path": "cards/11-nas-setup.png",
+      "sha256": "f88ef68ecebed7ef06ff392f872dc359ad64e855d481ca4694170c933076b3f4",
+      "size": [
+        1080,
+        1440
+      ],
+      "bytes": 158439
+    }
+  ],
+  "assets": [
+    {
+      "path": "assets/audio.png",
+      "sha256": "a6c05e890161c075cda0afd10c9b56392eadf38dd22592f6ebff62ab93bab311",
+      "size": [
+        1380,
+        580
+      ],
+      "bytes": 183511
+    },
+    {
+      "path": "assets/home.png",
+      "sha256": "d12a7e8905dd8488cabcdec23851d5620fdc972ca6abb0306546219871d52885",
+      "size": [
+        1863,
+        1021
+      ],
+      "bytes": 1092605
+    },
+    {
+      "path": "assets/nas-detail.png",
+      "sha256": "25083b58b4f804a3e765d48f035255d8bad5d2fdef0c5e8573056f530d876f97",
+      "size": [
+        1596,
+        899
+      ],
+      "bytes": 468923
+    },
+    {
+      "path": "assets/player-controls.png",
+      "sha256": "4f3f38c25f13f9cfcaff5af8c5f0fea2516e4c967a3c4215beb17b114b4afd04",
+      "size": [
+        1457,
+        214
+      ],
+      "bytes": 99902
+    },
+    {
+      "path": "assets/player.png",
+      "sha256": "38584b1554f5778e0adf72c5cb9d7e2a306fb0e10f0ad4dff6fc0e18eb12d4d6",
+      "size": [
+        1863,
+        969
+      ],
+      "bytes": 604640
+    },
+    {
+      "path": "assets/subtitles.png",
+      "sha256": "6e3a60e24bba1c02c11c43e68c96d2a2f629876d778d472250b54c10be065d6c",
+      "size": [
+        1842,
+        1150
+      ],
+      "bytes": 345310
+    },
+    {
+      "path": "assets/video-output.png",
+      "sha256": "7a1069c45b7eff32e595f5d08ef80c8edb0da16d50af3934c72719e2913d4b2f",
+      "size": [
+        1380,
+        660
+      ],
+      "bytes": 217042
+    }
+  ],
+  "preview_sha256": "0256125543f8021964bda1521e877130b6e24874eb4aa0ff67a99dd2b8cccea5",
+  "validation": {
+    "guizang": {
+      "pages": 11,
+      "failures": 0,
+      "warnings": {
+        "R5": 11
+      },
+      "density_percent": {
+        "01-cover": 74,
+        "02-major-changes": 60,
+        "03-tvbox-fongmi": 67,
+        "04-nas-detail": 60,
+        "05-player": 65,
+        "06-dolby": 62,
+        "07-subtitles": 62,
+        "08-install": 59,
+        "09-first-play": 59,
+        "10-tvbox-setup": 56,
+        "11-nas-setup": 57
+      }
+    },
+    "png_metadata_empty": true,
+    "no_urls_in_visible_text_or_posting_documents": true,
+    "card_order_matches_2026_11_21_draft": true
+  }
+}

@@ -1,0 +1,1025 @@
+{
+  "brand": "NetVplayer",
+  "version": "2.0.8",
+  "build": 59,
+  "release_source": "35cb42bbb65d108b893b026e90d4c100134895f2",
+  "prepared_on": "2026-11-22",
+  "style": "Guizang Swiss International",
+  "theme": "ikb",
+  "size": [
+    1080,
+    1440
+  ],
+  "template": "assets/template-swiss-card.html",
+  "skill": "guizang-social-card-skill",
+  "captures": [
+    {
+      "file": "audio.png",
+      "reused_from": "update-2.0.7-20261120/assets/audio.png",
+      "asset_sha256": "a6c05e890161c075cda0afd10c9b56392eadf38dd22592f6ebff62ab93bab311",
+      "app_version": "2.0.7",
+      "app_build": 58,
+      "captured_on": "2026-11-20"
+    },
+    {
+      "file": "home.png",
+      "source": "home-aligned.png",
+      "source_format": "JPEG",
+      "source_sha256": "421061a6950f9555bf1b3733d55d3dda63dadf71d7aac8aeb0b1ea786b73259c",
+      "app_version": "2.0.8",
+      "app_build": 59,
+      "captured_on": "2026-11-22",
+      "crop": [
+        0,
+        28,
+        1863,
+        1049
+      ],
+      "redactions": [
+        {
+          "mode": "blur",
+          "box": [
+            254,
+            217,
+            414,
+            455
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            254,
+            526,
+            414,
+            764
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            254,
+            834,
+            414,
+            1049
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            253,
+            460,
+            424,
+            482
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            253,
+            769,
+            424,
+            791
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            430,
+            217,
+            590,
+            455
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            430,
+            526,
+            590,
+            764
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            430,
+            834,
+            590,
+            1049
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            429,
+            460,
+            600,
+            482
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            429,
+            769,
+            600,
+            791
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            606,
+            217,
+            766,
+            455
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            606,
+            526,
+            766,
+            764
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            606,
+            834,
+            766,
+            1049
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            605,
+            460,
+            776,
+            482
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            605,
+            769,
+            776,
+            791
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            781,
+            217,
+            941,
+            455
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            781,
+            526,
+            941,
+            764
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            781,
+            834,
+            941,
+            1049
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            780,
+            460,
+            951,
+            482
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            780,
+            769,
+            951,
+            791
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            957,
+            217,
+            1117,
+            455
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            957,
+            526,
+            1117,
+            764
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            957,
+            834,
+            1117,
+            1049
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            956,
+            460,
+            1127,
+            482
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            956,
+            769,
+            1127,
+            791
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1133,
+            217,
+            1293,
+            455
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1133,
+            526,
+            1293,
+            764
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1133,
+            834,
+            1293,
+            1049
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1132,
+            460,
+            1303,
+            482
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1132,
+            769,
+            1303,
+            791
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1309,
+            217,
+            1469,
+            455
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1309,
+            526,
+            1469,
+            764
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1309,
+            834,
+            1469,
+            1049
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1308,
+            460,
+            1479,
+            482
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1308,
+            769,
+            1479,
+            791
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1484,
+            217,
+            1644,
+            455
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1484,
+            526,
+            1644,
+            764
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1484,
+            834,
+            1644,
+            1049
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1483,
+            460,
+            1654,
+            482
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1483,
+            769,
+            1654,
+            791
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1660,
+            217,
+            1820,
+            455
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1660,
+            526,
+            1820,
+            764
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1660,
+            834,
+            1820,
+            1049
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1659,
+            460,
+            1830,
+            482
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1659,
+            769,
+            1830,
+            791
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "solid",
+          "box": [
+            301,
+            42,
+            416,
+            64
+          ],
+          "color": "#34264e"
+        },
+        {
+          "mode": "solid",
+          "box": [
+            274,
+            126,
+            399,
+            147
+          ],
+          "color": "#382650"
+        }
+      ]
+    },
+    {
+      "file": "nas-detail.png",
+      "source": "nas-detail.png",
+      "source_format": "JPEG",
+      "source_sha256": "1909c46fd70f84cd05f9fb9b29eb2a4395155864ea43c014a0061a784b511ef2",
+      "app_version": "2.0.8",
+      "app_build": 59,
+      "captured_on": "2026-11-22",
+      "crop": [
+        133,
+        91,
+        1729,
+        990
+      ],
+      "redactions": [
+        {
+          "mode": "blur",
+          "box": [
+            173,
+            159,
+            343,
+            414
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            373,
+            160,
+            535,
+            200
+          ],
+          "radius": 9
+        },
+        {
+          "mode": "blur",
+          "box": [
+            373,
+            211,
+            450,
+            233
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            396,
+            267,
+            484,
+            291
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            374,
+            332,
+            549,
+            354
+          ],
+          "radius": 7
+        },
+        {
+          "mode": "blur",
+          "box": [
+            663,
+            124,
+            966,
+            440
+          ],
+          "radius": 12
+        },
+        {
+          "mode": "blur",
+          "box": [
+            170,
+            487,
+            1236,
+            558
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1342,
+            463,
+            1387,
+            482
+          ],
+          "radius": 6
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1342,
+            489,
+            1462,
+            508
+          ],
+          "radius": 6
+        },
+        {
+          "mode": "blur",
+          "box": [
+            186,
+            679,
+            258,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            172,
+            790,
+            282,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            300,
+            679,
+            372,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            286,
+            790,
+            396,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            414,
+            679,
+            486,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            400,
+            790,
+            510,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            528,
+            679,
+            600,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            514,
+            790,
+            624,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            642,
+            679,
+            714,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            628,
+            790,
+            738,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            756,
+            679,
+            828,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            742,
+            790,
+            852,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            870,
+            679,
+            942,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            856,
+            790,
+            966,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            984,
+            679,
+            1056,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            970,
+            790,
+            1080,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1098,
+            679,
+            1170,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1084,
+            790,
+            1194,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1212,
+            679,
+            1284,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1198,
+            790,
+            1308,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1326,
+            679,
+            1398,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1312,
+            790,
+            1422,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1440,
+            679,
+            1512,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1426,
+            790,
+            1536,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1554,
+            679,
+            1626,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1540,
+            790,
+            1650,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1668,
+            679,
+            1692,
+            787
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "blur",
+          "box": [
+            1654,
+            790,
+            1692,
+            843
+          ],
+          "radius": 5
+        },
+        {
+          "mode": "solid",
+          "box": [
+            194,
+            117,
+            294,
+            138
+          ],
+          "color": "#21172e"
+        },
+        {
+          "mode": "solid",
+          "box": [
+            186,
+            952,
+            329,
+            975
+          ],
+          "color": "#412a5e"
+        }
+      ]
+    },
+    {
+      "file": "player-controls.png",
+      "source": "player-initial.png",
+      "source_format": "JPEG",
+      "source_sha256": "54fbda6bc2923738f1806124dd8a261734f744b0e2e34a41625358079db5f02b",
+      "app_version": "2.0.8",
+      "app_build": 59,
+      "captured_on": "2026-11-22",
+      "crop": [
+        204,
+        821,
+        1661,
+        1035
+      ],
+      "redactions": []
+    },
+    {
+      "file": "player.png",
+      "source": "player-initial.png",
+      "source_format": "JPEG",
+      "source_sha256": "54fbda6bc2923738f1806124dd8a261734f744b0e2e34a41625358079db5f02b",
+      "app_version": "2.0.8",
+      "app_build": 59,
+      "captured_on": "2026-11-22",
+      "crop": [
+        0,
+        80,
+        1863,
+        1049
+      ],
+      "redactions": []
+    },
+    {
+      "file": "subtitles.png",
+      "reused_from": "update-2.0.7-20261120/assets/subtitles.png",
+      "asset_sha256": "6e3a60e24bba1c02c11c43e68c96d2a2f629876d778d472250b54c10be065d6c",
+      "app_version": "2.0.7",
+      "app_build": 58,
+      "captured_on": "2026-11-20"
+    },
+    {
+      "file": "video-output.png",
+      "reused_from": "update-2.0.7-20261120/assets/video-output.png",
+      "asset_sha256": "7a1069c45b7eff32e595f5d08ef80c8edb0da16d50af3934c72719e2913d4b2f",
+      "app_version": "2.0.7",
+      "app_build": 58,
+      "captured_on": "2026-11-20"
+    }
+  ],
+  "cards": [
+    {
+      "id": "01-cover",
+      "recipe": "S01",
+      "title": "NetVplayer / 更新了"
+    },
+    {
+      "id": "02-major-changes",
+      "recipe": "S12",
+      "title": "从 1.1.4 / 走到 2.0.8"
+    },
+    {
+      "id": "03-tvbox-fongmi",
+      "recipe": "S02",
+      "title": "配置兼容性 / 更强了"
+    },
+    {
+      "id": "04-nas-detail",
+      "recipe": "S04",
+      "title": "NAS 完整详情"
+    },
+    {
+      "id": "05-player",
+      "recipe": "S04",
+      "title": "原生 Mac 播放器"
+    },
+    {
+      "id": "06-dolby",
+      "recipe": "S02",
+      "title": "杜比视界与 / 杜比全景声"
+    },
+    {
+      "id": "07-subtitles",
+      "recipe": "S04",
+      "title": "字幕，也更好用"
+    },
+    {
+      "id": "08-install",
+      "recipe": "S06",
+      "title": "安装，只要四步"
+    },
+    {
+      "id": "09-first-play",
+      "recipe": "S06",
+      "title": "先用自己的视频 / 试播第一段"
+    },
+    {
+      "id": "10-tvbox-setup",
+      "recipe": "S06",
+      "title": "TVBox / FongMi / 怎么开始用"
+    },
+    {
+      "id": "11-nas-setup",
+      "recipe": "S06",
+      "title": "接入自己的 NAS"
+    }
+  ],
+  "comparison_baseline": "1.1.4"
+}

@@ -452,6 +452,8 @@ final class AppState: ObservableObject {
     @Published private(set) var livePlayerOpenRequestSerial: Int = 0
     @Published var isPlayerLoading: Bool = false
     @Published private var pendingAutoAdvanceID: UUID?
+    private var interruptedPlaybackRetryGeneration: UInt64?
+    private static let verifiedAndroidSDKMediaKey = "playback.verifiedAndroidSDKMedia"
     private struct EpisodePreparation {
         let id = UUID()
         let episode: Episode
@@ -1512,6 +1514,11 @@ final class AppState: ObservableObject {
         engine.playbackEndedHandler = { [weak self] spec in
             Task { @MainActor in
                 self?.handleMPVPlaybackEnded(spec: spec)
+            }
+        }
+        engine.playbackInterruptedHandler = { [weak self] spec in
+            Task { @MainActor in
+                await self?.handleMPVPlaybackInterrupted(spec: spec)
             }
         }
         engine.playbackStallHandler = { [weak self] spec, positionSeconds in
@@ -4289,11 +4296,14 @@ final class AppState: ObservableObject {
         authorizationOrigin: PlaybackAuthorizationOrigin? = nil,
         expectedPlaybackOrigin: PlaybackAuthorizationOrigin? = nil,
         restartFromBeginning: Bool = false,
+        retryingInterruptedPlayback: Bool = false,
         resumeMagnetFile: MagnetFileIdentity? = nil,
         startupStartedAt: ContinuousClock.Instant? = nil
     ) async {
         let transitionStartedAt = startupStartedAt ?? ContinuousClock.now
         let originBeforeCleanup = playbackAuthorizationOrigin
+        let restartsSDKMedia = retryingInterruptedPlayback && preparationRetryAttempt == 0
+            && playerState.currentSpec?.metadata[Self.verifiedAndroidSDKMediaKey] == "true"
         await waitForPlayerDismissalCleanup()
         guard originBeforeCleanup == playbackAuthorizationOrigin, !Task.isCancelled else { return }
         guard (authorizationOrigin ?? expectedPlaybackOrigin) == nil || (authorizationOrigin ?? expectedPlaybackOrigin) == playbackAuthorizationOrigin,
@@ -4367,6 +4377,7 @@ final class AppState: ObservableObject {
             preferenceKey: preferenceKey
         )
         let generation = playbackSessionState.generation
+        interruptedPlaybackRetryGeneration = retryingInterruptedPlayback ? generation : nil
         beginPlaybackStartupTrace(
             generation: generation,
             siteKey: site.key,
@@ -4435,8 +4446,10 @@ final class AppState: ObservableObject {
             var result = try await DevelopmentAndroidSiteProvider.$allowsSDKMediaHTTPRecovery.withValue(
                 preparationRetryAttempt == 0 && allowsAutomaticVodPlaybackActions
             ) {
-                try await vodDataSource.playback(site: site, flag: selectedPlayFlag, id: episode.url,
-                                                  sites: sites, scope: sourceScope)
+                try await DevelopmentAndroidSiteProvider.$restartsSDKMediaAfterInterruption.withValue(restartsSDKMedia) {
+                    try await vodDataSource.playback(site: site, flag: selectedPlayFlag, id: episode.url,
+                                                     sites: sites, scope: sourceScope)
+                }
             }
             var transferredFileLease = false
             defer {
@@ -4519,6 +4532,7 @@ final class AppState: ObservableObject {
                     verificationResult: verificationResult,
                     preparationRetryAttempt: preparationRetryAttempt + 1,
                     restartFromBeginning: restartFromBeginning,
+                    retryingInterruptedPlayback: retryingInterruptedPlayback,
                     resumeMagnetFile: resumeMagnetFile,
                     startupStartedAt: transitionStartedAt
                 )
@@ -5023,6 +5037,10 @@ final class AppState: ObservableObject {
             }
             guard !enforcesSessionGeneration || playbackSessionState.generation == sessionGeneration else { return nil }
 
+            // Match the URL after parsing and proxy routing. Only host-verified
+            // media can opt in to automatic recovery on a loopback address.
+            finalSpec.metadata[Self.verifiedAndroidSDKMediaKey] =
+                result.verifiedAndroidSDKMediaURLs.contains(finalSpec.url) ? "true" : nil
             transferredFileLease = true
             return finalSpec
     }
@@ -8128,7 +8146,9 @@ final class AppState: ObservableObject {
 
     func toggleVodPlayback() async {
         guard !isPreparingVodPlayback else { return }
-        if playerState.hasEnded {
+        if canResumeInterruptedPlayback {
+            await resumeInterruptedPlayback()
+        } else if playerState.hasEnded {
             await replayCurrentEpisode()
         } else if playerState.isPlaying {
             MPVPlayerEngine.vod.pause()
@@ -8143,6 +8163,59 @@ final class AppState: ObservableObject {
               let episode = episodeForCurrentPlayback(in: playbackQueue()) else { return }
         clearPlaybackError()
         await playEpisode(episode, resumePosition: 0, restartFromBeginning: true)
+    }
+
+    var canResumeInterruptedPlayback: Bool { interruptedPlaybackTarget != nil }
+
+    private var interruptedPlaybackTarget: (episode: Episode, position: Int64, duration: Int64)? {
+        guard !isPreparingVodPlayback, playerState.endDisposition == .premature,
+              let spec = playerState.currentSpec, ownsPlaybackContext(spec),
+              let episode = episodeForCurrentPlayback(in: playbackQueue()),
+              playbackLine(for: episode) == spec.flag,
+              episode.url == PlaybackResumePolicy.episodeURL(for: spec),
+              let position = Int64(exactly: (playerState.position * 1_000).rounded(.towardZero)),
+              let duration = Int64(exactly: (playerState.duration * 1_000).rounded(.towardZero)),
+              PlaybackResumePolicy.normalizedRestorePositionMilliseconds(
+                  position: position, durationSeconds: playerState.duration
+              ) != nil else { return nil }
+        return (episode, position, duration)
+    }
+
+    func resumeInterruptedPlayback(automatically: Bool = false) async {
+        guard let target = interruptedPlaybackTarget else { return }
+        let origin = playbackAuthorizationOrigin
+        if automatically {
+            guard interruptedPlaybackRetryGeneration != origin.generation else { return }
+            interruptedPlaybackRetryGeneration = origin.generation
+            log("[VOD_INTERRUPTED_RETRY] positionMs=\(target.position)")
+        }
+        invalidateNextEpisodePreload(reason: "resume-interrupted-playback")
+        clearPlaybackError()
+        await playEpisode(target.episode, resumePosition: target.position, resumeDuration: target.duration,
+                          expectedPlaybackOrigin: origin, retryingInterruptedPlayback: automatically)
+    }
+
+    func handleMPVPlaybackInterrupted(spec: PlaySpec) async {
+        guard ownsPlaybackFailure(spec, live: false), ownsPlaybackContext(spec) else { return }
+        let sdkPort = DevelopmentAndroidSiteProvider.sdkMediaPort(for: spec.url)
+        if let port = sdkPort,
+           let site = activeSite, providerExecutionBackends[site.key] == .androidOriginal,
+           ownsPlaybackFailure(spec, live: false), ownsPlaybackContext(spec),
+           let provider = await SpiderReplacementRegistry.shared.nativeProvider(for: site) as? DevelopmentAndroidSiteProvider,
+           ownsPlaybackFailure(spec, live: false), ownsPlaybackContext(spec) {
+            await provider.recordSDKMediaInterruption(port: port, playbackGeneration: playbackSessionState.generation)
+        }
+        guard allowsAutomaticVodPlaybackActions, ownsPlaybackFailure(spec, live: false),
+              ownsPlaybackContext(spec),
+              spec.metadata["playback.kind"] != "live", spec.mediaServer == nil, spec.hostMagnet == nil,
+              spec.drivePlaybackPlan == nil, spec.drm == nil,
+              let url = URL(string: spec.url), let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme), url.host != nil else { return }
+        if HTTPRedirectPolicy.isLoopback(url) {
+            guard sdkPort != nil,
+                  playerState.currentSpec?.metadata[Self.verifiedAndroidSDKMediaKey] == "true" else { return }
+        }
+        await resumeInterruptedPlayback(automatically: true)
     }
 
     private func ownsPlaybackContext(_ spec: PlaySpec) -> Bool {

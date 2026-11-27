@@ -37,6 +37,15 @@ public enum ProviderCommandError: LocalizedError, Equatable, Sendable {
 }
 
 public enum ProviderCommandBuilder {
+    private static let bundledByteVC2 = Bundle.main.url(forResource: "dash-runtime-build", withExtension: "json")
+        .flatMap { try? Data(contentsOf: $0) }
+        .flatMap { try? JSONDecoder().decode(PlaybackRuntimeCapabilities.self, from: $0) }?
+        .bytevc2 == true
+
+    private struct PlaybackRuntimeCapabilities: Decodable {
+        let bytevc2: Bool
+    }
+
     public static func command(
         manifest: ProviderManifest,
         packageRoot: URL,
@@ -124,6 +133,9 @@ public enum ProviderCommandBuilder {
         ]
         if manifest.sandbox != nil {
             environment["NETVPLAYER_PROVIDER_SANDBOX"] = "app-sandbox-v2"
+        }
+        if bundledByteVC2 {
+            environment["NETVPLAYER_PROVIDER_BYTEVC2"] = "1"
         }
         return ProviderCommand(
             executableURL: executable,

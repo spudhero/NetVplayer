@@ -107,6 +107,9 @@ public struct Result: Codable, Sendable {
     public var fileResourceLeaseID: String?
     /// Trusted in-process file provider output; excluded from Provider JSON.
     public var mediaServer: MediaServerPlayback? = nil
+    /// Exact media addresses verified against the original Android helper's own listeners.
+    /// This is assigned by the host after resolution and excluded from Provider JSON.
+    package var verifiedAndroidSDKMediaURLs: Set<String> = []
     public var disc: DiscPlayback? = nil
     public var hostMagnet: HostMagnetPlayback? = nil
     /// DRM 配置

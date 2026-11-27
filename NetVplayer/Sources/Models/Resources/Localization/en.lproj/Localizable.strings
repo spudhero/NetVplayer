@@ -1530,6 +1530,7 @@
 "当前列表中没有可自动衔接的下一集。" = "There is no confirmed next episode in this list.";
 
 "从头重播" = "Replay from the beginning";
+"从断点继续" = "Resume playback";
 
 "重试剧集列表" = "Retry episode list";
 

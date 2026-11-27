@@ -49,9 +49,17 @@ class PackagingTests(unittest.TestCase):
         cls.source.write_text('''
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 struct input { const char *name; };
 static struct input inputs[] = {{"dash"}, {"hls"}, {"mov,mp4,m4a"}};
 uint32_t avformat_version(void) { return 63u << 16; }
+const void *avformat_get_mov_video_tags(void) { return inputs; }
+int av_codec_get_id(const void *const *tags, unsigned tag) {
+    return tags[0] == inputs && (tag == 0x31637676u || tag == 0x32637662u) ? 1 : 0;
+}
+const void *avcodec_find_decoder_by_name(const char *name) {
+    return strcmp(name, "vvc") == 0 ? inputs : NULL;
+}
 const void *av_demuxer_iterate(void **opaque) {
     uintptr_t n = (uintptr_t)*opaque;
     if (n == 3) return NULL;
@@ -85,10 +93,11 @@ const char *avio_enum_protocols(void **opaque, int output) {
         (self.licenses / 'libmpv/fixture').mkdir(parents=True)
         (self.licenses / 'libmpv/fixture/LICENSE').write_text('Synthetic ABI test only\n')
         shutil.copy2(self.native, self.frameworks / 'libavformat.63.dylib')
+        shutil.copy2(self.native, self.frameworks / 'libavcodec.63.dylib')
         # The vendor test copies this file; it never loads or launches it.
         shutil.copy2(self.native, self.frameworks / 'libmpv.2.dylib')
         self.binary = self.frameworks / 'libavformat.63.dylib'
-        self.receipt = {'schema': 1, 'packaged_libavformat_sha256': gate.digest(self.binary)}
+        self.receipt = {'schema': 1, 'packaged_libavformat_sha256': gate.digest(self.binary), 'bytevc2': True}
         self.write('dash-runtime-build.json', self.receipt)
         self.dolby = {'binaries': {self.binary.name: gate.digest(self.binary)},
                       'dashRuntimeBuildSHA256': gate.digest(self.resources / 'dash-runtime-build.json')}
@@ -104,6 +113,15 @@ const char *avio_enum_protocols(void **opaque, int output) {
     def test_native_metadata_query_and_consistent_receipts(self):
         result = gate.verify_bundle(self.bundle)
         self.assertEqual(result['demuxers'], GOOD['demuxers'])
+        self.assertTrue(result['bytevc2'])
+
+    def test_bytevc2_receipt_cannot_disagree_with_the_loaded_runtime(self):
+        self.receipt['bytevc2'] = False
+        self.write('dash-runtime-build.json', self.receipt)
+        self.dolby['dashRuntimeBuildSHA256'] = gate.digest(self.resources / 'dash-runtime-build.json')
+        self.write('dolby-runtime-build.json', self.dolby)
+        with self.assertRaisesRegex(RuntimeError, 'ByteVC2 support differs'):
+            gate.verify_bundle(self.bundle)
 
     def test_pre_dolby_intermediate_does_not_qualify_for_packaging(self):
         (self.resources/'dolby-runtime-build.json').unlink()

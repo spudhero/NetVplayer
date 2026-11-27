@@ -319,6 +319,10 @@ public actor ProviderProcessClient {
 
     /// Read only this live child process's TCP listeners; nil means ownership could not be verified.
     public func listeningTCPPorts() -> Set<Int>? {
+        listeningTCPSnapshot()?.ports
+    }
+
+    public func listeningTCPSnapshot() -> (processID: Int32, ports: Set<Int>)? {
         guard let process, process.isRunning else { return nil }
         let pid = process.processIdentifier
         let stride = MemoryLayout<proc_fdinfo>.stride
@@ -345,7 +349,7 @@ public actor ProviderProcessClient {
             ports.insert(Int(UInt16(bigEndian: UInt16(truncatingIfNeeded: socket.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport))))
         }
         guard process.isRunning, self.process === process else { return nil }
-        return ports
+        return (pid, ports)
     }
 
     /// Original Chaquopy needs these paths, but arbitrary Python or CA overrides
@@ -391,6 +395,7 @@ public actor ProviderProcessClient {
             "NETVPLAYER_PROVIDER_SANDBOX",
             "NETVPLAYER_PROVIDER_STATE",
             "NETVPLAYER_PROVIDER_HOST_CAPABILITIES",
+            "NETVPLAYER_PROVIDER_BYTEVC2",
             "NETVPLAYER_PROVIDER_HTTP_FIXTURE_URL",
             "PYTHONDONTWRITEBYTECODE",
             "PYTHONNOUSERSITE",

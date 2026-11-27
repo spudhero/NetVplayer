@@ -1,0 +1,119 @@
+--- a/libavformat/mov.c
++++ b/libavformat/mov.c
+@@ -57,6 +57,7 @@
+ #include "libavcodec/hevc/hevc.h"
+ #include "libavcodec/mpegaudiodecheader.h"
+ #include "libavcodec/mlp_parse.h"
++#include "libavcodec/vvc.h"
+ #include "avformat.h"
+ #include "internal.h"
+ #include "avio_internal.h"
+@@ -2496,6 +2497,90 @@
+     return 0;
+ }
+ 
++/* ByteVC2 stores VVC parameter arrays after an 18-byte version 1 header.
++ * Replace only that header. The samples retain their four-byte NAL lengths. */
++static int mov_read_bv2c(MOVContext *c, AVIOContext *pb, MOVAtom atom)
++{
++    AVStream *st = get_curr_st(c);
++    const MOVStreamContext *sc;
++    uint8_t header[18], *config;
++    unsigned types = 0;
++    int size, ret, offset = 2;
++
++    if (!st)
++        return 0;
++    sc = st->priv_data;
++    /* frma can follow bv2C in an encrypted sample entry. */
++    if (sc->format != MKTAG('b','v','c','2') &&
++        sc->format != MKTAG('e','n','c','v'))
++        return 0;
++    if (st->codecpar->extradata_size)
++        return 0;
++    if (atom.size <= sizeof(header) || atom.size > 1024 * 1024)
++        return AVERROR_INVALIDDATA;
++
++    ret = avio_read(pb, header, sizeof(header));
++    if (ret != sizeof(header))
++        return ret < 0 ? ret : AVERROR_INVALIDDATA;
++    if (header[0] != 1 || (header[1] & 6) != 6)
++        return AVERROR_INVALIDDATA;
++
++    size = atom.size - sizeof(header) + 1;
++    config = av_mallocz(size + AV_INPUT_BUFFER_PADDING_SIZE);
++    if (!config)
++        return AVERROR(ENOMEM);
++    config[0] = 0xfe; /* four-byte packet lengths, PTL carried by the SPS */
++    ret = avio_read(pb, config + 1, size - 1);
++    if (ret != size - 1) {
++        ret = ret < 0 ? ret : AVERROR_INVALIDDATA;
++        goto fail;
++    }
++
++    ret = AVERROR_INVALIDDATA;
++    for (int array = 0; array < config[1]; array++) {
++        unsigned type, count = 1;
++        if (offset >= size)
++            goto fail;
++        type = config[offset++] & 31;
++        if ((type < VVC_OPI_NUT || type > VVC_PPS_NUT) &&
++            type != VVC_PREFIX_SEI_NUT && type != VVC_SUFFIX_SEI_NUT)
++            goto fail;
++        if (types & (1U << type))
++            goto fail;
++        types |= 1U << type;
++        if (type != VVC_OPI_NUT && type != VVC_DCI_NUT) {
++            if (size - offset < 2)
++                goto fail;
++            count = AV_RB16(config + offset);
++            offset += 2;
++            if (!count)
++                goto fail;
++        }
++        for (unsigned nal = 0; nal < count; nal++) {
++            unsigned length;
++            if (size - offset < 4)
++                goto fail;
++            length = AV_RB16(config + offset);
++            offset += 2;
++            if (length < 2 || length > size - offset ||
++                (config[offset + 1] >> 3) != type)
++                goto fail;
++            offset += length;
++        }
++    }
++    if (offset != size || !(types & (1U << VVC_SPS_NUT)) ||
++        !(types & (1U << VVC_PPS_NUT)))
++        goto fail;
++
++    st->codecpar->extradata = config;
++    st->codecpar->extradata_size = size;
++    return 0;
++
++fail:
++    av_free(config);
++    return ret;
++}
++
+ /**
+  * This function reads atom content and puts data in extradata without tag
+  * nor size unlike mov_read_extradata.
+@@ -9817,6 +9902,7 @@
+ { MKTAG('s','b','g','p'), mov_read_sbgp },
+ { MKTAG('h','v','c','C'), mov_read_glbl },
+ { MKTAG('v','v','c','C'), mov_read_glbl },
++{ MKTAG('b','v','2','C'), mov_read_bv2c },
+ { MKTAG('u','u','i','d'), mov_read_uuid },
+ { MKTAG('C','i','n', 0x8e), mov_read_targa_y216 },
+ { MKTAG('f','r','e','e'), mov_read_free },
+--- a/libavformat/isom_tags.c
++++ b/libavformat/isom_tags.c
+@@ -120,6 +120,7 @@
+ 
+     { AV_CODEC_ID_VVC,  MKTAG('v', 'v', 'c', '1') },
+     { AV_CODEC_ID_VVC,  MKTAG('v', 'v', 'i', '1') },
++    { AV_CODEC_ID_VVC,  MKTAG('b', 'v', 'c', '2') },
+ 
+     { AV_CODEC_ID_HEVC, MKTAG('h', 'e', 'v', '1') }, /* HEVC/H.265 which indicates parameter sets may be in ES */
+     { AV_CODEC_ID_HEVC, MKTAG('h', 'v', 'c', '1') }, /* HEVC/H.265 which indicates parameter sets shall not be in ES */

@@ -8,6 +8,7 @@ import DriveEngine
 import Foundation
 import Models
 import MPVShim
+import Networking
 import ProxyServer
 import Storage
 
@@ -431,6 +432,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     public var playbackStartedHandler: ((PlaySpec?) -> Void)?
     public var playbackPositionHandler: ((PlaySpec?, Double) -> Void)?
     public var playbackEndedHandler: ((PlaySpec?) -> Void)?
+    public var playbackInterruptedHandler: ((PlaySpec) -> Void)?
     public var playbackStallHandler: ((PlaySpec?, Double) -> Void)?
     public var playbackStallRecoveryHandler: ((PlaySpec?) -> Void)?
     public var liveConnectionRepairHandler: ((PlaySpec?) -> Void)?
@@ -549,6 +551,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
     @MainActor private var floatingCrop = PlayerFloatingCrop()
     private var lastPositionMs: Int64 = 0
     private var lastDurationMs: Int64 = 0
+    private var transportDiagnostics: MPVTransportDiagnostics?
     private var lastLoadDiagnostic: String?
     private var lastHTTPFailureStatus: Int?
     private var playbackFailureNotified = false
@@ -1084,6 +1087,9 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             preparedSubtitleSources.removeAll()
             lastPositionMs = 0
             lastDurationMs = 0
+            let startMs = Int64(exactly: ((spec.initialStartPositionSeconds ?? 0) * 1_000).rounded(.towardZero)) ?? 0
+            transportDiagnostics = .init(loadedAt: ProcessInfo.processInfo.systemUptime,
+                positionMs: startMs)
             lastLoadDiagnostic = nil
             hardwareDecodeFallback = nil
             lastHTTPFailureStatus = nil
@@ -1314,6 +1320,9 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             DiagnosticLog.write("[MPV_SEEK_ERROR] targetSeconds=\(seconds) code=\(result)")
             return
         }
+        if let requestedMs = Int64(exactly: (seconds * 1_000).rounded()) {
+            withLock { transportDiagnostics?.seek(to: requestedMs) }
+        }
         DiagnosticLog.write("[MPV_SEEK] targetSeconds=\(seconds) mode=\(seekMode)")
     }
 
@@ -1353,6 +1362,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
         status = .idle
         lastPositionMs = 0
         lastDurationMs = 0
+        transportDiagnostics = nil
         lastLoadDiagnostic = nil
         playbackStartedNotified = false
         currentFileLoaded = false
@@ -3030,6 +3040,22 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 "[MPV_END_FILE_DISPOSITION] disposition=\(disposition) reason=\(event.endFileReason) error=\(event.endFileError)"
             )
             DiagnosticLog.write("[MPV_END_FILE] code=\(event.endFileReason) errorCode=\(event.endFileError)")
+            if videoSurface == .vod, disposition == .premature, let spec,
+               let (transport, positionMs, durationMs) = withLock({
+                   transportDiagnostics.map { ($0, lastPositionMs, lastDurationMs) }
+               }) {
+                let cacheAheadMs = Int64(exactly: ((playerState?.bufferedAheadDuration ?? 0) * 1_000).rounded(.towardZero)) ?? 0
+                let url = URL(string: spec.url)
+                let loopbackPort = url.flatMap { HTTPRedirectPolicy.isLoopback($0) ? $0.port : nil }
+                let generation = spec.metadata["playback.sessionGeneration"].flatMap(UInt64.init) ?? 0
+                DiagnosticLog.write(
+                    "[MPV_PREMATURE_END] generation=\(generation) loopbackPort=\(loopbackPort ?? 0) "
+                    + "positionMs=\(positionMs) durationMs=\(durationMs) "
+                    + "started=\(endState.playbackStarted) seekProtected=\(endState.isProtectedByUserSeek) "
+                    + "waitingForCache=\(endState.isPausedForCache) bufferedAheadMs=\(cacheAheadMs) "
+                    + transport.summary(positionMs: positionMs, now: ProcessInfo.processInfo.systemUptime)
+                )
+            }
             playerState?.endDisposition = disposition
             if disposition == .failed {
                 let diagnostic = withLock { lastLoadDiagnostic }
@@ -3043,11 +3069,25 @@ public final class MPVPlayerEngine: @unchecked Sendable {
                 clearPlaybackActivity()
                 if disposition == .natural || (spec?.liveCatchup != nil && disposition == .premature) {
                     playbackEndedHandler?(spec)
+                } else if disposition == .premature, let spec,
+                          event.endFileReason == EndFileReason.eof.rawValue,
+                          endState.playbackStarted, !endState.isProtectedByUserSeek,
+                          endState.positionSeconds > 0, endState.positionSeconds < endState.durationSeconds {
+                    playbackInterruptedHandler?(spec)
                 }
             }
         case 2:
             guard let text = event.logText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
             withLock { compressedAudioRecovery.observeLog(prefix: event.logPrefix, text: text) }
+            if videoSurface == .vod, event.logPrefix == "ffmpeg",
+               ["warn", "error", "fatal"].contains(event.logLevel ?? "") {
+                withLock {
+                    if playbackStartedNotified {
+                        transportDiagnostics?.observe(prefix: event.logPrefix, text: text,
+                            now: ProcessInfo.processInfo.systemUptime)
+                    }
+                }
+            }
             if let fallback = PlaybackDiagnostics.HardwareFallback.detected(in: text) {
                 withLock { hardwareDecodeFallback = fallback }
             }
@@ -3400,6 +3440,7 @@ public final class MPVPlayerEngine: @unchecked Sendable {
             currentFileLoaded = false
             lastPositionMs = 0
             lastDurationMs = 0
+            transportDiagnostics = .init(loadedAt: ProcessInfo.processInfo.systemUptime, positionMs: 0)
             lastLoadDiagnostic = nil
             postSeekEndGuard.reset()
             seekActivity.resetMedia()
