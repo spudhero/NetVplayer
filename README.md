@@ -96,6 +96,8 @@ NetVplayer 是基于 **SwiftUI 与内嵌 libmpv** 的原生 macOS 媒体播放�
 
 更改后重启应用生效，两种方式不自动互相回退。本机文件、媒体服务器和标准内容接口不受此选择影响。**Android 原版是内容解析方式，应用界面与媒体播放仍为原生 macOS。** 原生网盘账号与 Android 来源内授权分别保存。
 
+2.0.9 的配套组件已发布。Python 目录扩展 1.1.23 恢复 AI 短剧原生取流，可在「设置 → 扩展支持」重新检查。Android 原版运行组件 1.2.5 包含 FongMi 5.9.0 和 QuickJS 1.1.2。已装 1.2.4 的用户可下载并解压，在同一页选择「安装或更新…」，选中组件文件夹后重启。 [Python 1.1.23](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.python-v1.1.23-arm64) · [Android 1.2.5](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.5-arm64)
+
 ![来源解析方式与签名扩展支持](website/assets/overview/extensions.webp)
 
 ### 安装与第一次使用
@@ -138,7 +140,7 @@ flowchart TB
     Play --> Player[原生播放器 · libmpv]
 ```
 
-图中的 Mac／Android 是主动选择的独立路径。公开应用和 [Provider SDK](provider-sdk/README.md) 位于 [NetVplayer](https://github.com/spudhero/NetVplayer)，站点业务 Provider 源码保持私有，签名包与索引由 [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) 提供。通用 Android Java／JNI 兼容层、固定上游对应源码和构建说明随[完整环境发布附件](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.4-arm64)公开。更多模块、数据流与信任边界见 [ARCHITECTURE](ARCHITECTURE.md)。
+图中的 Mac／Android 是主动选择的独立路径。公开应用和 [Provider SDK](provider-sdk/README.md) 位于 [NetVplayer](https://github.com/spudhero/NetVplayer)，站点业务 Provider 源码保持私有，签名包与索引由 [Provider Distribution](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases) 提供。通用 Android Java／JNI 兼容层、固定上游对应源码和构建说明随[完整环境发布附件](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.5-arm64)公开。更多模块、数据流与信任边界见 [ARCHITECTURE](ARCHITECTURE.md)。
 
 ### 项目背景与开发
 
@@ -207,11 +209,13 @@ Settings → Verified Extensions → Source Execution selects **Mac implementati
 
 The app verifies and activates a complete signed Android environment on first use. Content JARs come from user configuration. There is no automatic cross-mode fallback; local files, media servers and standard content APIs are independent of this setting. **The interface and media player remain native macOS in both modes.** Native cloud credentials and Android source authorization are stored separately.
 
+The Python catalog extension 1.1.23 restores native media retrieval for AI short dramas. Use Settings → Verified Extensions → Check Again to update. Android Original Runtime 1.2.5 includes FongMi 5.9.0 and QuickJS 1.1.2. To upgrade from 1.2.4, download and unzip the new runtime, choose that folder under Install or Update, then restart NetVplayer. [Python 1.1.23](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/provider-netvplayer.catalog.python-v1.1.23-arm64) · [Android 1.2.5](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.5-arm64)
+
 ### Architecture and development
 
 The public app, private business Providers and signed distribution are maintained as separate components. Content engines normalize source, cloud, file and server results into a single `PlaySpec`; the native player passes it to libmpv. Extensions and complete Android environments update independently of the app. See the [architecture diagrams](ARCHITECTURE.md), [Provider SDK](provider-sdk/README.md) and [Runners](provider-runners/README.md).
 
-The application and SDK are public. Business Provider sources remain private. Generic Android Java/JNI compatibility and build sources, pinned upstream sources and licenses are available as [complete-runtime release attachments](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.4-arm64).
+The application and SDK are public. Business Provider sources remain private. Generic Android Java/JNI compatibility and build sources, pinned upstream sources and licenses are available as [complete-runtime release attachments](https://github.com/spudhero/NetVplayer-Provider-Distribution/releases/tag/android-original-runtime-v1.2.5-arm64).
 
 Apple local translation requires **macOS 15+** and available language resources. OCR, speech recognition, online subtitles, HDR and audio output depend on system support, permissions, content and hardware. Service integrations are not a guarantee that every account, NAS or long playback session has passed acceptance. Read the [usage conditions](docs/guide.md#conditions-and-limits).
 
