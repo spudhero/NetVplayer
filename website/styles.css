@@ -513,6 +513,25 @@ h2 {
   background: var(--surface);
 }
 
+.hero-demo-link {
+  margin-right: 20px;
+}
+
+.demo-section {
+  padding: clamp(52px, 8vw, 100px) 24px;
+}
+
+.demo-video {
+  display: block;
+  width: min(100%, 960px);
+  height: auto;
+  aspect-ratio: 16 / 9;
+  margin: 32px auto 0;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--dark-media);
+}
+
 .feature-section,
 .content-section,
 .theme-section,
